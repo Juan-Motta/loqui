@@ -364,3 +364,85 @@ func TestGPUCrashIsReported(t *testing.T) {
 		t.Error("OnGPUCrash was not invoked")
 	}
 }
+
+// THE BUG THIS GUARDS AGAINST cost a real dictation. The watchdog used to measure silence
+// since the helper's LAST OUTPUT, but a helper prints nothing while it listens: whisper logs
+// its init noise and then stays quiet. So when the user let go, the silence already exceeded
+// the grace period and the helper was killed within a second — dropping exactly the tail the
+// watchdog exists to protect. The grace period has to start when the stop does.
+func TestSilentHelperIsGivenItsGracePeriodAfterStop(t *testing.T) {
+	bin := fakeHelper(t, `
+# The real helpers survive the SIGTERM the stop protocol sends 300 ms in: macos-stt exits
+# cleanly on it (it has nothing buffered) and whisper-stt treats it as the same stop flag it
+# got over stdin, then finishes flushing. A fake that dies on TERM would be testing the
+# script, not the protocol.
+trap '' TERM
+echo '{"type":"started"}'
+echo 'noisy init line' >&2
+# Now go quiet, the way a helper does while it is listening.
+read -r line
+# Flushing the tail takes real time on a slow machine.
+sleep 0.4
+echo '{"type":"final","text":"la cola sobrevivió"}'
+exit 0
+`)
+	sink, drain := collect(t)
+	p := New(Config{
+		Bin:    bin,
+		Locale: "auto",
+		// LONGER than the 0.4 s flush, so a correctly-armed grace period waits it out.
+		// The old code failed anyway, because it had already spent the grace on the silence
+		// BEFORE the stop.
+		SilenceGrace: 900 * time.Millisecond,
+	})
+	if err := p.Start(1, sink); err != nil {
+		t.Fatal(err)
+	}
+	// Stay quiet for longer than the grace period BEFORE stopping — this is exactly the
+	// state a real dictation is in when the user releases the key.
+	time.Sleep(1200 * time.Millisecond)
+	p.Stop()
+
+	var sawTail bool
+	for _, e := range drain(3) {
+		if e.Type == stt.Final && e.Text == "la cola sobrevivió" {
+			sawTail = true
+		}
+	}
+	if !sawTail {
+		t.Error("the tail was dropped: the grace period must be armed at stop, not measured from the last output")
+	}
+}
+
+// The watchdog must still fire on a helper that genuinely wedges, or a stuck process holds
+// the session open and the microphone with it.
+func TestWedgedHelperIsKilled(t *testing.T) {
+	bin := fakeHelper(t, `
+trap '' TERM
+echo '{"type":"started"}'
+read -r line
+sleep 60    # asked to stop, says nothing, never exits — only SIGKILL ends this
+`)
+	sink, drain := collect(t)
+	p := New(Config{Bin: bin, Locale: "auto", SilenceGrace: 300 * time.Millisecond})
+	if err := p.Start(1, sink); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+
+	start := time.Now()
+	p.Stop()
+
+	var sawStopped bool
+	for _, e := range drain(2) {
+		if e.Type == stt.Stopped {
+			sawStopped = true
+		}
+	}
+	if !sawStopped {
+		t.Fatal("a wedged helper must still produce stopped — otherwise the session never ends")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("took %s to give up; the watchdog is not firing", elapsed)
+	}
+}

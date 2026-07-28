@@ -32,13 +32,17 @@ func HelperPath(name string) string {
 
 // WhisperModelPath is where the whisper model lives.
 //
-// The 465 MB model is NOT shipped in the app — it is downloaded to the data directory on
-// first use. A copy sitting next to the built helper is legitimate in development (the build
-// script fetches one) and is preferred, so a dev machine never waits on a download.
+// Order matters, and the first entry is the one that was missing: a copy INSIDE the bundle,
+// found the same way the helpers are. Checking only the relative dev path made a packaged app
+// report "falta el modelo" while the file sat right next to the helper — because an app
+// launched from Finder has its working directory at /, so a relative path resolves nowhere.
+//
+// The 465 MB model is not normally shipped; it is downloaded to the data directory on first
+// use. A copy beside the built helper is legitimate in development, so a dev machine never
+// waits on a download.
 func WhisperModelPath(dataDir string) string {
-	dev := filepath.Join("helpers", "bin", "ggml-small.bin")
-	if _, err := os.Stat(dev); err == nil {
-		return dev
+	if bundled := HelperPath("ggml-small.bin"); bundled != "" {
+		return bundled
 	}
 	return filepath.Join(dataDir, "models", "ggml-small.bin")
 }

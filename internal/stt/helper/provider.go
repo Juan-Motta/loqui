@@ -42,6 +42,25 @@ type Config struct {
 	// OnGPUCrash is called when the GPU backend took the process down, so the caller can
 	// remember it and stop offering that backend on this machine.
 	OnGPUCrash func(reason string)
+
+	// SilenceGrace and ExitCap override the stop-protocol timings. Zero means the defaults.
+	// Only the tests set them — a 10 s wait per case would make the suite unusable.
+	SilenceGrace time.Duration
+	ExitCap      time.Duration
+}
+
+func (c Config) silenceGrace() time.Duration {
+	if c.SilenceGrace > 0 {
+		return c.SilenceGrace
+	}
+	return silenceGrace
+}
+
+func (c Config) exitCap() time.Duration {
+	if c.ExitCap > 0 {
+		return c.ExitCap
+	}
+	return exitCap
 }
 
 // Provider runs a native STT helper as a child process.
@@ -236,6 +255,15 @@ func (p *Provider) Stop() {
 		return
 	}
 	p.stopping = true
+	// ARM THE GRACE PERIOD NOW, not from whatever the helper last said.
+	//
+	// This was a real bug in the port: the watchdog compared against the last output
+	// timestamp, but a helper prints NOTHING while it listens — whisper logs its init noise
+	// and then stays quiet for the whole dictation. So by the time the user let go, the
+	// "silence" already exceeded the grace period and the helper was killed within a
+	// second, dropping precisely the tail this watchdog exists to protect. The Electron
+	// original armed its timer at stop time; so does this.
+	p.lastOutput = time.Now()
 	cmd, stdin, done := p.cmd, p.stdin, p.done
 	p.mu.Unlock()
 
@@ -256,7 +284,7 @@ func (p *Provider) Stop() {
 		})
 		defer sigTimer.Stop()
 
-		capAt := time.After(exitCap)
+		capAt := time.After(p.cfg.exitCap())
 		for {
 			select {
 			case <-done:
@@ -268,8 +296,8 @@ func (p *Provider) Stop() {
 				p.kill()
 				p.finish("helper still running after the cap — tail dropped")
 				return
-			case <-time.After(time.Second):
-				if time.Since(p.lastOutputAt()) > silenceGrace {
+			case <-time.After(pollEvery(p.cfg.silenceGrace())):
+				if time.Since(p.lastOutputAt()) > p.cfg.silenceGrace() {
 					p.kill()
 					p.finish("helper went silent — tail dropped")
 					return
@@ -331,6 +359,18 @@ func (p *Provider) emit(evt stt.Event) {
 	}
 	evt.Gen = gen
 	sink(evt)
+}
+
+// pollEvery keeps the silence check finer-grained than the grace period it is measuring, so
+// a short grace (the tests) is not overshot by a whole poll interval.
+func pollEvery(grace time.Duration) time.Duration {
+	if step := grace / 5; step < time.Second {
+		if step < 10*time.Millisecond {
+			return 10 * time.Millisecond
+		}
+		return step
+	}
+	return time.Second
 }
 
 // truncate keeps a log line readable without hiding the start of it.
