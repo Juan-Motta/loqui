@@ -7,20 +7,23 @@
   arm64. Fases 0-3 hechas salvo dos proveedores; **el port está mergeado en `main`**. Ahora
   **fase 4: la UI**, con la primera costura ya puesta.
 
-- **Next step:** cablear la primera vista real contra el payload: **Ajustes → selector de motor
-  + campo de key**. El payload ya existe y llega al webview (`Settings.Load()`), así que falta el
-  otro sentido: los **setters** en `SettingsService` — `SetProvider`, `SetKey` (a Keychain con
-  `store.SetKey`), `DeleteKey`, `SetRegion` — y el DOM que los llama y repinta. Eso cierra el lazo
-  completo (Go calcula → UI pinta → usuario actúa → Go persiste → UI repinta) y es lo que hace que
-  la app se pueda **configurar sin editar `settings.json` a mano**, que es el bloqueo práctico
-  para probar cualquier proveedor.
+- **Next step:** seguir portando la vista de Ajustes contra la misma costura. El lazo ya está
+  cerrado para **motor + key + región**; lo que falta en esta pantalla son los **selectores de
+  idioma por slot** (el payload ya trae `languageBySlot` con los siete slots y sus defaults; falta
+  el setter y la **validación por capacidad** — cuántos idiomas acepta cada motor), y después
+  **tecla de activación**, **apariencia**, **dispositivo de entrada** y el **modo** hold/toggle.
 
-  Ojo con dos cosas al escribir los setters:
-  1. **`SetKey` escribe en el Keychain, que en un build ad-hoc no responde.** La lectura ya está
-     acotada a 3s; la escritura **no** tiene ese timeout (`store.SetKey` llama al cgo directo).
-     Un guardado que cuelgue la UI es peor que uno que falle.
-  2. **El estado `unreadable` ya existe en el payload** — la UI tiene que pintarlo distinto de
-     "sin key", no colapsarlo. Ese es justo el bug que se arregló al crear el payload.
+  Dos cosas que hay que saber antes de tocarlo:
+  1. **El modo se lee UNA vez, al construir el motor** (`app.NewDictation` hace
+     `session.Mode(st.LoadSettings().Mode)`), así que un `SetMode` que sólo persista **no tendrá
+     efecto** hasta reiniciar. Hay que decidir si el controlador relee o si se le notifica.
+  2. **Todo setter nuevo va por `store.UpdateSettings`**, nunca Load-then-Save: son dos secciones
+     críticas distintas y Wails despacha cada llamada en su propia goroutine. Hay un test de 50
+     rondas que lo caza.
+
+  Después de Ajustes: **historial**, **About** y el **onboarding**. Y el que es load-bearing:
+  **modelSpec + descarga del modelo de whisper**, porque sin modelo no arranca y hoy no hay UI
+  para bajarlo.
 
 - **Blockers:**
   1. **Todo está commiteado sólo en local.** Este repo **no tiene remoto** (`git remote -v`
@@ -36,7 +39,7 @@
      Sin ellas no se verifica transcripción real por Azure ni por Grok (el resto de esas rutas sí
      está probado).
 
-- **Deuda nueva, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un
+- **Deuda, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un
   `tsconfig.json` con opciones de TS5 (`verbatimModuleSyntax`, `moduleResolution: bundler`): `tsc`
   no puede leer la config y vite/esbuild borra los tipos sin validarlos. Encontrado por la
   revisión de codex y verificado. La fase 4 va a escribir mucho TS contra DTOs generados
@@ -52,18 +55,31 @@
   2. la reconexión filtra la captura anterior (`controller.go:359` llama a `StartEngine` sin
      `StopEngine`; `dictation.go:115` y `:359` sobreescriben los únicos handles).
 
-- **Active workflow:** ninguno. El del payload de bootstrap se cerró en `bd17cd8`; su registro
-  está en `.workflow/state.md` (**gitignored**, así que un clon nuevo no lo tiene).
+- **Active workflow:** ninguno. Los dos cambios de la fase 4 se cerraron: el payload en `bd17cd8` y
+  los setters en `74d077a`. El registro está en `.workflow/state.md` (**gitignored**, así que un clon
+  nuevo no lo tiene).
 - **Updated:** 2026-07-28
 
 ## Handoff notes
 
-0. **Ya hay una costura de configuración, y funciona.** `Settings.Load()` es un servicio Wails
-   que devuelve el estado completo de Ajustes en una llamada; verificado en la app empaquetada,
-   no sólo en tests. Lo que **sigue faltando** es el otro sentido (setters) y el DOM. Al añadir
-   campos al payload: `internal/app/bootstrap.go`, y **regenerar bindings** con
+0. **La app YA se configura desde la interfaz.** El lazo completo funciona para motor, key y región:
+   `Settings.Load()` da el estado, los setters lo cambian y devuelven el payload repintado.
+   Verificado en la app empaquetada. Al añadir campos o métodos: `internal/app/bootstrap.go` y
+   `internal/app/settings_write.go`, y **regenerar bindings** con
    `./scripts/task.sh common:generate:bindings` (la tarea `generate:bindings` a secas no existe;
    `package` ya la corre).
+
+   **Reglas que el ciclo de revisión dejó, y que valen para cada setter nuevo:**
+   - Devolver `WriteResult`, **no** un error de Go: Wails descarta el resultado de un método que
+     también devuelve error, y la página necesita el payload precisamente cuando falla.
+   - Escribir por `store.UpdateSettings`, nunca Load-then-Save.
+   - Un rechazo no cambia nada, y se valida **todo** antes de escribir **algo**.
+   - Estados ilegibles (`unreadable`) y no disponibles (`available: false`) se pintan distintos de
+     "vacío": adivinar es el bug que este proyecto ya cometió con los permisos.
+
+0b. **Para probar la escritura sin ratón:** `LOQUI_DEBUG_SET_PROVIDER=grok` pide a la página que
+   haga un `SetProvider` real por el binding. Un `<select>` dentro de un webview de Wails no se
+   puede clicar desde un script, así que sin esto la mitad de escritura sólo se comprueba a mano.
 
 1. **La app dicta pero no se configura.** El dictado está verificado de punta a punta con
    **whisper local** (hotkey `fn` → captura → transcripción → `history.jsonl`, los varios `final`
@@ -107,6 +123,11 @@ Once paquetes de tests en verde con `-race` (`./scripts/task.sh test`), `vet` y 
   dos `Store` sobre el mismo directorio intercalarían escrituras).
 - `internal/app/bootstrap.go` — el payload de Ajustes + `SettingsService` (`Settings.Load()`).
   Seams para Keychain / TCC / hardware, porque los tres son intesteables en su sitio.
+- `internal/app/settings_write.go` — los setters. `WriteResult` en vez de error de Go (ver nota 0),
+  validación antes de cualquier escritura, y `SaveConnection` para que región+key no se commiteen a
+  medias.
+- `logging.go` — redacta los argumentos de los bindings en el log de Wails: uno de ellos recibe una
+  API key, y activar su log de debug la imprimiría.
 - `internal/session` — el controlador de dictado (decisiones puras, suite portada de Electron).
 - `internal/stt` — contrato, **sin dependencias de red**. `stt/azure` (llega al 401 real),
   `stt/helper` (whisper ✅, Apple ⛔ — riesgo 5 del plan), `stt/grok` (✅ **71 tests**; el ciclo de
@@ -114,9 +135,10 @@ Once paquetes de tests en verde con `-race` (`./scripts/task.sh test`), `vet` y 
 - `internal/{audio,inject,store,history,hotkey,permissions,macos,assets,settings}` — captura,
   paste con `NSPasteboard.changeCount`, settings + Keychain, historial, protocolo `fn`, TCC, glue
   AppKit, validación de región/candidatos.
-- `frontend/` — `index.html` es Ajustes (markup de Electron **verbatim**), `overlay.html` el pill.
-  **`overlay.ts` funciona**; **`settings.ts` sigue siendo un stub**, pero ya pide el payload y
-  reporta lo que recibe por el log de Go (`BOOTSTRAP`).
+- `frontend/` — `index.html` es Ajustes (markup de Electron casi verbatim: se le añadieron los
+  botones de borrar clave y una línea de estado para el selector), `overlay.html` el pill.
+  **`overlay.ts` funciona**; **`settings.ts` cablea motor, keys y región** — el resto de la página
+  sigue inerte. No decide nada: lee el payload, pinta, manda la acción y repinta.
 - `cmd/stt-probe` — dictado desde la CLI, `-provider azure|grok`, para aislar fallos sin el app.
 
 ## Proveedores: qué falta

@@ -4,6 +4,27 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## La app se configura desde la interfaz (fase 4) — 2026-07-28
+
+- Setters en el servicio de Ajustes (`SetProvider`, `SetRegion`, `SetKey`, `DeleteKey`,
+  `SaveConnection`) y el DOM del selector de motor, los campos de key y el dropdown de regiones.
+  Cierra el lazo: hasta ahora había que editar `settings.json` a mano para probar un proveedor.
+- Los setters devuelven `WriteResult{payload, error}` y **no** un error de Go: Wails descarta el
+  resultado de un método que además devuelve error, y la página necesita el payload justo cuando la
+  escritura falla.
+- **Keychain:** la escritura y el borrado ya están acotados (colgaban la ventana), el reemplazo usa
+  `SecItemUpdate` en vez de delete-then-add (perdía la key vieja si el add fallaba) y las
+  operaciones se serializan por slot.
+- **Guardar ya no borra ajustes:** `Settings` es un subconjunto declarado del modelo y Ajustes
+  reescribe el archivo entero, así que la escritura fusiona sobre el JSON crudo. Un `settings.json`
+  con `null` hacía panic en todas las escrituras.
+- **Azure:** elegir el subservicio OpenAI y guardar sobrescribía la credencial de Speech, y un
+  guardado de sólo región podía mover el endpoint en vivo. Ambas cerradas en backend y UI.
+- Los motores no portados ya no son seleccionables, con un test de contrato que falla si la lista de
+  disponibles y el switch de `buildProvider` divergen.
+- `logging.go` redacta los argumentos de los bindings: Wails los loguea y uno recibe una API key.
+
+
 ## Payload de bootstrap de Ajustes (fase 4) — 2026-07-28
 
 - `Settings.Load()`, un servicio Wails que devuelve en **una** llamada todo lo que la página de
