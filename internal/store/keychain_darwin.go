@@ -164,8 +164,11 @@ func GetKey(slot KeySlot) (string, error) {
 	}
 }
 
-// HasKey reports whether a slot holds a secret. This is all the UI is ever told — the
-// secrets themselves never cross into the frontend.
+// HasKey reports whether a slot holds a secret, collapsing "empty" and "the Keychain did not
+// answer" into false.
+//
+// NOT for the UI: that distinction is load-bearing there, which is what KeyStatusFor exists
+// for. Use this only where a plain yes/no is genuinely enough.
 func HasKey(slot KeySlot) bool {
 	_, err := GetKey(slot)
 	return err == nil
@@ -183,11 +186,42 @@ func DeleteKey(slot KeySlot) error {
 	return nil
 }
 
-// KeyPresence reports which slots hold a key, as booleans only.
-func KeyPresence() map[KeySlot]bool {
-	out := make(map[KeySlot]bool, len(AllKeySlots))
-	for _, slot := range AllKeySlots {
-		out[slot] = HasKey(slot)
+// KeyStatus is what can be said about one slot without revealing the secret. THREE states,
+// not a boolean, because "no key stored" and "the Keychain did not answer" are different
+// facts that send the user to different places — and on an ad-hoc-signed build the second one
+// is the COMMON case, not an edge case (see ErrKeychainTimeout).
+//
+// HasKey collapses them into false, which is why the UI must not use it: told a slot is empty,
+// the user retypes a credential that is already stored.
+type KeyStatus string
+
+const (
+	// KeyPresent means a secret was read back from the slot.
+	KeyPresent KeyStatus = "present"
+	// KeyAbsent means the Keychain answered, and there is nothing in the slot.
+	KeyAbsent KeyStatus = "absent"
+	// KeyUnreadable means the Keychain could not be consulted, so nothing is known. The UI
+	// must show this as unverified rather than picking one of the other two.
+	KeyUnreadable KeyStatus = "unreadable"
+)
+
+// KeyStatusFor reports what is known about one slot, never the secret.
+func KeyStatusFor(slot KeySlot) KeyStatus {
+	_, err := GetKey(slot)
+	switch {
+	case err == nil:
+		return KeyPresent
+	case errors.Is(err, ErrNoSecret):
+		return KeyAbsent
+	default:
+		// ErrKeychainTimeout, or any OSStatus that is not "not found": the read failed, so
+		// the slot's contents are simply unknown.
+		return KeyUnreadable
 	}
-	return out
 }
+
+// There is deliberately no KeyPresence-over-all-slots helper here. Reading five slots in
+// sequence costs 5 × readTimeout — fifteen seconds — whenever the Keychain does not answer,
+// which is the COMMON case on an ad-hoc-signed build, and that is precisely the path the
+// settings UI paints from. Callers that need several slots must fan out and skip the ones they
+// already have an answer for; see (*app.Bootstrap).keyStates.

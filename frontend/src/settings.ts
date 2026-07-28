@@ -14,8 +14,43 @@
 // Until then the page renders its static markup so the window, the tray and the
 // overlay can be exercised end to end.
 import { Events } from "@wailsio/runtime";
+import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 
 console.info("[loqui] settings shell loaded (script port pending)");
+
+// The bootstrap payload — the seam the whole ported UI hangs off. Fetched here already, ahead
+// of the DOM work, so the round trip is proven in the packaged app rather than only in Go
+// tests: the binding is generated code, and a service that fails to register looks perfectly
+// healthy from the Go side.
+//
+// Logged through the SAME channel as the page-load report, because the Go log is where this is
+// actually read from; a console.log inside the webview needs devtools open to exist.
+Settings.Load().then(
+  (payload) => {
+    Events.Emit("ui:bootstrap", {
+      provider: payload.provider,
+      region: payload.region,
+      mode: payload.mode,
+      triggerKey: payload.triggerKey,
+      appearance: payload.appearance,
+      // Presence only — the payload never carries a key, and this must not become the
+      // place that changes that.
+      // The generated DTO types these as nullable because Go maps and slices can marshal to
+      // null. Payload() guarantees they never do, but the guards keep the seam honest for a
+      // caller that cannot see that guarantee.
+      keys: (payload.keys ?? [])
+        .map((k) => `${k.slot}=${k.status}${k.fromEnv ? "(env)" : ""}`)
+        .join(" "),
+      permissions: payload.permissions,
+      devices: (payload.inputDevices ?? []).length,
+      langSlots: Object.keys(payload.languageBySlot ?? {}).length,
+      devicesError: payload.devicesError,
+    });
+  },
+  (err: unknown) => {
+    Events.Emit("ui:bootstrap-failed", { error: String(err) });
+  },
+);
 
 // Tell the backend the page really loaded. Not decoration: a missing index.html put the
 // Wails asset server into an error state where EVERY route returned "no index.html could be

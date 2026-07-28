@@ -23,6 +23,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	"github.com/Juan-Motta/loqui-go/internal/app"
 	"github.com/Juan-Motta/loqui-go/internal/assets"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/store"
@@ -50,11 +51,26 @@ type windows struct {
 var wins windows
 
 func main() {
-	app := application.New(application.Options{
+	// The store is opened HERE, before the application, because the settings service is
+	// registered as a construction option and needs it. The dictation engine then shares
+	// this one instance: two Stores over the same directory would each keep their own lock
+	// and could interleave writes to settings.json.
+	st, err := store.New()
+	if err != nil {
+		log.Fatal("cannot open the data directory: ", err)
+	}
+
+	wailsApp := application.New(application.Options{
 		Name:        "Loqui",
 		Description: "Dictado por voz que inserta el texto donde está el cursor",
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend),
+		},
+		// The Ajustes page renders from one call into this service. Until it existed there
+		// was no way to configure the app from the interface at all — settings.json had to
+		// be hand-edited and keys passed through env vars.
+		Services: []application.Service{
+			application.NewService(app.NewSettingsService(st)),
 		},
 		// Exactly one Loqui may run. A second instance would install its OWN fn
 		// listener and its OWN recognizer, so one dictation gets transcribed twice,
@@ -80,12 +96,12 @@ func main() {
 		},
 	})
 
-	wins.settings = newSettingsWindow(app)
-	wins.overlay = newOverlayWindow(app)
-	tray := newTray(app)
+	wins.settings = newSettingsWindow(wailsApp)
+	wins.overlay = newOverlayWindow(wailsApp)
+	tray := newTray(wailsApp)
 
 	// The engine needs the windows and the tray to already exist, since it drives both.
-	if err := startDictation(app, tray); err != nil {
+	if err := startDictation(wailsApp, tray, st); err != nil {
 		log.Fatal("cannot start the dictation engine: ", err)
 	}
 	defer stopDictation()
@@ -96,7 +112,7 @@ func main() {
 	if os.Getenv("LOQUI_DEBUG_OVERLAY") == "1" {
 		go func() {
 			time.Sleep(2 * time.Second)
-			showOverlay(app, wins.overlay)
+			showOverlay(wailsApp, wins.overlay)
 			// Assert the window really is transparent rather than trusting the options.
 			// The white-rectangle bug looked exactly like a correctly configured window from
 			// the Go side; only the pixels disagreed.
@@ -105,7 +121,7 @@ func main() {
 		}()
 	}
 
-	if err := app.Run(); err != nil {
+	if err := wailsApp.Run(); err != nil {
 		log.Fatal(err)
 	}
 }

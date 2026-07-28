@@ -88,11 +88,12 @@ func (u *ui) setTrayActive(active bool) {
 var dictation *app.Dictation
 
 // startDictation wires the store, the engine and the fn trigger together.
-func startDictation(wailsApp *application.App, tray *application.SystemTray) error {
-	st, err := store.New()
-	if err != nil {
-		return err
-	}
+//
+// The store arrives from main rather than being opened here: the settings service needs it at
+// application-construction time, and both must be the SAME instance — two Stores over one
+// directory each hold their own lock, so a settings write from the UI could interleave with
+// one from the engine.
+func startDictation(wailsApp *application.App, tray *application.SystemTray, st *store.Store) error {
 	u := &ui{wails: wailsApp, tray: tray}
 	dictation = app.NewDictation(st, u)
 
@@ -100,6 +101,16 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray) err
 	// asset server looks identical to a healthy one from here, until nothing reports in.
 	wailsApp.Event.On("ui:ready", func(e *application.CustomEvent) {
 		u.Log("UI", fmt.Sprintf("page loaded: %v", e.Data))
+	})
+
+	// The bootstrap round trip reports itself. Worth its own line: the service is registered
+	// as a construction option and the binding is generated code, so a failure to register
+	// shows up as nothing at all happening in the UI — with no error on either side.
+	wailsApp.Event.On("ui:bootstrap", func(e *application.CustomEvent) {
+		u.Log("BOOTSTRAP", fmt.Sprintf("payload delivered: %v", e.Data))
+	})
+	wailsApp.Event.On("ui:bootstrap-failed", func(e *application.CustomEvent) {
+		u.Log("BOOTSTRAP-ERR", fmt.Sprintf("%v", e.Data))
 	})
 
 	settings := st.LoadSettings()

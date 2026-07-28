@@ -66,6 +66,24 @@ type Settings struct {
 	Onboarded bool `json:"onboarded"`
 }
 
+// AllLanguageSlots is every slot that carries its own dictation language list.
+//
+// A LANGUAGE SLOT IS NOT A PROVIDER. The provider is what Settings.Provider holds and what
+// dictation.go switches on ("azure", "macos", "whisper", "grok"); "azure-speech" and
+// "azure-openai" are two Azure subservices that need separate language lists under the single
+// "azure" provider. Nor is this AllKeySlots: the local engines take a language and have no
+// credential, and the cloud slots have a credential. Anything that needs one language list per
+// slot enumerates THIS; nothing may treat it as a list of engines to offer in the picker.
+var AllLanguageSlots = []string{
+	"whisper",
+	"macos",
+	"azure-speech",
+	"azure-openai",
+	"openai",
+	"grok",
+	"elevenlabs",
+}
+
 // DefaultSettings mirrors the Electron defaults.
 //
 // The default provider is local whisper, not Azure: it needs no account, no key and no
@@ -82,7 +100,15 @@ func DefaultSettings() Settings {
 			// auto-detect — which is the default, deliberately. Note that for xAI the
 			// parameter only controls how numbers and units are written out; the model
 			// transcribes any supported language either way.
-			"grok": {"auto"},
+			//
+			// All four cloud slots are listed even though two of their providers are not
+			// ported yet: the settings UI paints a language control per slot, and a slot
+			// missing here falls through LanguagesFor to the "en-US" last resort — which
+			// would silently pin a cloud engine to English instead of auto-detecting.
+			"grok":         {"auto"},
+			"azure-openai": {"auto"},
+			"openai":       {"auto"},
+			"elevenlabs":   {"auto"},
 		},
 		Mode:       "hold",
 		TriggerKey: "fn",
@@ -167,13 +193,24 @@ func (s *Store) SaveSettings(settings Settings) error {
 
 // LanguagesFor returns the dictation languages for a slot, never empty.
 func (s *Store) LanguagesFor(slot string) []string {
-	settings := s.LoadSettings()
+	return LanguagesIn(s.LoadSettings(), slot)
+}
+
+// LanguagesIn is LanguagesFor against settings that are ALREADY loaded, never empty.
+//
+// It exists so a caller that needs several slots reads the file once. LanguagesFor re-reads on
+// every call, so asking it for all seven slots means eight loads of the same file — and worse,
+// a save landing in between would compose the payload from two different versions of the
+// settings, which is exactly what a one-shot snapshot is supposed to rule out.
+func LanguagesIn(settings Settings, slot string) []string {
 	if langs, ok := settings.LanguageBySlot[slot]; ok && len(langs) > 0 {
 		return langs
 	}
 	if langs, ok := DefaultSettings().LanguageBySlot[slot]; ok {
 		return langs
 	}
+	// Last resort for a slot nobody declared a default for. Reaching this is a bug in
+	// DefaultSettings rather than a normal outcome — see AllLanguageSlots.
 	return []string{"en-US"}
 }
 
