@@ -124,12 +124,41 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	wailsApp.Event.On("ui:painted", func(e *application.CustomEvent) {
 		u.Log("UI-PAINT", fmt.Sprintf("view rendered: %v", e.Data))
 	})
+	// Which view the user is on. Logged because navigation is the one thing whose absence made
+	// everything else look broken: every control this port wired lives inside a view that could not
+	// be reached until the sidebar was hooked up.
+	wailsApp.Event.On("ui:view", func(e *application.CustomEvent) {
+		u.Log("UI-VIEW", fmt.Sprintf("%v", e.Data))
+	})
 
 	// Dev affordance: ask the page to perform one real settings write.
 	//
 	// Same reason as LOQUI_DEBUG_DICTATE — the real trigger cannot be scripted. A <select> inside
 	// a Wails webview cannot be clicked from a shell script, so without this the write half of the
 	// settings loop could only ever be checked by hand.
+	wailsApp.Event.On("ui:nav-probe", func(e *application.CustomEvent) {
+		u.Log("UI-NAV", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:record-probe", func(e *application.CustomEvent) {
+		u.Log("UI-REC", fmt.Sprintf("%v", e.Data))
+	})
+
+	// Dev affordance: ask the page to click its record button.
+	if os.Getenv("LOQUI_DEBUG_RECORD_CLICK") == "1" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			wailsApp.Event.Emit("debug:record-click")
+		}()
+	}
+
+	// Dev affordance: ask the page to click a sidebar item and report what became visible.
+	if view := os.Getenv("LOQUI_DEBUG_NAVIGATE"); view != "" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			wailsApp.Event.Emit("debug:navigate", view)
+		}()
+	}
+
 	if provider := os.Getenv("LOQUI_DEBUG_SET_PROVIDER"); provider != "" {
 		go func() {
 			// After the page has loaded and wired its handlers.

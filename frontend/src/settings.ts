@@ -1,8 +1,14 @@
 // Settings / app-shell renderer.
 //
-// PORT IN PROGRESS. The markup in index.html is the Electron page verbatim (1249 lines). What is
-// wired so far is the loop that makes the app CONFIGURABLE at all: the engine picker and the API
-// key fields. Everything else on the page is still inert.
+// PORT IN PROGRESS. The markup in index.html is the Electron page verbatim (1249 lines). Wired so
+// far: the sidebar navigation, the Home record button, and the loop that makes the app CONFIGURABLE
+// at all — the engine picker, the API key fields and the Azure region. Everything else is inert.
+//
+// NAVIGATION CAME LAST AND SHOULD HAVE COME FIRST. Every control the settings loop added lives
+// inside the Ajustes view, and the stylesheet hides every view but the active one — so until the
+// sidebar was hooked up, none of it could be reached by a mouse. The end-to-end check that had
+// "verified" the loop drove the binding from Go, which proves the plumbing and says nothing about
+// reachability. They are two different claims and need two different checks.
 //
 // THE DIVISION OF LABOUR. The Electron original (src/settings/settings.ts, 1828 lines) imported
 // ten pure shared modules — i18n, languageCatalog, connectionStatus, permissions, triggerKey,
@@ -17,6 +23,7 @@
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
+import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import type {
   SettingsPayload,
   WriteResult,
@@ -34,12 +41,98 @@ Events.Emit("ui:ready", {
   navItems: document.querySelectorAll(".nav-item").length,
 });
 
-// Proof the event plumbing reaches this window: the same channel the ported UI will
-// use to animate the Home waveform.
+// ---- navigation --------------------------------------------------------------------
+//
+// WITHOUT THIS NOTHING ELSE IS REACHABLE. The stylesheet hides every `.view` and shows only the
+// one carrying `.active`, and the markup ships with `inicio` active — so until the sidebar is
+// wired, Ajustes, Historial and About do not exist as far as the user is concerned. The controls
+// this file spent its effort on live inside Ajustes.
+//
+// It is worth naming how that was missed: the settings loop was verified end to end by driving the
+// binding from Go, which proved the loop worked and said nothing about whether a human could reach
+// it. Reachability is not a detail of the same test — it is a different claim.
+function showView(name: string): void {
+  for (const view of document.querySelectorAll<HTMLElement>(
+    "section.view[data-view]",
+  )) {
+    view.classList.toggle("active", view.dataset.view === name);
+  }
+  // The sidebar highlight follows, but only for entries that ARE sidebar entries: the bug-report
+  // view is opened from the footer and has no nav item, so nothing should end up highlighted.
+  for (const item of document.querySelectorAll<HTMLElement>(
+    ".nav-item[data-view]",
+  )) {
+    item.classList.toggle("active", item.dataset.view === name);
+  }
+  Events.Emit("ui:view", { view: name });
+}
+
+function wireNavigation(): void {
+  for (const item of document.querySelectorAll<HTMLElement>(
+    ".nav-item[data-view]",
+  )) {
+    item.addEventListener("click", () =>
+      showView(item.dataset.view ?? "inicio"),
+    );
+  }
+  // "Ver todo" and the footer's bug-report link: same navigation, different affordance.
+  for (const link of document.querySelectorAll<HTMLElement>("[data-goto]")) {
+    link.addEventListener("click", () =>
+      showView(link.dataset.goto ?? "inicio"),
+    );
+  }
+  const report = $<HTMLElement>("openReport");
+  report?.addEventListener("click", () =>
+    showView(report.dataset.view ?? "report"),
+  );
+}
+
+// ---- the record button -------------------------------------------------------------
+
+// setDictating reflects the engine's state in the Home button and on the root element.
+function setDictating(active: boolean): void {
+  document.documentElement.dataset.dictating = String(active);
+  const label =
+    $<HTMLElement>("testDictate")?.querySelector<HTMLElement>(".btn-label");
+  if (label) label.textContent = active ? "Detener" : "Probar dictado";
+}
+
+// The engine is the authority on whether a dictation is running: it can start from the trigger key
+// or the tray with this window never involved, and it can stop on its own (the idle guard).
 Events.On("dictation:state", (e: { data: boolean | boolean[] }) => {
   const active = Array.isArray(e.data) ? e.data[0] : e.data;
-  document.documentElement.dataset.dictating = String(!!active);
+  setDictating(!!active);
 });
+
+function wireRecordButton(): void {
+  const button = $<HTMLButtonElement>("testDictate");
+  button?.addEventListener("click", () => {
+    // Not routed through run(): this touches no settings, so it has no payload to repaint from and
+    // nothing to serialise against. The dictation:state event is what updates the label.
+    button.disabled = true;
+    Dictation.Toggle().then(
+      (active) => {
+        setDictating(active);
+        button.disabled = false;
+        Events.Emit("ui:action", {
+          action: "dictation.toggle",
+          ok: true,
+          active,
+        });
+      },
+      (err: unknown) => {
+        button.disabled = false;
+        const hint = $<HTMLElement>("ctaHint");
+        if (hint) hint.textContent = String(err);
+        Events.Emit("ui:action", {
+          action: "dictation.toggle",
+          ok: false,
+          error: String(err),
+        });
+      },
+    );
+  });
+}
 
 // ---- which credential belongs to which card ---------------------------------------
 // A card's data-provider is a PROVIDER; the credential is a key SLOT, and the two are not the same
@@ -417,6 +510,23 @@ function wire(): void {
 
 // ---- start ------------------------------------------------------------------------
 
+// Navigation and the record button are wired FIRST, before any backend call.
+//
+// They do not depend on the settings payload, and making them wait on it means a backend that fails
+// to answer leaves the whole window dead — not just the part that needed the data. The user could
+// not even reach About to read what went wrong.
+wireNavigation();
+wireRecordButton();
+
+// The engine may already be dictating (the trigger key or the tray, with this window closed), so
+// ask rather than assume idle.
+Dictation.Active().then(
+  (active) => setDictating(active),
+  () => {
+    /* leave the label as the markup shipped it */
+  },
+);
+
 Settings.Load().then(
   (payload) => {
     Events.Emit("ui:bootstrap", {
@@ -463,6 +573,59 @@ Settings.Load().then(
 // Clicking a <select> inside a Wails webview from a shell script is not something that works, so
 // without this the write half of the loop could only be checked by hand. This runs the SAME path
 // the picker does, so what it proves is the real one: binding → service → Keychain/disk → repaint.
+// Dev affordance: click a real sidebar item and report which view ended up visible.
+//
+// Same reason as the other debug hooks — a sidebar entry inside a Wails webview cannot be clicked
+// from a shell script. This dispatches a genuine click so the handler under test is the one the
+// user's mouse reaches, not a reimplementation of it.
+Events.On("debug:navigate", (e: { data: unknown }) => {
+  const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  const want = String(arg ?? "");
+  const item = document.querySelector<HTMLElement>(
+    `.nav-item[data-view="${want}"]`,
+  );
+  if (!item) {
+    Events.Emit("ui:nav-probe", { requested: want, error: "no such nav item" });
+    return;
+  }
+  item.click();
+  const visible = Array.from(
+    document.querySelectorAll<HTMLElement>("section.view.active"),
+  ).map((v) => v.dataset.view);
+  Events.Emit("ui:nav-probe", {
+    requested: want,
+    visible,
+    navActive:
+      document.querySelector<HTMLElement>(".nav-item.active")?.dataset.view,
+    connCards: document.querySelectorAll(".conn[data-provider]").length,
+  });
+});
+
+// Dev affordance: click the Home record button and report what happened.
+//
+// Added after navigation shipped broken. The lesson it encodes: driving a binding from Go proves the
+// plumbing, not that the control a human touches is connected to it. This clicks the real button.
+Events.On("debug:record-click", () => {
+  const button = $<HTMLButtonElement>("testDictate");
+  if (!button) {
+    Events.Emit("ui:record-probe", { error: "no record button in the DOM" });
+    return;
+  }
+  const before =
+    $<HTMLElement>("testDictate")?.querySelector(".btn-label")?.textContent;
+  button.click();
+  // After a tick, so the binding's promise has had a chance to settle.
+  setTimeout(() => {
+    Events.Emit("ui:record-probe", {
+      labelBefore: before,
+      labelAfter:
+        $<HTMLElement>("testDictate")?.querySelector(".btn-label")?.textContent,
+      dictating: document.documentElement.dataset.dictating,
+      hint: $<HTMLElement>("ctaHint")?.textContent,
+    });
+  }, 1500);
+});
+
 Events.On("debug:exercise-write", (e: { data: unknown }) => {
   const arg = Array.isArray(e.data) ? e.data[0] : e.data;
   const provider = String(arg ?? "");

@@ -74,6 +74,18 @@ func main() {
 		// be hand-edited and keys passed through env vars.
 		Services: []application.Service{
 			application.NewService(app.NewSettingsService(st)),
+			// The engine does not exist yet — it needs the windows and the tray this very call
+			// creates — so the service resolves it lazily. By the time the page can call it,
+			// startDictation has run.
+			//
+			// The nil check must return a nil INTERFACE, not a nil *Controller: the latter would be a
+			// non-nil interface holding a nil pointer, and the service's guard would not catch it.
+			application.NewService(app.NewDictationService(func() app.DictationControl {
+				if dictation == nil {
+					return nil
+				}
+				return dictation.Controller()
+			})),
 		},
 		// Exactly one Loqui may run. A second instance would install its OWN fn
 		// listener and its OWN recognizer, so one dictation gets transcribed twice,
