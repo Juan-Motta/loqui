@@ -178,3 +178,122 @@ func TestListHistorySkipsMalformedLines(t *testing.T) {
 		t.Errorf("got %+v, want just the readable record", got)
 	}
 }
+
+// A setting this version does not model must survive being written by this version.
+//
+// Settings is a declared SUBSET of the model, and the settings screen writes the whole file on every
+// change. Without a merge, the user's first click in Ajustes would silently delete everything the
+// port has not reached yet — and they would have no way to know, because the app never read those
+// keys in the first place.
+func TestAWriteKeepsSettingsThisVersionDoesNotModel(t *testing.T) {
+	dir := t.TempDir()
+	st := NewAt(dir)
+	// Shaped like a file written by a version that knows more than this one.
+	const original = `{
+	  "provider": "whisper",
+	  "openAiModel": "gpt-4o-transcribe",
+	  "wizardCompletedAt": "2026-07-01T10:00:00Z",
+	  "nested": {"keep": ["me", "too"]}
+	}`
+	if err := os.WriteFile(st.SettingsPath(), []byte(original), 0o600); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	// A write through the transactional path, as the UI does it.
+	if err := st.UpdateSettings(func(cfg *Settings) error {
+		cfg.Provider = "grok"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateSettings: %v", err)
+	}
+
+	raw, err := os.ReadFile(st.SettingsPath())
+	if err != nil {
+		t.Fatalf("reading back: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("the written file is not valid JSON: %v", err)
+	}
+
+	// The change landed...
+	if got["provider"] != "grok" {
+		t.Errorf("provider = %v, want grok", got["provider"])
+	}
+	// ...and nothing else was lost.
+	for _, key := range []string{"openAiModel", "wizardCompletedAt", "nested"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("%q was deleted by a write that had nothing to do with it", key)
+		}
+	}
+	if nested, ok := got["nested"].(map[string]any); !ok || nested["keep"] == nil {
+		t.Errorf("the nested value was flattened or lost: %v", got["nested"])
+	}
+}
+
+// A corrupt file must not block a write: refusing would leave the user unable to fix their settings
+// from the very screen that exists to fix them.
+func TestAWriteOverACorruptFileStillSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	st := NewAt(dir)
+	if err := os.WriteFile(st.SettingsPath(), []byte("{ not json at all"), 0o600); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	if err := st.UpdateSettings(func(cfg *Settings) error {
+		cfg.Provider = "grok"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateSettings over a corrupt file: %v", err)
+	}
+	if got := st.LoadSettings().Provider; got != "grok" {
+		t.Errorf("Provider = %q, want grok", got)
+	}
+}
+
+// A settings file containing exactly `null` must not break writing.
+//
+// It is the one malformed input that gets past a decode: unmarshalling `null` into a map SUCCEEDS
+// and leaves the map nil, and assigning into a nil map panics. Every other mismatch — an array, a
+// string, a number — returns an error and leaves the map usable. Without the guard, a settings.json
+// of `null` would make every settings action fail from then on, and the UI has no way to recover
+// from that since the write is exactly what would fix it.
+func TestAWriteOverANullSettingsFileSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	st := NewAt(dir)
+	if err := os.WriteFile(st.SettingsPath(), []byte("null"), 0o600); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+
+	if err := st.UpdateSettings(func(cfg *Settings) error {
+		cfg.Provider = "grok"
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateSettings over a null file: %v", err)
+	}
+	if got := st.LoadSettings().Provider; got != "grok" {
+		t.Errorf("Provider = %q, want grok", got)
+	}
+}
+
+// The other malformed shapes must be equally survivable, since they take a different path through
+// the decode (an error rather than a nil map).
+func TestAWriteOverOtherMalformedShapesSucceeds(t *testing.T) {
+	for _, raw := range []string{`[]`, `"una cadena"`, `42`, `true`} {
+		t.Run(raw, func(t *testing.T) {
+			st := NewAt(t.TempDir())
+			if err := os.WriteFile(st.SettingsPath(), []byte(raw), 0o600); err != nil {
+				t.Fatalf("seeding: %v", err)
+			}
+			if err := st.UpdateSettings(func(cfg *Settings) error {
+				cfg.Provider = "grok"
+				return nil
+			}); err != nil {
+				t.Fatalf("UpdateSettings over %s: %v", raw, err)
+			}
+			if got := st.LoadSettings().Provider; got != "grok" {
+				t.Errorf("Provider = %q, want grok", got)
+			}
+		})
+	}
+}

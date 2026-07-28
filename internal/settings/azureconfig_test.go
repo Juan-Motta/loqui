@@ -114,3 +114,36 @@ func TestValidateCandidatesRejectsMalformedLocale(t *testing.T) {
 		}
 	}
 }
+
+// Every offered region must already be in normalised form, and must build a valid endpoint.
+//
+// The dropdown writes these ids straight into the settings, so one with a stray space or capital
+// would be stored, pass through, and then fail at the first dictation — with the user having
+// picked it from a list the app itself offered.
+func TestEveryOfferedRegionSurvivesNormalisation(t *testing.T) {
+	if len(Regions) == 0 {
+		t.Fatal("no regions offered")
+	}
+	seen := map[string]bool{}
+	for _, r := range Regions {
+		if r.Name == "" {
+			t.Errorf("region %q has no display name", r.ID)
+		}
+		if seen[r.ID] {
+			t.Errorf("region %q is listed twice", r.ID)
+		}
+		seen[r.ID] = true
+
+		got, err := NormalizeRegion(r.ID)
+		if err != nil {
+			t.Errorf("NormalizeRegion(%q): %v — an offered region must be valid", r.ID, err)
+			continue
+		}
+		if got != r.ID {
+			t.Errorf("NormalizeRegion(%q) = %q — offered ids must already be normalised", r.ID, got)
+		}
+		if _, err := BuildV2Endpoint(r.ID); err != nil {
+			t.Errorf("BuildV2Endpoint(%q): %v", r.ID, err)
+		}
+	}
+}

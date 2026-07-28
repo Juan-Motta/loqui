@@ -18,6 +18,7 @@ import (
 
 	"github.com/Juan-Motta/loqui-go/internal/audio"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
+	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
 
@@ -37,6 +38,11 @@ type KeyState struct {
 	// for two reasons: it cannot offer to delete something that is not in the Keychain, and
 	// the user has to understand why the slot reads as configured while the field is blank.
 	FromEnv bool `json:"fromEnv"`
+	// Available is whether a credential here would ever be READ. Not derivable from provider
+	// availability: "azure" is available, but only through its Speech subservice — azure-openai is
+	// the unported realtime one. Without this the settings page offers to store a key that nothing
+	// will use, and worse, its form would write it over the slot that IS in use.
+	Available bool `json:"available"`
 }
 
 // PermissionsState is the three grants dictation depends on. Statuses are passed through
@@ -78,6 +84,12 @@ type SettingsPayload struct {
 	DevicesError string `json:"devicesError"`
 	// DataDir backs the About view and any bug report.
 	DataDir string `json:"dataDir"`
+	// Providers is every engine the picker offers, each flagged with whether it can actually
+	// dictate. AzureRegions is the region dropdown's options. Both are static, and both are sent
+	// anyway: they are the lists the page has to render, and duplicating them in TypeScript would
+	// put the same facts in two languages — the duplication this payload exists to remove.
+	Providers    []ProviderOption  `json:"providers"`
+	AzureRegions []settings.Region `json:"azureRegions"`
 }
 
 // Bootstrap computes the payload. Every dependency that touches the machine is a field
@@ -107,6 +119,24 @@ func NewBootstrap(st *store.Store) *Bootstrap {
 	}
 }
 
+// ProviderOption is one entry in the engine picker.
+type ProviderOption struct {
+	ID string `json:"id"`
+	// Available is whether the engine can dictate today. The unported ones are still LISTED —
+	// hiding them would make the app look like it supports less than it will — but the picker
+	// must show them as unavailable, because selecting one replaces a working engine with one
+	// that fails at the next dictation. SetProvider refuses them too.
+	Available bool `json:"available"`
+}
+
+func providerOptions() []ProviderOption {
+	out := make([]ProviderOption, 0, len(store.AllProviders))
+	for _, id := range store.AllProviders {
+		out = append(out, ProviderOption{ID: id, Available: store.IsAvailableProvider(id)})
+	}
+	return out
+}
+
 // livePermissions reads the three grants from the OS.
 func livePermissions() PermissionsState {
 	return PermissionsState{
@@ -123,7 +153,8 @@ func livePermissions() PermissionsState {
 // keys and the permissions have nothing to do with the microphone list — and returning an
 // error would leave the user with no way to reach the settings that could fix the problem.
 func (b *Bootstrap) Payload() SettingsPayload {
-	settings := b.store.LoadSettings()
+	// Named cfg, not settings: the internal/settings package is imported here.
+	cfg := b.store.LoadSettings()
 
 	devices, err := b.devices()
 	if devices == nil {
@@ -135,21 +166,23 @@ func (b *Bootstrap) Payload() SettingsPayload {
 	}
 
 	return SettingsPayload{
-		Provider:       settings.Provider,
-		Region:         settings.Region,
-		Mode:           settings.Mode,
-		TriggerKey:     settings.TriggerKey,
-		Appearance:     settings.Appearance,
-		AppLanguage:    settings.AppLanguage,
-		Onboarded:      settings.Onboarded,
-		LanguageBySlot: languages(settings),
-		InputDeviceID:  settings.InputDeviceID,
+		Provider:       cfg.Provider,
+		Region:         cfg.Region,
+		Mode:           cfg.Mode,
+		TriggerKey:     cfg.TriggerKey,
+		Appearance:     cfg.Appearance,
+		AppLanguage:    cfg.AppLanguage,
+		Onboarded:      cfg.Onboarded,
+		LanguageBySlot: languages(cfg),
+		InputDeviceID:  cfg.InputDeviceID,
 
 		Keys:         b.keyStates(),
 		Permissions:  b.perms(),
 		InputDevices: devices,
 		DevicesError: devicesError,
 		DataDir:      b.store.Dir(),
+		Providers:    providerOptions(),
+		AzureRegions: settings.Regions,
 	}
 }
 
@@ -160,6 +193,11 @@ func (b *Bootstrap) Payload() SettingsPayload {
 // must not be part of it.
 type SettingsService struct {
 	bootstrap *Bootstrap
+
+	// setSecret / deleteSecret override the Keychain writes. Only the tests set them — see
+	// secretWriter for why the real ones cannot run in a unit test.
+	setSecret    func(store.KeySlot, string) error
+	deleteSecret func(store.KeySlot) error
 }
 
 func NewSettingsService(st *store.Store) *SettingsService {
@@ -194,7 +232,7 @@ func (b *Bootstrap) keyStates() []KeyState {
 	var wg sync.WaitGroup
 
 	for i, slot := range store.AllKeySlots {
-		out[i] = KeyState{Slot: string(slot)}
+		out[i] = KeyState{Slot: string(slot), Available: store.IsAvailableKeySlot(slot)}
 		if name := envKeyOverride(slot); name != "" && os.Getenv(name) != "" {
 			out[i].Status = store.KeyPresent
 			out[i].FromEnv = true

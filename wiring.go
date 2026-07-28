@@ -113,6 +113,32 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 		u.Log("BOOTSTRAP-ERR", fmt.Sprintf("%v", e.Data))
 	})
 
+	// Every settings write reports its outcome here. The webview's own console needs devtools
+	// open to exist, and a failed Keychain write is the one thing on that page most likely to
+	// go wrong on an unsigned build — it must not be invisible from the terminal.
+	//
+	// The UI sends the ACTION name, never the value: a key must not reach the log.
+	wailsApp.Event.On("ui:action", func(e *application.CustomEvent) {
+		u.Log("UI-ACTION", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:painted", func(e *application.CustomEvent) {
+		u.Log("UI-PAINT", fmt.Sprintf("view rendered: %v", e.Data))
+	})
+
+	// Dev affordance: ask the page to perform one real settings write.
+	//
+	// Same reason as LOQUI_DEBUG_DICTATE — the real trigger cannot be scripted. A <select> inside
+	// a Wails webview cannot be clicked from a shell script, so without this the write half of the
+	// settings loop could only ever be checked by hand.
+	if provider := os.Getenv("LOQUI_DEBUG_SET_PROVIDER"); provider != "" {
+		go func() {
+			// After the page has loaded and wired its handlers.
+			time.Sleep(3 * time.Second)
+			u.Log("DEBUG", "asking the UI to set provider="+provider)
+			wailsApp.Event.Emit("debug:exercise-write", provider)
+		}()
+	}
+
 	settings := st.LoadSettings()
 	u.Log("MAIN", fmt.Sprintf("ready — provider=%s mode=%s trigger=%s data=%s",
 		settings.Provider, settings.Mode, settings.TriggerKey, st.Dir()))

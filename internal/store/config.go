@@ -39,8 +39,12 @@ const electronAppDirName = "loqui"
 
 // Settings is the persisted, non-secret configuration. A subset of the Electron model for
 // now: the fields the currently-ported code actually reads. The rest arrive with their
-// providers and their UI, and unknown keys already in the file survive a round trip
-// because loading merges onto defaults rather than replacing them.
+// providers and their UI.
+//
+// KEYS THIS STRUCT DOES NOT MODEL SURVIVE A WRITE — see saveLocked, which merges onto the raw
+// file rather than replacing it. That is load-bearing precisely BECAUSE this is a subset: the
+// settings screen writes the whole file on every change, so without the merge the first click
+// in Ajustes would silently delete every setting the port has not reached yet.
 type Settings struct {
 	// Provider is the active STT engine.
 	Provider string `json:"provider"`
@@ -157,6 +161,11 @@ func (s *Store) LoadSettings() Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	return s.loadLocked()
+}
+
+// loadLocked is LoadSettings without taking the lock, for callers that already hold it.
+func (s *Store) loadLocked() Settings {
 	out := DefaultSettings()
 	raw, err := os.ReadFile(s.SettingsPath())
 	if err != nil {
@@ -174,13 +183,49 @@ func (s *Store) LoadSettings() Settings {
 	return out
 }
 
+// UpdateSettings applies a change to the settings as ONE transaction, and is what every setter
+// must use.
+//
+// Load-then-Save is not enough. Those are two separate critical sections — LoadSettings takes the
+// read lock, SaveSettings the write lock — so two callers can both read version A, and whichever
+// saves second silently erases the other's change. Wails dispatches each binding call on its own
+// goroutine, so two quick actions in the settings window are all it takes. `-race` cannot catch
+// it either: nothing races on memory, the second write is simply built from stale data.
+//
+// The mutation runs under the write lock, so it must not call back into the Store.
+func (s *Store) UpdateSettings(mutate func(*Settings) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	settings := s.loadLocked()
+	if err := mutate(&settings); err != nil {
+		return err // the caller rejected the change; nothing is written
+	}
+	return s.saveLocked(settings)
+}
+
 // SaveSettings writes the settings atomically: a crash mid-write must not leave a
 // truncated file that reads as "reset everything to defaults".
 func (s *Store) SaveSettings(settings Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	data, err := json.MarshalIndent(settings, "", "  ")
+	return s.saveLocked(settings)
+}
+
+// saveLocked is SaveSettings without taking the lock, for callers that already hold it.
+//
+// It MERGES onto whatever is already in the file instead of overwriting it. Settings is a declared
+// subset of the model, so marshalling the struct alone drops every key it does not name — and now
+// that the UI writes settings, that would happen on the user's first click, taking with it anything
+// an older or newer version of the app had stored. Known fields always win; unknown ones are carried
+// through untouched.
+func (s *Store) saveLocked(settings Settings) error {
+	merged, err := mergeOntoRaw(s.SettingsPath(), settings)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -189,6 +234,41 @@ func (s *Store) SaveSettings(settings Settings) error {
 		return err
 	}
 	return os.Rename(tmp, s.SettingsPath())
+}
+
+// mergeOntoRaw returns the settings as a key/value map laid over whatever the file already holds.
+//
+// A missing or unparseable file yields just the settings: there is nothing to preserve, and refusing
+// to write because the old file was corrupt would leave the user unable to fix it from the UI —
+// which is the same reasoning LoadSettings applies in the other direction.
+func mergeOntoRaw(path string, settings Settings) (map[string]json.RawMessage, error) {
+	out := map[string]json.RawMessage{}
+	if raw, err := os.ReadFile(path); err == nil {
+		// The error is ignored on purpose: a corrupt file simply contributes nothing to preserve.
+		_ = json.Unmarshal(raw, &out)
+	}
+	// A file containing exactly `null` is the one input that makes Unmarshal SUCCEED and leave the
+	// map nil — every other mismatch (an array, a string, a number) returns an error and leaves the
+	// map alone. Assigning into a nil map panics, so without this a settings.json of `null` would
+	// break every settings write from then on. Verified: "assignment to entry in nil map".
+	if out == nil {
+		out = map[string]json.RawMessage{}
+	}
+
+	// Round-tripping the struct through JSON is what keeps this honest: the keys written are exactly
+	// the ones its tags declare, so a field added to Settings needs no change here.
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return nil, err
+	}
+	var known map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &known); err != nil {
+		return nil, err
+	}
+	for k, v := range known {
+		out[k] = v
+	}
+	return out, nil
 }
 
 // LanguagesFor returns the dictation languages for a slot, never empty.
@@ -273,3 +353,41 @@ func (s *Store) ClearHistory() error {
 	}
 	return nil
 }
+
+// AllProviders is every engine Settings.Provider may name, in the order the picker shows them.
+//
+// NOT the language slots and NOT the key slots: this is what dictation.go switches on. "azure"
+// is one provider whose two subservices ("azure-speech", "azure-openai") have their own language
+// slots and their own credentials — see AllLanguageSlots.
+var AllProviders = []string{"whisper", "macos", "azure", "openai", "grok", "elevenlabs"}
+
+// IsKnownProvider reports whether a string names an engine at all. Says nothing about whether it
+// works — see IsAvailableProvider.
+func IsKnownProvider(provider string) bool {
+	for _, known := range AllProviders {
+		if known == provider {
+			return true
+		}
+	}
+	return false
+}
+
+// availableProviders is the engines that are actually ported and can dictate today. It must stay
+// in step with the switch in app.(*Dictation).buildProvider, which is the code that would
+// otherwise reject them at the worst possible moment.
+var availableProviders = map[string]bool{
+	"whisper": true,
+	"macos":   true,
+	"azure":   true,
+	"grok":    true,
+	// openai and elevenlabs are named engines but not ported yet.
+}
+
+// IsAvailableProvider reports whether an engine can actually dictate.
+//
+// KNOWN IS NOT AVAILABLE, and conflating the two is a user-visible bug: the settings page lists
+// six engines, and letting someone select one that buildProvider rejects replaces a WORKING engine
+// with one that fails at the next dictation — far from the click that caused it. The picker greys
+// the unavailable ones out from the payload; SetProvider refuses them so that is not merely
+// cosmetic.
+func IsAvailableProvider(provider string) bool { return availableProviders[provider] }

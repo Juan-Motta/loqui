@@ -781,6 +781,9 @@
           </div>
 
           <div class="engine-hint" id="engineHint"></div>
+          <!-- Where a rejected engine change reports itself. Without it the picker silently
+               snapped back to the previous engine and the user saw nothing. -->
+          <div class="status" id="engineStatus"></div>
 
           <div class="activity-card">
             <div class="activity-head">
@@ -905,13 +908,14 @@
                       <select id="region"></select>
                     </div>
 
-                    <label id="keyLabel">Clave API <span id="keyState" class="muted"></span></label>
+                    <label id="keyLabel">Clave API <span id="keyState" class="muted key-state"></span></label>
                     <input id="key" type="password" placeholder="pega tu clave (se cifra al guardar)" data-i18n-attr="placeholder" />
 
                     <div class="conn-actions">
                       <span class="status" id="azureStatus"></span>
                       <button class="btn" id="test" data-i18n>Probar conexión</button>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn conn-delete" data-i18n>Borrar clave</button>
                       <button class="btn primary conn-save" data-i18n>Guardar</button>
                     </div>
                   </div>
@@ -932,11 +936,12 @@
                       <option value="gpt-4o-transcribe" data-i18n>gpt-4o-transcribe — mayor precisión</option>
                       <option value="gpt-4o-mini-transcribe" data-i18n>gpt-4o-mini-transcribe — más rápido/barato</option>
                     </select>
-                    <label>API key <span id="openaiKeyState" class="muted"></span></label>
+                    <label>API key <span id="openaiKeyState" class="muted key-state"></span></label>
                     <input id="openaiApiKey" type="password" placeholder="sk-… (se cifra al guardar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn conn-delete" data-i18n>Borrar clave</button>
                       <button class="btn primary conn-save" data-i18n>Guardar</button>
                     </div>
                   </div>
@@ -951,11 +956,12 @@
                   </div>
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Transcripción en streaming. La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
-                    <label>API key <span id="grokKeyState" class="muted"></span></label>
+                    <label>API key <span id="grokKeyState" class="muted key-state"></span></label>
                     <input id="grokApiKey" type="password" placeholder="xai-… (se cifra al guardar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn conn-delete" data-i18n>Borrar clave</button>
                       <button class="btn primary conn-save" data-i18n>Guardar</button>
                     </div>
                   </div>
@@ -970,11 +976,12 @@
                   </div>
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Scribe v2 Realtime (streaming). La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
-                    <label>API key <span id="elevenKeyState" class="muted"></span></label>
+                    <label>API key <span id="elevenKeyState" class="muted key-state"></span></label>
                     <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se cifra al guardar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn conn-delete" data-i18n>Borrar clave</button>
                       <button class="btn primary conn-save" data-i18n>Guardar</button>
                     </div>
                   </div>

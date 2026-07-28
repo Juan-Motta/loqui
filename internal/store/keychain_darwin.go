@@ -32,14 +32,25 @@ static NSMutableDictionary *loqui_query(const char *account) {
 	return q;
 }
 
-// Upsert: delete then add. SecItemUpdate would need a different query shape for the
-// attributes vs the value, and "replace" is the only semantics a key slot ever wants.
+// Upsert: UPDATE the value when the item exists, ADD only when it does not.
+//
+// NOT delete-then-add, which is what this used to do. That loses the stored key whenever the
+// add fails — the user replaces a working credential with a typo, the add is rejected, and now
+// there is no credential at all. SecItemUpdate needs the value in its own attributes-to-update
+// dictionary, separate from the query, which is the only reason the two shapes exist here.
 static int loqui_keychain_set(const char *account, const char *secret) {
 	NSMutableDictionary *q = loqui_query(account);
-	SecItemDelete((__bridge CFDictionaryRef)q);
-
 	NSString *value = [NSString stringWithUTF8String:secret];
-	q[(__bridge id)kSecValueData] = [value dataUsingEncoding:NSUTF8StringEncoding];
+	NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
+
+	NSMutableDictionary *changes = [NSMutableDictionary dictionary];
+	changes[(__bridge id)kSecValueData] = data;
+
+	OSStatus err = SecItemUpdate((__bridge CFDictionaryRef)q, (__bridge CFDictionaryRef)changes);
+	if (err != errSecItemNotFound) { return (int)err; }
+
+	// No item yet: add one.
+	q[(__bridge id)kSecValueData] = data;
 	// Available without unlocking the device, but never synced to iCloud or included in
 	// a backup: an API key belongs to this machine.
 	q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
@@ -73,6 +84,7 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 	"unsafe"
 )
@@ -98,17 +110,131 @@ const (
 // AllKeySlots is every slot, for reporting which ones hold a key.
 var AllKeySlots = []KeySlot{SlotAzureSpeech, SlotAzureOpenAI, SlotOpenAI, SlotGrok, SlotElevenLabs}
 
-// SetKey stores a secret, replacing whatever was in the slot.
-func SetKey(slot KeySlot, secret string) error {
-	cAcct, cSecret := C.CString(string(slot)), C.CString(secret)
-	defer C.free(unsafe.Pointer(cAcct))
-	defer C.free(unsafe.Pointer(cSecret))
-
-	if status := int(C.loqui_keychain_set(cAcct, cSecret)); status != 0 {
-		return fmt.Errorf("store: keychain write failed for %s (OSStatus %d)", slot, status)
-	}
-	return nil
+// availableKeySlots is the credentials the app can actually USE today.
+//
+// It is not derivable from provider availability, and that is the whole point: "azure" is an
+// available provider, but only through its SPEECH subservice. azure-openai is Azure's realtime
+// service, which is not ported — so a key stored there would never be read, while the settings page
+// happily offers to store one.
+var availableKeySlots = map[KeySlot]bool{
+	SlotAzureSpeech: true,
+	SlotGrok:        true,
 }
+
+// IsAvailableKeySlot reports whether a credential in this slot would ever be used.
+func IsAvailableKeySlot(slot KeySlot) bool { return availableKeySlots[slot] }
+
+// slotsUsingAzureRegion is the credentials the Azure Speech region applies to.
+//
+// The region is a single global setting, so pairing it with an unrelated slot is meaningless: saving
+// a Grok key must not be able to move the Azure endpoint.
+//
+// azure-openai is NOT here, even though it is Azure. Its endpoint is addressed by resource and
+// deployment name, not by region — the settings form says as much, keeping the region in #speechConfig
+// and resource/deployment in #openaiConfig. Listing it let a region be written through a slot that has
+// no use for one.
+var slotsUsingAzureRegion = map[KeySlot]bool{
+	SlotAzureSpeech: true,
+}
+
+// UsesAzureRegion reports whether a slot's connection includes the Azure region.
+func UsesAzureRegion(slot KeySlot) bool { return slotsUsingAzureRegion[slot] }
+
+// slotGates serialises Keychain operations PER SLOT: one buffered channel each, used as a mutex
+// that a caller can give up waiting for.
+//
+// WHY SERIALISE. The cgo calls cannot be cancelled, so an operation this package abandoned at its
+// timeout is still in flight. If a retry ran alongside it, which of the two landed last would be
+// whatever the Keychain decided — the user's second attempt could be silently overwritten by the
+// first one they were told had failed.
+//
+// WHY NOT A sync.Mutex. The gate must be released when the cgo call ACTUALLY returns, not when the
+// caller stops waiting — otherwise it serialises nothing. But then a hung call would hold it for
+// ever, and a plain Lock() would make every later caller hang too: the settings window would
+// freeze on the second attempt instead of reporting the first one honestly. A channel can be
+// acquired with a deadline, so "somebody else's abandoned call still owns this slot" comes back as
+// the same indeterminate answer as the call itself timing out.
+var slotGates sync.Map // KeySlot -> chan struct{}, capacity 1
+
+// acquireSlot takes the slot's gate before the deadline. The returned release must be called by
+// whoever actually finishes the Keychain call, NOT by a caller that timed out.
+//
+// ONE DEADLINE COVERS BOTH STAGES — waiting for the gate and then waiting for the call. Giving each
+// its own budget would let an operation documented as bounded by writeTimeout take twice that,
+// which is the difference between a settings window that pauses and one that looks hung.
+func acquireSlot(slot KeySlot, deadline time.Time) (release func(), ok bool) {
+	actual, _ := slotGates.LoadOrStore(slot, make(chan struct{}, 1))
+	gate := actual.(chan struct{})
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, true
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+// waitFor blocks for the result until the deadline, so the caller's total budget is the deadline
+// rather than one timeout per stage.
+func waitFor[T any](ch <-chan T, deadline time.Time) (T, bool) {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case v := <-ch:
+		return v, true
+	case <-timer.C:
+		var zero T
+		return zero, false
+	}
+}
+
+// SetKey stores a secret, replacing whatever was in the slot. Returns ErrKeychainTimeout when
+// the Keychain does not answer in time.
+//
+// A TIMEOUT IS INDETERMINATE, not a failure: the uncancellable call may still land afterwards. It
+// is reported as an error because the caller has to be told the write is not confirmed, but the
+// slot must then be treated as unknown rather than unchanged — which is exactly what
+// KeyStatusFor's "unreadable" is for.
+//
+// BOUNDED FOR THE SAME REASON AS GetKey. SecItemAdd goes through the same access control that
+// makes reads hang on an unrecognised signature, so a write can block for ever too. The read
+// path learned this the hard way (see readTimeout); leaving the write unbounded meant the first
+// person to type an API key into the settings window would freeze it with no way back.
+func SetKey(slot KeySlot, secret string) error {
+	deadline := time.Now().Add(writeTimeout)
+	release, ok := acquireSlot(slot, deadline)
+	if !ok {
+		return ErrKeychainTimeout
+	}
+
+	ch := make(chan error, 1) // buffered: the cgo call cannot be cancelled, so it must never block on the send
+
+	go func() {
+		defer release() // when the call REALLY finishes, however long that takes
+
+		cAcct, cSecret := C.CString(string(slot)), C.CString(secret)
+		defer C.free(unsafe.Pointer(cAcct))
+		defer C.free(unsafe.Pointer(cSecret))
+
+		if status := int(C.loqui_keychain_set(cAcct, cSecret)); status != 0 {
+			ch <- fmt.Errorf("store: keychain write failed for %s (OSStatus %d)", slot, status)
+			return
+		}
+		ch <- nil
+	}()
+
+	err, ok := waitFor(ch, deadline)
+	if !ok {
+		return ErrKeychainTimeout
+	}
+	return err
+}
+
+// writeTimeout bounds a Keychain write. Longer than readTimeout because a write that is merely
+// slow is worth waiting for — losing the key the user just typed is worse than a pause — while a
+// read that stalls has a cheap fallback: report "unreadable" and move on.
+const writeTimeout = 10 * time.Second
 
 // readTimeout bounds a Keychain read.
 //
@@ -130,6 +256,14 @@ var ErrKeychainTimeout = errors.New("store: the keychain did not respond — is 
 // GetKey reads a secret. Returns ErrNoSecret when the slot is empty and
 // ErrKeychainTimeout when the Keychain does not answer in time.
 func GetKey(slot KeySlot) (string, error) {
+	deadline := time.Now().Add(readTimeout)
+	release, ok := acquireSlot(slot, deadline)
+	if !ok {
+		// Another operation on this slot has not come back. Nothing is known about the slot,
+		// which is precisely what ErrKeychainTimeout means to every caller.
+		return "", ErrKeychainTimeout
+	}
+
 	type result struct {
 		secret string
 		err    error
@@ -139,6 +273,8 @@ func GetKey(slot KeySlot) (string, error) {
 	ch := make(chan result, 1)
 
 	go func() {
+		defer release()
+
 		cAcct := C.CString(string(slot))
 		defer C.free(unsafe.Pointer(cAcct))
 
@@ -156,12 +292,11 @@ func GetKey(slot KeySlot) (string, error) {
 		ch <- result{secret: C.GoString(out)}
 	}()
 
-	select {
-	case r := <-ch:
-		return r.secret, r.err
-	case <-time.After(readTimeout):
+	r, ok := waitFor(ch, deadline)
+	if !ok {
 		return "", ErrKeychainTimeout
 	}
+	return r.secret, r.err
 }
 
 // HasKey reports whether a slot holds a secret, collapsing "empty" and "the Keychain did not
@@ -175,15 +310,37 @@ func HasKey(slot KeySlot) bool {
 }
 
 // DeleteKey removes a secret. Absent is success: the caller wanted it gone.
+//
+// Bounded and serialised for the same reasons as SetKey. It goes through the same access control,
+// so it can hang the same way — and it is now reachable from the settings window, where a hang is
+// a frozen UI rather than a slow background task.
 func DeleteKey(slot KeySlot) error {
-	cAcct := C.CString(string(slot))
-	defer C.free(unsafe.Pointer(cAcct))
-
-	status := int(C.loqui_keychain_delete(cAcct))
-	if status != 0 && status != errSecItemNotFound {
-		return fmt.Errorf("store: keychain delete failed for %s (OSStatus %d)", slot, status)
+	deadline := time.Now().Add(writeTimeout)
+	release, ok := acquireSlot(slot, deadline)
+	if !ok {
+		return ErrKeychainTimeout
 	}
-	return nil
+
+	ch := make(chan error, 1)
+	go func() {
+		defer release()
+
+		cAcct := C.CString(string(slot))
+		defer C.free(unsafe.Pointer(cAcct))
+
+		status := int(C.loqui_keychain_delete(cAcct))
+		if status != 0 && status != errSecItemNotFound {
+			ch <- fmt.Errorf("store: keychain delete failed for %s (OSStatus %d)", slot, status)
+			return
+		}
+		ch <- nil
+	}()
+
+	err, ok := waitFor(ch, deadline)
+	if !ok {
+		return ErrKeychainTimeout
+	}
+	return err
 }
 
 // KeyStatus is what can be said about one slot without revealing the secret. THREE states,

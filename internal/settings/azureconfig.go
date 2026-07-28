@@ -78,3 +78,51 @@ func ValidateCandidates(langs []string) ([]string, error) {
 	}
 	return langs, nil
 }
+
+// Region is one Azure Speech region: the id every endpoint needs, and the name a human reads.
+type Region struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// Regions is the list the settings dropdown offers, ported from the Electron build's
+// AZURE_REGIONS (src/settings/settings.ts).
+//
+// IT LIVES IN GO, not in the page, for the reason the whole port exists: NormalizeRegion already
+// owns what a valid region looks like, and a second copy in TypeScript would be a second place to
+// get it wrong. The ids are already the normalised form, so NormalizeRegion accepts them as-is —
+// asserted by TestEveryOfferedRegionSurvivesNormalisation.
+//
+// Not exhaustive, and not meant to be: it is the set Azure Speech actually serves. A region
+// missing from here is still accepted if typed, because NormalizeRegion validates the shape
+// rather than a membership list.
+var Regions = []Region{
+	{"eastus", "East US"},
+	{"eastus2", "East US 2"},
+	{"westus", "West US"},
+	{"westus2", "West US 2"},
+	{"westus3", "West US 3"},
+	{"centralus", "Central US"},
+	{"southcentralus", "South Central US"},
+	{"northcentralus", "North Central US"},
+	{"westcentralus", "West Central US"},
+	{"canadacentral", "Canada Central"},
+	{"brazilsouth", "Brazil South"},
+	{"northeurope", "North Europe"},
+	{"westeurope", "West Europe"},
+	{"uksouth", "UK South"},
+	{"francecentral", "France Central"},
+	{"germanywestcentral", "Germany West Central"},
+	{"switzerlandnorth", "Switzerland North"},
+	{"norwayeast", "Norway East"},
+	{"swedencentral", "Sweden Central"},
+	{"eastasia", "East Asia"},
+	{"southeastasia", "Southeast Asia"},
+	{"japaneast", "Japan East"},
+	{"japanwest", "Japan West"},
+	{"koreacentral", "Korea Central"},
+	{"centralindia", "Central India"},
+	{"australiaeast", "Australia East"},
+	{"southafricanorth", "South Africa North"},
+	{"uaenorth", "UAE North"},
+}

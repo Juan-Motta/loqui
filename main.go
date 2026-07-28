@@ -63,6 +63,9 @@ func main() {
 	wailsApp := application.New(application.Options{
 		Name:        "Loqui",
 		Description: "Dictado por voz que inserta el texto donde está el cursor",
+		// Wails logs every binding call's ARGUMENTS at debug level, and one of this app's bound
+		// methods takes an API key. See logging.go.
+		Logger: newWailsLogger(),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(frontend),
 		},

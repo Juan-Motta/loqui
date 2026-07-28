@@ -148,7 +148,7 @@ func TestAKeyStateCarriesPresenceAndNothingElse(t *testing.T) {
 	if len(wire.Keys) == 0 {
 		t.Fatal("the payload carried no key states")
 	}
-	allowed := map[string]bool{"slot": true, "status": true, "fromEnv": true}
+	allowed := map[string]bool{"slot": true, "status": true, "fromEnv": true, "available": true}
 	for _, k := range wire.Keys {
 		for field := range k {
 			if !allowed[field] {
