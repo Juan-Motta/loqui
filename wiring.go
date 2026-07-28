@@ -130,6 +130,14 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	wailsApp.Event.On("ui:view", func(e *application.CustomEvent) {
 		u.Log("UI-VIEW", fmt.Sprintf("%v", e.Data))
 	})
+	wailsApp.Event.On("ui:tab", func(e *application.CustomEvent) {
+		u.Log("UI-TAB", fmt.Sprintf("%v", e.Data))
+	})
+	// How many transcripts the Historial actually painted. Worth a line: a stored transcript that
+	// never reaches the list is exactly the failure that made the history look lost.
+	wailsApp.Event.On("ui:history", func(e *application.CustomEvent) {
+		u.Log("UI-HIST", fmt.Sprintf("%v", e.Data))
+	})
 
 	// Dev affordance: ask the page to perform one real settings write.
 	//
@@ -148,6 +156,19 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 		go func() {
 			time.Sleep(3 * time.Second)
 			wailsApp.Event.Emit("debug:record-click")
+		}()
+	}
+
+	// Dev affordance: announce a stored transcript without dictating one.
+	//
+	// This is the case that made the history look lost — dictating with Historial already on screen —
+	// and the live refresh depends on the page having subscribed to this event. Silence produces no
+	// transcript, so a scripted dictation cannot exercise it.
+	if os.Getenv("LOQUI_DEBUG_HISTORY_EVENT") == "1" {
+		go func() {
+			time.Sleep(6 * time.Second)
+			u.Log("DEBUG", "announcing a history change")
+			u.HistoryChanged()
 		}()
 	}
 

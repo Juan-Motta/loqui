@@ -1,8 +1,9 @@
 // Settings / app-shell renderer.
 //
 // PORT IN PROGRESS. The markup in index.html is the Electron page verbatim (1249 lines). Wired so
-// far: the sidebar navigation, the Home record button, and the loop that makes the app CONFIGURABLE
-// at all — the engine picker, the API key fields and the Azure region. Everything else is inert.
+// far: the sidebar navigation and the Ajustes tabs, the Home record button, the Historial list with
+// its search/date filter and clear action, and the loop that makes the app CONFIGURABLE at all — the
+// engine picker, the API key fields and the Azure region.
 //
 // NAVIGATION CAME LAST AND SHOULD HAVE COME FIRST. Every control the settings loop added lives
 // inside the Ajustes view, and the stylesheet hides every view but the active one — so until the
@@ -18,18 +19,22 @@
 // repaints from whatever Go returns. No local state and no optimistic updates — the payload IS
 // the state.
 //
-// Remaining for this view: the Azure subservice switch (speech vs openai), language pickers,
-// trigger key, appearance, input device, onboarding, history and About. See
+// Still inert: the Azure subservice switch (speech vs openai), the language pickers, the trigger
+// key, appearance, the input device, the permission rows, About and the onboarding wizard. See
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
+import * as History from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/historyservice.js";
 import type {
+  HistoryEntry,
   SettingsPayload,
   WriteResult,
 } from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/models.js";
 
-console.info("[loqui] settings shell loaded (partial port: engine + keys)");
+console.info(
+  "[loqui] settings shell loaded (partial port: nav + engine + keys + history)",
+);
 
 // Tell the backend the page really loaded. Not decoration: a missing index.html put the
 // Wails asset server into an error state where EVERY route returned "no index.html could be
@@ -132,6 +137,162 @@ function wireRecordButton(): void {
       },
     );
   });
+}
+
+// ---- the Ajustes tabs --------------------------------------------------------------
+//
+// A second navigation layer INSIDE Ajustes, with the same failure as the sidebar had: the stylesheet
+// hides every `.tab-panel` and shows only `.active`, so until this is wired the Sistema and Permisos
+// panels are as unreachable as the whole view was.
+function wireTabs(): void {
+  const tabs = Array.from(
+    document.querySelectorAll<HTMLElement>(".tab[data-tab]"),
+  );
+  for (const tab of tabs) {
+    tab.addEventListener("click", () => {
+      const name = tab.dataset.tab;
+      for (const t of tabs) t.classList.toggle("active", t === tab);
+      for (const panel of document.querySelectorAll<HTMLElement>(
+        ".tab-panel[data-tab]",
+      )) {
+        panel.classList.toggle("active", panel.dataset.tab === name);
+      }
+      Events.Emit("ui:tab", { tab: name });
+    });
+  }
+}
+
+// ---- the Historial view ------------------------------------------------------------
+
+// formatWhen renders a timestamp for a human. The page does this, not Go: this is the only side that
+// knows the viewer's locale and timezone.
+function formatWhen(at: number): string {
+  if (!at) return "";
+  const d = new Date(at);
+  const today = new Date();
+  const sameDay =
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+    : d.toLocaleString(undefined, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+}
+
+// paintHistory renders a page of transcripts.
+//
+// The empty state distinguishes "nothing saved yet" from "nothing matched", which is why the backend
+// sends Total alongside the entries: on screen both are an empty list, but one of them would have the
+// user believing their transcripts were lost.
+function paintHistory(page: {
+  entries: HistoryEntry[] | null;
+  total: number;
+}): void {
+  const entries = page.entries ?? [];
+  const box = $<HTMLElement>("historyBox");
+  if (box) {
+    if (entries.length === 0) {
+      box.innerHTML = `<span class="empty">${
+        page.total === 0
+          ? "Todavía no hay transcripciones. Dicta algo y aparecerá aquí."
+          : "Ninguna transcripción coincide con el filtro."
+      }</span>`;
+    } else {
+      box.innerHTML = entries
+        .map(
+          (e) => `<div class="hist-item">
+            <div class="hist-meta">
+              <span class="hist-when">${escapeHtml(formatWhen(e.at))}</span>
+              ${e.language ? `<span class="hist-lang">${escapeHtml(e.language)}</span>` : ""}
+            </div>
+            <div class="hist-text">${escapeHtml(e.text)}</div>
+          </div>`,
+        )
+        .join("");
+    }
+  }
+  Events.Emit("ui:history", { shown: entries.length, total: page.total });
+}
+
+function paintRecent(page: { entries: HistoryEntry[] | null }): void {
+  const box = $<HTMLElement>("homeRecent");
+  if (!box) return;
+  const entries = page.entries ?? [];
+  box.innerHTML =
+    entries.length === 0
+      ? `<span class="muted">Todavía no hay transcripciones.</span>`
+      : entries
+          .map(
+            (e) =>
+              `<div class="hist-item"><div class="hist-meta"><span class="hist-when">${escapeHtml(
+                formatWhen(e.at),
+              )}</span></div><div class="hist-text">${escapeHtml(e.text)}</div></div>`,
+          )
+          .join("");
+}
+
+// refreshHistory re-reads both the Historial list and the Home card from the CURRENT filter controls,
+// so a transcript landing while the user has a search typed does not silently ignore it.
+async function refreshHistory(): Promise<void> {
+  const query = $<HTMLInputElement>("histSearch")?.value ?? "";
+  const range = $<HTMLSelectElement>("histRange")?.value ?? "all";
+  try {
+    paintHistory(await History.List(query, range));
+    paintRecent(await History.Recent());
+  } catch (err) {
+    const box = $<HTMLElement>("historyBox");
+    if (box)
+      box.innerHTML = `<span class="empty">${escapeHtml(String(err))}</span>`;
+  }
+}
+
+function wireHistory(): void {
+  // Filtering is a re-query, not a client-side pass over a cached list: the rules live in Go and the
+  // page must not grow a second opinion about what "Hoy" means.
+  $<HTMLInputElement>("histSearch")?.addEventListener(
+    "input",
+    () => void refreshHistory(),
+  );
+  $<HTMLSelectElement>("histRange")?.addEventListener(
+    "change",
+    () => void refreshHistory(),
+  );
+
+  const menuButton = $<HTMLButtonElement>("histMenuBtn");
+  const menu = $<HTMLElement>("histMenu");
+  menuButton?.addEventListener("click", () => {
+    if (!menu) return;
+    menu.hidden = !menu.hidden;
+    menuButton.setAttribute("aria-expanded", String(!menu.hidden));
+  });
+
+  $<HTMLButtonElement>("clearHistory")?.addEventListener("click", () => {
+    if (menu) menu.hidden = true;
+    if (menuButton) menuButton.setAttribute("aria-expanded", "false");
+    void History.Clear().then(
+      (page) => {
+        paintHistory(page);
+        void refreshHistory();
+        Events.Emit("ui:action", { action: "history.clear", ok: true });
+      },
+      (err: unknown) => {
+        Events.Emit("ui:action", {
+          action: "history.clear",
+          ok: false,
+          error: String(err),
+        });
+      },
+    );
+  });
+
+  // The engine announces every stored transcript, so the list stays live while the window is open —
+  // which is the case that made this feel broken: dictating with Historial already on screen.
+  Events.On("history:changed", () => void refreshHistory());
 }
 
 // ---- which credential belongs to which card ---------------------------------------
@@ -517,6 +678,11 @@ function wire(): void {
 // not even reach About to read what went wrong.
 wireNavigation();
 wireRecordButton();
+wireTabs();
+wireHistory();
+// The transcripts are on disk regardless of whether the settings payload arrives, so they are read
+// on their own rather than behind it.
+void refreshHistory();
 
 // The engine may already be dictating (the trigger key or the tray, with this window closed), so
 // ask rather than assume idle.

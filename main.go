@@ -74,6 +74,7 @@ func main() {
 		// be hand-edited and keys passed through env vars.
 		Services: []application.Service{
 			application.NewService(app.NewSettingsService(st)),
+			application.NewService(app.NewHistoryService(st)),
 			// The engine does not exist yet — it needs the windows and the tray this very call
 			// creates — so the service resolves it lazily. By the time the page can call it,
 			// startDictation has run.
