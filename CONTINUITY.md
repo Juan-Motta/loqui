@@ -125,14 +125,16 @@ permisos, cuelga llamadas.
 ## Comandos
 
 ```bash
-wails3 task test       # tests (inyecta los flags de cgo del Speech SDK)
-wails3 task vet
-wails3 task build      # compila (frontend + go)
-wails3 task package    # arma bin/loqui.app y firma ad-hoc
-wails3 task dev        # hot reload
+# Dos wrappers, dos trampas distintas — ver el README:
+#   scripts/go.sh    los flags de cgo del Speech SDK (`go` a secas no compila)
+#   scripts/task.sh  wails3 no está en el PATH por defecto en macOS
+./scripts/task.sh test
+./scripts/task.sh vet
+./scripts/task.sh build
+./scripts/task.sh package
 LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # muestra el pill a los 2s
 LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dicta 6s sin tocar una tecla
-wails3 task probe:mic                                        # ¿el micrófono produce audio?
+./scripts/task.sh probe:mic                                  # ¿el micrófono produce audio?
 ```
 
 **Nunca uses `go` a secas en este repo.** El binding de Azure no declara sus `#cgo`, así que

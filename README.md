@@ -33,19 +33,40 @@ Incluso comandos que no tocan Azure, como `-mic-only`, porque el binario igual l
 . scripts/go.sh            # o sourcealo, y usá `go` normal en esa shell
 ```
 
+## Lo segundo: `wails3` no está en tu PATH
+
+`wails3` se instala en `$(go env GOPATH)/bin`, que en macOS **no está en el PATH** salvo que
+lo hayas agregado. Así que `wails3 task ...` falla con `command not found` en una máquina que
+tiene todo bien instalado.
+
+Usá el wrapper, que además lo instala si falta:
+
+```bash
+./scripts/task.sh build
+./scripts/task.sh probe:mic
+```
+
+O arreglalo de raíz y usá `wails3` directo en todas partes:
+
+```bash
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc && exec zsh
+```
+
 ## Comandos
 
 ```bash
-wails3 task build            # compila (frontend + go)
-wails3 task package          # arma bin/loqui.app y lo firma ad-hoc
-wails3 task dev              # hot reload
-wails3 task test             # tests
-wails3 task vet
+./scripts/task.sh build          # compila (frontend + go)
+./scripts/task.sh package        # arma bin/loqui.app y lo firma ad-hoc
+./scripts/task.sh dev            # hot reload
+./scripts/task.sh test
+./scripts/task.sh vet
 
-wails3 task probe:devices    # lista micrófonos
-wails3 task probe:mic        # nivel del micrófono, sin tocar la red
-SPEECH_KEY=... SPEECH_REGION=eastus wails3 task probe -- -seconds 20
+./scripts/task.sh probe:devices  # lista micrófonos
+./scripts/task.sh probe:mic      # nivel del micrófono, sin tocar la red
+SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/task.sh probe -- -seconds 20
 ```
+
+Con `wails3` en el PATH, `wails3 task <lo-mismo>` es equivalente.
 
 Afordancias de desarrollo (documentadas donde se leen, no sólo acá):
 
@@ -60,7 +81,7 @@ LOQUI_AZURE_KEY=...                                          # evita el Keychain
 ```bash
 cd frontend && npm install && cd ..
 ./scripts/build-globe-listener.sh    # el listener de la tecla fn
-wails3 task package
+./scripts/task.sh package            # instala wails3 si falta
 ```
 
 El framework de Azure lo baja `scripts/vendor-speech-sdk.sh` solo, con sha256 fijado.
