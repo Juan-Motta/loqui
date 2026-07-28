@@ -97,7 +97,11 @@ func main() {
 		go func() {
 			time.Sleep(2 * time.Second)
 			showOverlay(app, wins.overlay)
-			log.Println("debug: overlay shown via orderFrontRegardless")
+			// Assert the window really is transparent rather than trusting the options.
+			// The white-rectangle bug looked exactly like a correctly configured window from
+			// the Go side; only the pixels disagreed.
+			opaque, alpha := macos.WindowOpacity(wins.overlay.NativeWindow())
+			log.Printf("debug: overlay shown — opaque=%v backgroundAlpha=%.2f (want false / 0.00)", opaque, alpha)
 		}()
 	}
 
@@ -162,10 +166,18 @@ func newOverlayWindow(app *application.App) *application.WebviewWindow {
 		DisableResize: true,
 		// The pill is pure status: clicks must reach the app underneath it.
 		IgnoreMouseEvents: true,
-		BackgroundType:    application.BackgroundTypeTransparent,
+		// BackgroundType is the CROSS-PLATFORM knob and it does nothing on macOS —
+		// `BackgroundType` appears zero times in Wails' darwin window code. Setting only
+		// this is what left the pill floating inside an opaque white rounded rectangle:
+		// the window kept its default background while the page drew a transparent body.
+		// Kept for the eventual Windows build; Mac.Backdrop below is what actually applies.
+		BackgroundType: application.BackgroundTypeTransparent,
 		Mac: application.MacWindow{
-			// The pill draws its own rounded shadow; the OS window shadow would be
-			// a square behind it.
+			// THIS is what makes the window and the webview transparent on macOS, so only
+			// the pill itself is visible over whatever is behind it.
+			Backdrop: application.MacBackdropTransparent,
+			// The pill draws its own rounded shadow; the OS window shadow would be a
+			// square behind it.
 			DisableShadow: true,
 			WindowLevel:   application.MacWindowLevelStatus,
 		},

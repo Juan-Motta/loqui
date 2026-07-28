@@ -48,6 +48,15 @@ static void loqui_order_out(void *nsWindow) {
 	});
 }
 
+// Read back what the window actually is, not what it was asked to be.
+static void loqui_window_opacity(void *nsWindow, int *isOpaque, double *alpha) {
+	NSWindow *win = (__bridge NSWindow *)nsWindow;
+	if (win == nil) { *isOpaque = 1; *alpha = 1.0; return; }
+	*isOpaque = [win isOpaque] ? 1 : 0;
+	NSColor *bg = [win backgroundColor];
+	*alpha = (bg == nil) ? 1.0 : [bg alphaComponent];
+}
+
 // Cocoa's mouse location, in Cocoa coordinates (origin bottom-left of the main
 // screen). The overlay is placed on whichever display the cursor is on, because
 // that is where the user is looking and typing.
@@ -78,4 +87,16 @@ func CursorPosition() (x, y float64) {
 	var cx, cy C.double
 	C.loqui_cursor(&cx, &cy)
 	return float64(cx), float64(cy)
+}
+
+// WindowOpacity reports whether the window is opaque and the alpha of its background colour.
+//
+// It exists because a misconfigured window looks correct from Go: the options say
+// "transparent", and only the pixels disagree. A transparent overlay must report
+// opaque=false and alpha=0; anything else means the pill is sitting on a solid rectangle.
+func WindowOpacity(nsWindow unsafe.Pointer) (opaque bool, backgroundAlpha float64) {
+	var isOpaque C.int
+	var alpha C.double
+	C.loqui_window_opacity(nsWindow, &isOpaque, &alpha)
+	return isOpaque == 1, float64(alpha)
 }
