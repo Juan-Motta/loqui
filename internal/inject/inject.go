@@ -66,6 +66,10 @@ type Options struct {
 	Sleep func(time.Duration)
 	// Delay defaults to restoreDelay.
 	Delay time.Duration
+	// sendPaste defaults to the real Cmd+V. Unexported: only the tests in this package
+	// substitute it, because a test suite that synthesises keystrokes would paste into
+	// whatever window the developer happens to have focused.
+	sendPaste func()
 }
 
 // Text injects text at the cursor of whatever app has focus.
@@ -84,11 +88,16 @@ func Text(text string, opts Options) Result {
 		delay = restoreDelay
 	}
 
+	paste := opts.sendPaste
+	if paste == nil {
+		paste = sendPasteKeystroke
+	}
+
 	prev := snapshotPasteboard()
 	defer prev.release()
 
 	ours := writeText(text)
-	sendPasteKeystroke()
+	paste()
 	sleep(delay)
 
 	res := Result{Pasted: true}

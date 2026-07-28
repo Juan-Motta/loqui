@@ -15,7 +15,11 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        settings: resolve(__dirname, "settings.html"),
+        // index.html IS the settings page. Wails' AssetFileServerFS locates the root of
+        // the embedded FS by finding index.html, and without one it fails EVERY request
+        // with "no index.html could be found" — including /overlay.html. So the app's
+        // main page has to carry that name.
+        index: resolve(__dirname, "index.html"),
         overlay: resolve(__dirname, "overlay.html"),
       },
     },

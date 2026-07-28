@@ -78,3 +78,5 @@ Events.On("meter:level", (e: { data: number | number[] }) => {
 
 buildBars();
 render();
+
+Events.Emit("ui:ready", { page: "overlay", title: document.title, bars: BARS });

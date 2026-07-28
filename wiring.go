@@ -96,6 +96,12 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray) err
 	u := &ui{wails: wailsApp, tray: tray}
 	dictation = app.NewDictation(st, u)
 
+	// Log each window announcing itself. See frontend/src/settings.ts for why: a broken
+	// asset server looks identical to a healthy one from here, until nothing reports in.
+	wailsApp.Event.On("ui:ready", func(e *application.CustomEvent) {
+		u.Log("UI", fmt.Sprintf("page loaded: %v", e.Data))
+	})
+
 	settings := st.LoadSettings()
 	u.Log("MAIN", fmt.Sprintf("ready — provider=%s mode=%s trigger=%s data=%s",
 		settings.Provider, settings.Mode, settings.TriggerKey, st.Dir()))

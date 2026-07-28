@@ -59,6 +59,13 @@ static long loqui_pb_write_text(const char *utf8) {
 	return (long)[pb changeCount];
 }
 
+// Read the plain-text flavour back, for tests and diagnostics. Caller frees.
+static char *loqui_pb_read_text(void) {
+	NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+	if (s == nil) { return NULL; }
+	return strdup([s UTF8String]);
+}
+
 static long loqui_pb_change_count(void) {
 	return (long)[[NSPasteboard generalPasteboard] changeCount];
 }
@@ -142,6 +149,16 @@ func writeText(text string) int64 {
 
 func currentChangeCount() int64 {
 	return int64(C.loqui_pb_change_count())
+}
+
+// readText returns the clipboard's plain-text flavour, "" when there is none.
+func readText() string {
+	out := C.loqui_pb_read_text()
+	if out == nil {
+		return ""
+	}
+	defer C.free(unsafe.Pointer(out))
+	return C.GoString(out)
 }
 
 func sendPasteKeystroke() {

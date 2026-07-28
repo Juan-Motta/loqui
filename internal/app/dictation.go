@@ -10,6 +10,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -228,23 +229,24 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 		if settings.Region == "" {
 			return nil, fmt.Errorf("configura la región de Azure en Ajustes")
 		}
-		// Read the key here rather than asking HasKey, so the three outcomes stay
+		getKey := d.keyReaderFor(store.SlotAzureSpeech)
+		// Read the key up front rather than asking HasKey, so the three outcomes stay
 		// distinguishable. "No configuraste la clave" and "el Keychain no contesta" are
 		// completely different problems, and reporting the first for the second sends the
 		// user to re-enter a key that is already there.
-		if _, err := store.GetKey(store.SlotAzureSpeech); err != nil {
+		if _, err := getKey(); err != nil {
 			switch {
 			case errors.Is(err, store.ErrNoSecret):
 				return nil, fmt.Errorf("configura la clave de Azure Speech en Ajustes")
 			case errors.Is(err, store.ErrKeychainTimeout):
-				return nil, fmt.Errorf("el Keychain no respondió — la app necesita estar firmada con una identidad estable")
+				return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_AZURE_KEY para probar")
 			default:
 				return nil, fmt.Errorf("no se pudo leer la clave del Keychain: %w", err)
 			}
 		}
 		tokens := azure.NewTokenService(azure.TokenOptions{
 			Region: settings.Region,
-			GetKey: func() (string, error) { return store.GetKey(store.SlotAzureSpeech) },
+			GetKey: getKey,
 		})
 		return azure.New(azure.Config{
 			Region:     settings.Region,
@@ -378,3 +380,24 @@ func (d *Dictation) Shutdown() {
 
 // Compile-time proof that the wiring satisfies the tested contract.
 var _ session.IO = (*Dictation)(nil)
+
+// envKeyOverride lets a development build supply an API key without the Keychain.
+//
+// WHY IT EXISTS. On an ad-hoc-signed build — which is every local build, since the
+// signature changes each time — SecItemCopyMatching never returns: macOS wants to ask
+// permission and cannot show the prompt. That makes the entire app untestable for a reason
+// that has nothing to do with the code under test.
+//
+// So this is an escape hatch, not a feature: it is checked BEFORE the Keychain, keyed off
+// an environment variable a packaged app will never have set, and every use is logged so it
+// can never be mistaken for the real path. The real fix is a stable signing identity.
+const envKeyOverride = "LOQUI_AZURE_KEY"
+
+// keyReader returns the function the token service should use to fetch the key.
+func (d *Dictation) keyReaderFor(slot store.KeySlot) func() (string, error) {
+	if v := os.Getenv(envKeyOverride); v != "" && slot == store.SlotAzureSpeech {
+		d.ui.Log("DEV", envKeyOverride+" is set — using it instead of the Keychain")
+		return func() (string, error) { return v, nil }
+	}
+	return func() (string, error) { return store.GetKey(slot) }
+}

@@ -25,6 +25,7 @@ import (
 
 	"github.com/Juan-Motta/loqui-go/internal/assets"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
+	"github.com/Juan-Motta/loqui-go/internal/store"
 )
 
 //go:embed all:frontend/dist
@@ -109,7 +110,7 @@ func newSettingsWindow(app *application.App) *application.WebviewWindow {
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:      "settings",
 		Title:     "Loqui",
-		URL:       "/settings.html",
+		URL:       "/", // index.html — see frontend/vite.config.ts
 		Width:     900,
 		Height:    640,
 		MinWidth:  740,
@@ -127,6 +128,15 @@ func newSettingsWindow(app *application.App) *application.WebviewWindow {
 			// Electron build asks for with titleBarStyle:"hiddenInset" + vibrancy.
 			TitleBar: application.MacTitleBarHiddenInset,
 			Backdrop: application.MacBackdropTranslucent,
+			// Honour the stored appearance, which the Electron build applied through
+			// nativeTheme.themeSource. Without it the window always followed the system and
+			// a user who had chosen light or dark silently got neither.
+			//
+			// It matters more here than it looks: the translucent backdrop is an
+			// NSVisualEffectView, so the appearance decides whether the material renders
+			// light or dark. Leave it unset and the CSS can be in dark mode while the
+			// window chrome behind it is light.
+			Appearance: macAppearance(appearanceSetting()),
 		},
 		BackgroundType: application.BackgroundTypeTransparent,
 	})
@@ -230,4 +240,28 @@ func newTray(app *application.App) *application.SystemTray {
 	})
 	tray.SetMenu(menu)
 	return tray
+}
+
+// appearanceSetting reads the stored appearance without needing the whole engine, because
+// the window is built before the dictation store is opened.
+func appearanceSetting() string {
+	st, err := store.New()
+	if err != nil {
+		return "system"
+	}
+	return st.LoadSettings().Appearance
+}
+
+// macAppearance maps Loqui's setting to a Cocoa appearance. "system" (and anything
+// unrecognised) means follow the OS, which is the default and a real choice the user can go
+// back to — not merely the absence of one.
+func macAppearance(setting string) application.MacAppearanceType {
+	switch setting {
+	case "light":
+		return application.NSAppearanceNameAqua
+	case "dark":
+		return application.NSAppearanceNameDarkAqua
+	default:
+		return application.DefaultAppearance
+	}
 }

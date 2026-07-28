@@ -17,6 +17,16 @@ import { Events } from "@wailsio/runtime";
 
 console.info("[loqui] settings shell loaded (script port pending)");
 
+// Tell the backend the page really loaded. Not decoration: a missing index.html put the
+// Wails asset server into an error state where EVERY route returned "no index.html could be
+// found", and from the Go side that is indistinguishable from a page that loaded fine.
+Events.Emit("ui:ready", {
+  page: "settings",
+  title: document.title,
+  views: document.querySelectorAll("section.view").length,
+  navItems: document.querySelectorAll(".nav-item").length,
+});
+
 // Proof the event plumbing reaches this window: the same channel the ported UI will
 // use to animate the Home waveform.
 Events.On("dictation:state", (e: { data: boolean | boolean[] }) => {
