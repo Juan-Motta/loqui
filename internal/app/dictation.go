@@ -21,6 +21,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
 	"github.com/Juan-Motta/loqui-go/internal/stt/helper"
 )
 
@@ -70,6 +71,9 @@ type Dictation struct {
 	idleTicker   *time.Ticker
 	idleStop     chan struct{}
 	reconnect    *time.Timer
+
+	// getSecret overrides the Keychain read. Only the tests set it — see secretReader.
+	getSecret func(store.KeySlot) (string, error)
 }
 
 func NewDictation(st *store.Store, ui UI) *Dictation {
@@ -254,6 +258,9 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 			Candidates: d.store.LanguagesFor("azure-speech"),
 			Tokens:     tokens,
 		}), nil
+	case "grok":
+		return d.buildGrokProvider()
+
 	case "macos":
 		return d.buildAppleProvider()
 
@@ -263,6 +270,34 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 	default:
 		return nil, fmt.Errorf("el motor %q todavía no está portado — elige otro en Ajustes", settings.Provider)
 	}
+}
+
+// buildGrokProvider streams to xAI over a WebSocket. Cloud, paid by the hour, and fed by the
+// host's single capture pipeline like Azure.
+//
+// The key is read UP FRONT rather than asking HasKey, so the three outcomes stay
+// distinguishable — the same reasoning as Azure above. "You never configured a key" and "the
+// Keychain did not answer" send the user to completely different places.
+func (d *Dictation) buildGrokProvider() (stt.Provider, error) {
+	getKey := d.keyReaderFor(store.SlotGrok)
+	if _, err := getKey(); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoSecret):
+			return nil, fmt.Errorf("configura la API key de xAI en Ajustes")
+		case errors.Is(err, store.ErrKeychainTimeout):
+			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_GROK_KEY para probar")
+		default:
+			return nil, fmt.Errorf("no se pudo leer la API key de xAI del Keychain: %w", err)
+		}
+	}
+	return grok.New(grok.Config{
+		GetKey: getKey,
+		// One optional language, or "auto" to omit it entirely. Note that for xAI this only
+		// controls how numbers and units are written out — the model transcribes any
+		// supported language either way.
+		Language: d.store.LanguagesFor("grok")[0],
+		Log:      d.ui.Log,
+	}), nil
 }
 
 // buildAppleProvider runs Apple's on-device SpeechAnalyzer (macOS 26+): free, offline,
@@ -440,7 +475,8 @@ func (d *Dictation) Shutdown() {
 // Compile-time proof that the wiring satisfies the tested contract.
 var _ session.IO = (*Dictation)(nil)
 
-// envKeyOverride lets a development build supply an API key without the Keychain.
+// envKeyOverride names the variable that lets a development build supply one provider's API
+// key without the Keychain.
 //
 // WHY IT EXISTS. On an ad-hoc-signed build — which is every local build, since the
 // signature changes each time — SecItemCopyMatching never returns: macOS wants to ask
@@ -450,13 +486,49 @@ var _ session.IO = (*Dictation)(nil)
 // So this is an escape hatch, not a feature: it is checked BEFORE the Keychain, keyed off
 // an environment variable a packaged app will never have set, and every use is logged so it
 // can never be mistaken for the real path. The real fix is a stable signing identity.
-const envKeyOverride = "LOQUI_AZURE_KEY"
-
-// keyReader returns the function the token service should use to fetch the key.
-func (d *Dictation) keyReaderFor(slot store.KeySlot) func() (string, error) {
-	if v := os.Getenv(envKeyOverride); v != "" && slot == store.SlotAzureSpeech {
-		d.ui.Log("DEV", envKeyOverride+" is set — using it instead of the Keychain")
-		return func() (string, error) { return v, nil }
+//
+// PER SLOT, deliberately. This used to be a single Azure-only constant, so a key for any
+// other provider was silently ignored and the read fell through to the Keychain that does
+// not answer — which made every new provider untestable for an unrelated reason. One
+// variable per slot also means one provider's credential can never satisfy another's
+// read: dictating into the wrong service is worse than not dictating.
+func envKeyOverride(slot store.KeySlot) string {
+	switch slot {
+	case store.SlotAzureSpeech:
+		return "LOQUI_AZURE_KEY"
+	case store.SlotAzureOpenAI:
+		return "LOQUI_AZURE_OPENAI_KEY"
+	case store.SlotOpenAI:
+		return "LOQUI_OPENAI_KEY"
+	case store.SlotGrok:
+		return "LOQUI_GROK_KEY"
+	case store.SlotElevenLabs:
+		return "LOQUI_ELEVENLABS_KEY"
+	default:
+		return ""
 	}
-	return func() (string, error) { return store.GetKey(slot) }
+}
+
+// keyReader returns the function the provider should use to fetch its key.
+func (d *Dictation) keyReaderFor(slot store.KeySlot) func() (string, error) {
+	if name := envKeyOverride(slot); name != "" {
+		if v := os.Getenv(name); v != "" {
+			d.ui.Log("DEV", name+" is set — using it instead of the Keychain")
+			return func() (string, error) { return v, nil }
+		}
+	}
+	return func() (string, error) { return d.secretReader()(slot) }
+}
+
+// secretReader is store.GetKey unless a test replaced it.
+//
+// The seam exists because the real one talks to the LOGIN KEYCHAIN: a test for "what happens
+// with no key configured" would otherwise depend on whether the developer running it happens to
+// have a real key stored, and would pay the Keychain timeout on an ad-hoc-signed build. Neither
+// belongs in a unit test.
+func (d *Dictation) secretReader() func(store.KeySlot) (string, error) {
+	if d.getSecret != nil {
+		return d.getSecret
+	}
+	return store.GetKey
 }

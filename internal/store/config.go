@@ -78,6 +78,11 @@ func DefaultSettings() Settings {
 			"azure-speech": {"es-CO", "en-US"},
 			"macos":        {"es-CO"},
 			"whisper":      {"auto"},
+			// The cloud providers take ONE optional language, or none at all to
+			// auto-detect — which is the default, deliberately. Note that for xAI the
+			// parameter only controls how numbers and units are written out; the model
+			// transcribes any supported language either way.
+			"grok": {"auto"},
 		},
 		Mode:       "hold",
 		TriggerKey: "fn",
@@ -103,6 +108,10 @@ func New() (*Store, error) {
 	}
 	return &Store{dir: dir}, nil
 }
+
+// NewAt opens a store rooted at an explicit directory, for tests in other packages: the real
+// New writes to ~/Library/Application Support, which a test must never touch.
+func NewAt(dir string) *Store { return &Store{dir: dir} }
 
 // Dir is the data directory, shown in the About view and needed for bug reports.
 func (s *Store) Dir() string { return s.dir }

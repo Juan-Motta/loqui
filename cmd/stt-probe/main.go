@@ -16,10 +16,11 @@
 //
 //	./scripts/go.sh run ./cmd/stt-probe -mic-only
 //	SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/go.sh run ./cmd/stt-probe -seconds 20
+//	XAI_API_KEY=... ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 20
 //	wails3 task probe:mic          # the same thing, shorter
 //
-// Without SPEECH_KEY it still exercises everything up to authentication, which is enough
-// to tell a broken microphone from a broken credential.
+// Without a key it still exercises everything up to authentication, which is enough to tell a
+// broken microphone from a broken credential.
 package main
 
 import (
@@ -34,6 +35,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/audio"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
 )
 
 func main() {
@@ -42,6 +44,7 @@ func main() {
 	device := flag.String("device", "", "input device id (see -list)")
 	list := flag.Bool("list", false, "list input devices and exit")
 	micOnly := flag.Bool("mic-only", false, "capture and report levels without contacting any service")
+	providerName := flag.String("provider", "azure", "which engine: azure | grok")
 	flag.Parse()
 
 	if *list {
@@ -68,25 +71,11 @@ func main() {
 		return
 	}
 
-	region := os.Getenv("SPEECH_REGION")
-	if region == "" {
-		region = "eastus"
+	provider, banner := buildProbeProvider(*providerName, *langs)
+	if provider == nil {
+		fmt.Fprintf(os.Stderr, "unknown provider %q (azure | grok)\n", *providerName)
+		os.Exit(1)
 	}
-	key := os.Getenv("SPEECH_KEY")
-	if key == "" {
-		fmt.Println("note: SPEECH_KEY is empty — expect AuthenticationFailure. The capture")
-		fmt.Println("      half is still exercised, so a mic problem will show up first.")
-	}
-
-	tokens := azure.NewTokenService(azure.TokenOptions{
-		Region: region,
-		GetKey: func() (string, error) { return key, nil },
-	})
-	provider := azure.New(azure.Config{
-		Region:     region,
-		Candidates: strings.Split(*langs, ","),
-		Tokens:     tokens,
-	})
 
 	done := make(chan struct{})
 	var closeOnce bool
@@ -115,7 +104,7 @@ func main() {
 		}
 	}
 
-	fmt.Printf("region=%s candidates=%s\n", region, *langs)
+	fmt.Println(banner)
 	if err := provider.Start(1, sink); err != nil {
 		fmt.Fprintln(os.Stderr, "start failed:", err)
 		// Not an early exit: the events already printed say more than this error does.
@@ -177,7 +166,59 @@ func main() {
 	}
 }
 
-// micOnlyRun opens the device and reports what it hears, contacting nothing.
+// buildProbeProvider wires one engine from environment variables. Deliberately NOT reading the
+// app's settings or Keychain: the point of this tool is to isolate the capture -> service ->
+// transcript chain from everything the app layers on top, including a Keychain that does not
+// answer on an ad-hoc-signed build.
+func buildProbeProvider(name, langs string) (stt.Provider, string) {
+	switch name {
+	case "azure":
+		region := os.Getenv("SPEECH_REGION")
+		if region == "" {
+			region = "eastus"
+		}
+		key := os.Getenv("SPEECH_KEY")
+		if key == "" {
+			fmt.Println("note: SPEECH_KEY is empty — expect AuthenticationFailure. The capture")
+			fmt.Println("      half is still exercised, so a mic problem will show up first.")
+		}
+		tokens := azure.NewTokenService(azure.TokenOptions{
+			Region: region,
+			GetKey: func() (string, error) { return key, nil },
+		})
+		return azure.New(azure.Config{
+			Region:     region,
+			Candidates: strings.Split(langs, ","),
+			Tokens:     tokens,
+		}), fmt.Sprintf("provider=azure region=%s candidates=%s", region, langs)
+
+	case "grok":
+		key := os.Getenv("XAI_API_KEY")
+		if key == "" {
+			fmt.Println("note: XAI_API_KEY is empty — expect the handshake to be rejected with")
+			fmt.Println("      AuthenticationFailure. The capture half is still exercised.")
+		}
+		// One language only, and as a BASE code: xAI wants ISO-639-1 ("es"), so the -langs
+		// default of "es-CO" has to lose its region or the service rejects it. Note that for
+		// this API the parameter is a FORMATTING switch (numbers, currencies, units), not a
+		// recognition hint — the model transcribes any supported language regardless.
+		lang := strings.Split(langs, ",")[0]
+		if base, _, found := strings.Cut(lang, "-"); found {
+			lang = base
+		}
+		return grok.New(grok.Config{
+			GetKey:   func() (string, error) { return key, nil },
+			Language: lang,
+			Log: func(tag, msg string) {
+				fmt.Printf("           %-8s %s\n", tag, msg)
+			},
+		}), fmt.Sprintf("provider=grok language=%s", lang)
+
+	default:
+		return nil, ""
+	}
+}
+
 func micOnlyRun(device string, seconds int) {
 	cap, err := audio.StartCapture(device, nil)
 	if err != nil {

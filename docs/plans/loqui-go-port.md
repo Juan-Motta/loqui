@@ -68,7 +68,7 @@ los proveedores**. Consecuencias:
 | `injection.ts` | `internal/inject/` | **Mejora sobre el original.** Electron dejó documentado que el restore del portapapeles necesitaba `NSPasteboard.changeCount` y no lo tenía. En Go con cgo **sí se puede**, y el PRD ya lo pedía (R6). Y el pegado puede ser `CGEventPost` en vez de `osascript`. |
 | `focusGuard.ts` | `internal/inject/focus.go` | Igual: la lectura AX puede ser AXUIElement por cgo en vez de AppleScript. |
 | `hotkey.ts` | `internal/hotkey/` | El helper Swift se conserva; sólo cambia quien lo lanza. |
-| `streamingStt.ts` | `internal/stt/stream.go` | `ws` → `coder/websocket` (ya es dependencia de Wails). |
+| `streamingStt.ts` | **por proveedor**, no compartido todavía | `ws` → `coder/websocket`. **Corregido 2026-07-28:** este mapeo decía `internal/stt/stream.go`, o sea dentro del paquete del **contrato**, lo que metería una dependencia de red en el paquete que importan `session`, `app` y los proveedores locales. Y extraerlo ya era prematuro: el `SttAdapter` de Electron **contiene** el bug que Grok tuvo que arreglar (cierra ante cualquier final tras el finalize, lo que trunca). El ciclo de vida vive en `internal/stt/grok/provider.go`; se extraerá a un paquete propio cuando ElevenLabs dé la segunda implementación real. Ver `docs/plans/grok-stt-provider.md`. |
 | `windowOptions.ts`, `ipcGuard.ts` | `main.go` | `ipcGuard` desaparece: no hay canales genéricos, Wails expone métodos tipados. |
 | `preload/` | — | Desaparece. Los bindings de Wails son la superficie. |
 
@@ -99,8 +99,13 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
     líneas JSON), con tests. `internal/permissions` — micrófono + reconocimiento de voz.
   - ✅ **whisper: funciona.** Primer transcript real verificado 2026-07-28.
   - ⛔ **macos (Apple SpeechAnalyzer): bloqueado, causa desconocida.** Ver riesgo 6.
-  - ⬜ Faltan **openai, grok, elevenlabs** — WebSockets planos sobre el contrato
-    `stt.Provider` que ya existe y está probado. No dependen de nada de lo bloqueado.
+  - ✅ **grok (xAI): implementado** 2026-07-28, `internal/stt/grok`. Falta la transcripción real
+    (necesita una key de xAI); todo lo demás está verificado contra un servidor WebSocket local,
+    y el rechazo del handshake contra el servicio real. **No se portó el parseo de eventos
+    verbatim**: el de Electron pierde el texto (ver `docs/plans/grok-stt-provider.md`).
+  - ⬜ Faltan **openai, elevenlabs**. ElevenLabs sale del mismo molde que Grok y es cuando toca
+    extraer el ciclo de vida del WebSocket a un paquete compartido; OpenAI realtime **no** encaja
+    en ese molde (necesita un mensaje de setup y tiene otro ciclo de vida).
 - **Fase 4 — la UI.** Portar `settings.ts` (1828 líneas) contra un payload de
   bootstrap calculado en Go; i18n; onboarding; historial; permisos; About; logs.
 - **Fase 5 — empaquetado.** Firma, entitlements, la dylib de Azure en

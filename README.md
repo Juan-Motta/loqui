@@ -74,6 +74,21 @@ Afordancias de desarrollo (documentadas donde se leen, no sólo acá):
 LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # muestra el pill a los 2s
 LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dicta 6s sin tocar una tecla
 LOQUI_AZURE_KEY=...                                          # evita el Keychain (ver abajo)
+LOQUI_GROK_KEY=...                                           # ídem, para xAI
+```
+
+Hay una escotilla por proveedor (`LOQUI_AZURE_KEY`, `LOQUI_GROK_KEY`, `LOQUI_OPENAI_KEY`,
+`LOQUI_AZURE_OPENAI_KEY`, `LOQUI_ELEVENLABS_KEY`). Una **no** sirve para otro proveedor, a
+propósito: dictar contra el servicio equivocado con la credencial equivocada es peor que no
+dictar.
+
+Para aislar un fallo sin el app, `cmd/stt-probe` corre un dictado desde la CLI contra el
+proveedor que se le diga:
+
+```bash
+./scripts/go.sh run ./cmd/stt-probe -mic-only                        # ¿el micrófono da audio?
+XAI_API_KEY=... ./scripts/go.sh run ./cmd/stt-probe -provider grok    # xAI, 15s
+SPEECH_KEY=... ./scripts/go.sh run ./cmd/stt-probe                   # Azure (el default)
 ```
 
 ## Setup en una máquina nueva
@@ -95,7 +110,7 @@ El framework de Azure lo baja `scripts/vendor-speech-sdk.sh` solo, con sha256 fi
 
 **Con firma ad-hoc hay que re-concederlos en cada rebuild**, porque macOS ata los permisos a
 la firma y ésta cambia cada vez. Peor: la lectura del Keychain **se cuelga** (de ahí el
-timeout en `GetKey` y la escotilla `LOQUI_AZURE_KEY`). Firmar los builds de dev con una
+timeout en `GetKey` y las escotillas `LOQUI_*_KEY`). Firmar los builds de dev con una
 identidad estable es el siguiente paso del proyecto, no una comodidad.
 
 ## Estructura

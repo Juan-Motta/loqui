@@ -117,6 +117,17 @@ func TestLanguagesForFallsBackPerSlot(t *testing.T) {
 	}
 }
 
+// The cloud providers auto-detect by DEFAULT. This is a real behaviour change the Electron
+// build made deliberately (../loqui/src/shared/languageSlots.ts:53): these slots used to be
+// forced to the first global language even when the user had several configured.
+func TestGrokDefaultsToAutoDetect(t *testing.T) {
+	s := testStore(t)
+	got := s.LanguagesFor("grok")
+	if len(got) != 1 || got[0] != "auto" {
+		t.Errorf("got %v, want [auto] — grok must auto-detect out of the box", got)
+	}
+}
+
 func TestHistoryAppendListAndClear(t *testing.T) {
 	s := testStore(t)
 	for i, text := range []string{"uno", "dos", "tres"} {
