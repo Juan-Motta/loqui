@@ -62,8 +62,8 @@ los proveedores**. Consecuencias:
 | Electron (`src/main/`) | Go | Cambio real |
 | --- | --- | --- |
 | `main.ts` | `main.go` + `internal/app/` | **Esqueleto hecho.** |
-| `configStore.ts` (safeStorage) | `internal/store/keys.go` | `safeStorage` no existe. Va al **Keychain de macOS** directo. Decisión pendiente: `go-keychain` (cgo, Security.framework) vs `/usr/bin/security`. Preferencia: cgo. |
-| `historyStore.ts`, `logStore.ts`, `modelStore.ts`, `deviceState.ts` | `internal/store/` | Mecánico. `app.getPath("userData")` → `~/Library/Application Support/Loqui`. |
+| `configStore.ts` (safeStorage) | `internal/store/keychain_darwin.go` | `safeStorage` no existe. Va al **Keychain de macOS** directo por cgo (Security.framework), un slot por proveedor. Con timeout: sin firma estable la lectura cuelga (ver riesgo 1). |
+| `historyStore.ts`, `logStore.ts`, `modelStore.ts`, `deviceState.ts` | `internal/store/` | `app.getPath("userData")` → `~/Library/Application Support/LoquiGo`. **No `Loqui`**: macOS es case-insensitive, así que ese nombre es el MISMO directorio que el `loqui` de Electron. |
 | `tokenService.ts`, `azureProbe.ts` | `internal/stt/azure/` | HTTP plano. |
 | `injection.ts` | `internal/inject/` | **Mejora sobre el original.** Electron dejó documentado que el restore del portapapeles necesitaba `NSPasteboard.changeCount` y no lo tenía. En Go con cgo **sí se puede**, y el PRD ya lo pedía (R6). Y el pegado puede ser `CGEventPost` en vez de `osascript`. |
 | `focusGuard.ts` | `internal/inject/focus.go` | Igual: la lectura AX puede ser AXUIElement por cgo en vez de AppleScript. |
@@ -87,9 +87,9 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
   2 ventanas; tray con icono template/activo; single instance; shim AppKit para el
   overlay no-activante (verificado: `layer=25`, en pantalla, sin robar foco);
   `patch-plists.sh` para las usage descriptions.
-- **Fase 1 — Azure Speech real.** Mover el spike a `internal/stt/azure/`; script de
-  vendorizado del framework; captura con malgo; `tokenService`; probar transcripción
-  real con key válida.
+- **Fase 1 — Azure Speech real.** ✅ **HECHA**, salvo la transcripción real (necesita key).
+  Proveedor en `internal/stt/azure`, `scripts/vendor-speech-sdk.sh` con sha256 fijado,
+  captura con malgo verificada, `tokenService` con tests, `cmd/stt-probe`.
 - **Fase 2 — sesión y entrega.** ✅ **HECHA** (bloqueada por firma, ver riesgos).
   `internal/session` completo con tests, hotkey `fn`, inyección con `changeCount` real,
   focus guard por AX, historial, settings + Keychain, todo cableado. Falta el atajo global
