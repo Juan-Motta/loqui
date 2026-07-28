@@ -4,8 +4,9 @@
 > Keep it current; refresh it with the `checkpoint` skill before closing a session.
 
 - **Focus:** Port de **Loqui** (Electron/TS, `../loqui`) a **Go + Wails v3**, sólo macOS arm64.
-- **Next step:** Fase 1 — mover el spike de Azure a `internal/stt/azure/` y escribir
-  `scripts/vendor-speech-sdk.sh` que descargue y verifique el xcframework.
+- **Next step:** Fase 2 — portar `internal/session/` (sessionController + dictationState +
+  sessionTracker + sessionPolicy) con su suite de tests, y cablearlo a
+  `internal/stt/azure` + `internal/audio` en `main.go`.
 - **Blockers:** para verificar transcripción real hace falta una **key de Azure Speech
   nueva** (la de `loqui` está marcada como expuesta). El código compila y conecta sin ella.
 - **Active workflow:** none (trabajo directo en la rama `port/foundation`).
@@ -43,6 +44,35 @@ en cada build, así que macOS revoca Accesibilidad e Input Monitoring en cada
 iteración. Con Electron no pasaba (el binario de dev era el de Electron, firma
 estable). Decidir una identidad de firma estable para dev antes de tocar hotkey/paste.
 
+## Fase 1 — hecha y verificada
+
+El proveedor Azure y la captura de audio existen y funcionan:
+
+- `scripts/vendor-speech-sdk.sh` descarga el xcframework 1.51.1 con sha256 fijado,
+  verifica que traiga los headers C y lo deja en `third_party/speech-sdk/`. Idempotente.
+  **Ojo: el directorio NO puede llamarse `vendor/`** — Go entra en modo vendoring y
+  rompe el build entero con "inconsistent vendoring".
+- Los flags de cgo viven en `build/darwin/Taskfile.yml` (y en las tareas `test`/`vet`),
+  con rutas ABSOLUTAS: cgo corre el compilador de C con el directorio del *paquete* como
+  cwd, así que un `-I` relativo resolvería dentro del module cache.
+- **Dos rpaths a propósito:** `@executable_path/../Frameworks` para el bundle y la ruta
+  de desarrollo para `bin/loqui`. Verificado con `DYLD_PRINT_LIBRARIES`: el `.app`
+  empaquetado carga la dylib **desde dentro del bundle**.
+- `internal/audio/capture.go` — malgo/CoreAudio a 16 kHz/16-bit/mono. **Miniaudio hace el
+  resampleo**, igual que Chromium en Electron; no se usa el `Downsample` ingenuo de
+  `pcm.go` (que en Electron casi nunca se ejecutaba, justamente porque Chromium honraba
+  la tasa pedida — apoyarse en él aquí sería confiar en código que producción nunca corrió).
+  Verificado: 125 KB en 4.0 s = 16000x2x4 exacto.
+- `cmd/stt-probe` — sucesor del spike, ya en el repo. `-list` enumera micrófonos,
+  `-mic-only` mide nivel sin tocar la red (separa "micrófono mudo" de "key rechazada").
+- Tests: `internal/audio`, `internal/settings`, `internal/stt/azure` verdes.
+
+**Lo único que sigue sin verificar es la transcripción real**, que necesita la key:
+
+```bash
+SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe -seconds 20
+```
+
 ## Estado del código
 
 - `main.go` — 2 ventanas + tray + single instance. Corre. El item "Dictar (prueba)" del
@@ -52,12 +82,16 @@ estable). Decidir una identidad de firma estable para dev antes de tocar hotkey/
   líneas del original se portan en fase 4, contra un payload de bootstrap de Go.
 - `helpers/` — los 3 helpers nativos copiados sin cambios (Swift/C++). Aún sin compilar
   ni lanzar desde Go.
-- `internal/` — sólo `assets` y `macos` por ahora.
+- `internal/` — `assets`, `macos`, `audio` (captura + PCM/nivel), `settings`
+  (azureConfig portado), `stt` (contrato de proveedor), `stt/azure` (recognizer + tokens).
+  **Todavía nada de esto está cableado a `main.go`**: eso es la fase 2.
 - Plan completo con el mapa módulo por módulo: `docs/plans/loqui-go-port.md`.
 
 ## Comandos
 
 ```bash
+wails3 task test       # tests (inyecta los flags de cgo del Speech SDK)
+wails3 task vet
 wails3 task build      # compila (frontend + go)
 wails3 task package    # arma bin/loqui.app y firma ad-hoc
 wails3 task dev        # hot reload

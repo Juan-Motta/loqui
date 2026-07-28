@@ -41,6 +41,9 @@ tasks:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
         msg: "garble is required for obfuscated builds. Install it with: go install mvdan.cc/garble@v0.16.0 (requires Go 1.24+). See https://github.com/burrowers/garble/releases for version/toolchain compatibility."
     cmds:
+      # The native Speech SDK is not committed (10 MB of Mach-O), so a fresh clone has
+      # to fetch it before the link step can resolve -framework. Idempotent and cheap.
+      - ./scripts/vendor-speech-sdk.sh
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
     vars:
       BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
@@ -50,8 +53,22 @@ tasks:
       GOOS: darwin
       CGO_ENABLED: 1
       GOARCH: '{{.ARCH | default ARCH}}'
-      CGO_CFLAGS: "-mmacosx-version-min=12.0"
-      CGO_LDFLAGS: "-mmacosx-version-min=12.0"
+      # The Azure Speech Go binding is cgo over the native SDK and declares no #cgo
+      # directives of its own, so the include path and link flags have to come from
+      # here. scripts/vendor-speech-sdk.sh puts the framework where these point.
+      #
+      # Absolute paths (ROOT_DIR) are not a shortcut: cgo runs the C compiler with the
+      # *package's* directory as cwd, so a relative -I would resolve inside the module
+      # cache and never find these headers.
+      #
+      # TWO rpaths on purpose. The framework's install name is
+      # @rpath/MicrosoftCognitiveServicesSpeech.framework/..., so dyld needs somewhere
+      # to look, and the answer differs by how the binary is run:
+      #   @executable_path/../Frameworks — inside the packaged .app bundle
+      #   {{.ROOT_DIR}}/third_party/speech-sdk — the bare bin/loqui during development
+      # dyld tries each in order, so shipping both makes dev and release both work.
+      CGO_CFLAGS: "-mmacosx-version-min=12.0 -I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
+      CGO_LDFLAGS: "-mmacosx-version-min=12.0 -F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,@executable_path/../Frameworks -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
       MACOSX_DEPLOYMENT_TARGET: "12.0"
 
   build:docker:
@@ -144,6 +161,13 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
+      # The Speech SDK dylib has to travel INSIDE the bundle: its install name is
+      # @rpath/..., and the bundle's rpath is @executable_path/../Frameworks. Leaving it
+      # out produces an app that launches fine and then dies the first time someone
+      # selects Azure — a failure invisible until the DMG is on someone else's Mac.
+      # Notarisation also requires it to be signed, which codesign --deep below does.
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks"
+      - cp -R third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks/"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:

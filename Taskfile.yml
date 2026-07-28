@@ -35,3 +35,25 @@ tasks:
     summary: Runs the application in development mode
     cmds:
       - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  test:
+    summary: Runs the Go test suite
+    # Same cgo flags as the build: any package that reaches the Azure binding needs the
+    # framework's headers to compile at all, so `go test ./...` cannot work without them.
+    cmds:
+      - ./scripts/vendor-speech-sdk.sh
+      - go test ./... {{.CLI_ARGS}}
+    env:
+      CGO_ENABLED: 1
+      CGO_CFLAGS: "-I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
+      CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
+
+  vet:
+    summary: go vet across the module
+    cmds:
+      - ./scripts/vendor-speech-sdk.sh
+      - go vet ./...
+    env:
+      CGO_ENABLED: 1
+      CGO_CFLAGS: "-I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
+      CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
