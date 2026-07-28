@@ -17,3 +17,8 @@ frontend/bindings/
 third_party/speech-sdk/
 helpers/bin/
 helpers/*.bin
+
+# whisper.cpp checkout, cloned and built by scripts/build-whisper-stt.sh. Gigabytes of
+# third-party source and build output, and it carries its own Go bindings that would
+# otherwise show up in gofmt and go vet over this module.
+scripts/whisper-vendor/

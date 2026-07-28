@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/assets"
 	"github.com/Juan-Motta/loqui-go/internal/hotkey"
 	"github.com/Juan-Motta/loqui-go/internal/inject"
+	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/session"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
@@ -106,6 +106,21 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray) err
 	u.Log("MAIN", fmt.Sprintf("ready — provider=%s mode=%s trigger=%s data=%s",
 		settings.Provider, settings.Mode, settings.TriggerKey, st.Dir()))
 
+	// Ask for the microphone BEFORE anything needs it.
+	//
+	// This is not politeness, it is load-bearing for the local engines: the native helpers
+	// are the processes that open the device, and a child's access is attributed to the
+	// responsible parent app. Without the grant the helper stops one step short of
+	// reporting `started` and produces nothing, with no error in its own output — observed
+	// exactly that with the Apple engine.
+	go func() {
+		askFor(u, "microphone", permissions.Microphone, permissions.RequestMicrophone)
+		// The Apple on-device engine needs Speech Recognition TOO, and it is a separate
+		// grant. Without it the helper stops one step short of reporting `started` and says
+		// nothing about why.
+		askFor(u, "speech recognition", permissions.SpeechRecognition, permissions.RequestSpeechRecognition)
+	}()
+
 	// Say so up front rather than at the first failed paste: without this grant the paste
 	// keystroke is swallowed silently and the secure-field guard cannot read anything, so
 	// dictation appears to work and produces nothing.
@@ -180,20 +195,11 @@ func startFnListener(u *ui) error {
 	return nil
 }
 
-// globeListenerPath finds the compiled helper: inside the bundle for a packaged app, in
-// helpers/bin during development.
+// globeListenerPath locates the fn listener. One implementation of the bundled-vs-dev
+// lookup lives in internal/app; duplicating it here is how the two drift apart.
 func globeListenerPath() (string, error) {
-	exe, err := os.Executable()
-	if err == nil {
-		// bin/loqui.app/Contents/MacOS/loqui -> Contents/Resources/helpers/globe-listener
-		bundled := filepath.Join(filepath.Dir(exe), "..", "Resources", "helpers", "globe-listener")
-		if _, err := os.Stat(bundled); err == nil {
-			return bundled, nil
-		}
-	}
-	dev := filepath.Join("helpers", "bin", "globe-listener")
-	if _, err := os.Stat(dev); err == nil {
-		return dev, nil
+	if bin := app.HelperPath("globe-listener"); bin != "" {
+		return bin, nil
 	}
 	return "", fmt.Errorf("fn listener not built — run scripts/build-globe-listener.sh")
 }
@@ -228,5 +234,31 @@ func debugDictate(u *ui, secs string) {
 	c.Release() // hold mode; in toggle this is a no-op and the press below ends it
 	if c.Desired() {
 		c.RequestStop()
+	}
+}
+
+// askFor reports a permission's state and prompts when it has never been asked.
+//
+// The three outcomes are kept distinct on purpose. "Denied" is the user's decision and only
+// they can undo it; "the prompt never appeared" is OUR problem — it means macOS would not
+// present it, which on a dev build means the signature is not stable. Reporting the second as
+// the first would send someone to System Settings to fix something that is not broken there.
+func askFor(u *ui, name string, status func() permissions.Status, request func() (bool, bool)) {
+	switch st := status(); st {
+	case permissions.Granted:
+		u.Log("PERM", name+": granted")
+	case permissions.NotDetermined:
+		u.Log("PERM", name+": asking…")
+		granted, answered := request()
+		switch {
+		case !answered:
+			u.Log("PERM-ERR", name+": the prompt never appeared — is the app signed with a stable identity?")
+		case granted:
+			u.Log("PERM", name+": granted")
+		default:
+			u.Log("PERM-ERR", name+": DENIED by the user")
+		}
+	default:
+		u.Log("PERM-ERR", name+": "+string(st)+" — grant it in Ajustes de Sistema")
 	}
 }

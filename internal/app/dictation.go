@@ -21,6 +21,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/helper"
 )
 
 // idleLimit stops a session left open with no speech.
@@ -253,9 +254,67 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 			Candidates: d.store.LanguagesFor("azure-speech"),
 			Tokens:     tokens,
 		}), nil
+	case "macos":
+		return d.buildAppleProvider()
+
+	case "whisper":
+		return d.buildWhisperProvider()
+
 	default:
-		return nil, fmt.Errorf("el motor %q todavía no está portado — elige Azure en Ajustes", settings.Provider)
+		return nil, fmt.Errorf("el motor %q todavía no está portado — elige otro en Ajustes", settings.Provider)
 	}
+}
+
+// buildAppleProvider runs Apple's on-device SpeechAnalyzer (macOS 26+): free, offline,
+// private, and single-language per session because Apple has no continuous LID.
+func (d *Dictation) buildAppleProvider() (stt.Provider, error) {
+	bin := HelperPath("macos-stt")
+	if bin == "" {
+		return nil, fmt.Errorf("el helper de Apple no está compilado — corre `./scripts/build-macos-stt.sh`")
+	}
+	// The Apple engine cannot auto-detect, so its slot always holds a real locale. Sending
+	// "auto" would make the helper fail with "locale not supported" instead of dictating.
+	locale := d.store.LanguagesFor("macos")[0]
+	if locale == "auto" {
+		locale = "es-CO"
+	}
+	return helper.New(helper.Config{
+		Bin:      bin,
+		BuildCmd: "./scripts/build-macos-stt.sh",
+		Locale:   locale,
+		Log:      d.ui.Log,
+	}), nil
+}
+
+// buildWhisperProvider runs whisper.cpp locally: free, offline, and the DEFAULT engine,
+// because it is the only one that works with no account, no key and no network.
+func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
+	bin := HelperPath("whisper-stt")
+	if bin == "" {
+		return nil, fmt.Errorf("el helper de Whisper no está compilado — corre `./scripts/build-whisper-stt.sh`")
+	}
+	model := WhisperModelPath(d.store.Dir())
+	if _, err := os.Stat(model); err != nil {
+		// Without the model the helper would start and immediately die; say what is
+		// actually missing instead.
+		return nil, fmt.Errorf("falta el modelo de Whisper — descárgalo desde Ajustes")
+	}
+	// The GPU is used unless it already proved fatal on this machine.
+	gpu := d.store.WhisperGPUAllowed()
+	gpuEnv := "0"
+	if gpu {
+		gpuEnv = "1"
+	}
+	return helper.New(helper.Config{
+		Bin:        bin,
+		BuildCmd:   "./scripts/build-whisper-stt.sh",
+		Locale:     d.store.LanguagesFor("whisper")[0], // whisper understands "auto"
+		ExtraArgs:  []string{model},
+		Env:        map[string]string{"LOQUI_WHISPER_GPU": gpuEnv},
+		GPUEnabled: gpu,
+		Log:        d.ui.Log,
+		OnGPUCrash: d.store.MarkWhisperGPUBroken,
+	}), nil
 }
 
 // ---- capture -----------------------------------------------------------------

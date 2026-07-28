@@ -1,0 +1,14 @@
+# CMake target for the loqui whisper helper, injected into whisper.cpp's
+# examples/ tree by build-whisper-stt.sh (macOS/Linux) and build-whisper-stt.ps1
+# (Windows). It lives here, in ONE file, so the two build scripts cannot drift:
+# a change to how the helper links must apply to every platform at once.
+#
+# Linking against whisper.cpp's own targets (rather than hand-rolling include
+# and library paths) is what makes this work unchanged on MSVC.
+if (WHISPER_SDL2)
+    set(TARGET whisper-stt)
+    add_executable(${TARGET} whisper-stt.cpp)
+    include(DefaultTargetOptions)
+    target_link_libraries(${TARGET} PRIVATE common common-sdl whisper ${CMAKE_THREAD_LIBS_INIT})
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
