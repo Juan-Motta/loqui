@@ -94,7 +94,13 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
   `internal/session` completo con tests, hotkey `fn`, inyección con `changeCount` real,
   focus guard por AX, historial, settings + Keychain, todo cableado. Falta el atajo global
   no-`fn` (ver riesgo 2) y la primera transcripción real (necesita firma estable + key).
-- **Fase 3 — el resto de proveedores.** whisper, macos, openai, grok, elevenlabs.
+- **Fase 3 — el resto de proveedores.** PARCIAL.
+  - ✅ `internal/stt/helper` — un proveedor para los dos motores locales (mismo protocolo de
+    líneas JSON), con tests. `internal/permissions` — micrófono + reconocimiento de voz.
+  - ✅ **whisper: funciona.** Primer transcript real verificado 2026-07-28.
+  - ⛔ **macos (Apple SpeechAnalyzer): bloqueado, causa desconocida.** Ver riesgo 6.
+  - ⬜ Faltan **openai, grok, elevenlabs** — WebSockets planos sobre el contrato
+    `stt.Provider` que ya existe y está probado. No dependen de nada de lo bloqueado.
 - **Fase 4 — la UI.** Portar `settings.ts` (1828 líneas) contra un payload de
   bootstrap calculado en Go; i18n; onboarding; historial; permisos; About; logs.
 - **Fase 5 — empaquetado.** Firma, entitlements, la dylib de Azure en
@@ -111,6 +117,22 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
 - **Los cuelgues del port no dejan log.** Los dos bugs anteriores se encontraron con
   `GOTRACEBACK=all` + `kill -QUIT`. Cuando algo se queda quieto, volcar goroutines es el
   primer paso, no el último.
+- **`BackgroundType` no hace NADA en macOS.** Aparece cero veces en el código darwin de
+  Wails; la transparencia y la translucidez salen de `Mac.Backdrop`. El overlay quedó
+  dibujado sobre un rectángulo blanco opaco por esto, y **se veía perfectamente configurado
+  desde Go** — sólo los píxeles discrepaban. De ahí `macos.WindowOpacity`, que lee el estado
+  real del `NSWindow`: cuando la config y la pantalla pueden discrepar, hay que leer la
+  pantalla.
+- **Las rutas relativas no sirven en un `.app`.** Un app lanzado desde Finder tiene el cwd en
+  `/`, así que `helpers/bin/...` no resuelve a nada. Todo lookup de recurso pasa por
+  `app.HelperPath`, que mira primero dentro del bundle. Es el mismo error que los `-I`
+  relativos de cgo, en otro disfraz.
+- **Un watchdog de silencio se arma al PARAR, no desde la última salida.** Un helper no
+  imprime nada mientras escucha, así que medir desde su última línea gasta toda la gracia
+  antes de que el usuario suelte la tecla, y mata el flush que la gracia protegía.
+- **Los tests con procesos hijos necesitan esperas generosas.** Arrancar `sh` bajo un binario
+  de test enlazado con cgo puede tardar cientos de ms; un drain de 200 ms hizo fallar cuatro
+  tests contra código que funcionaba.
 
 ## Riesgos abiertos
 
@@ -130,5 +152,16 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
    `go.mod` y subirla deliberadamente.
 4. **Sin cross-compilación.** cgo obligatorio (Azure, AppKit, malgo) → el build de
    macOS se hace en macOS. Ya era así por los helpers Swift.
-5. **La key de Azure está expuesta y pendiente de regenerar** (viene de `loqui`).
+5. **El motor de Apple está bloqueado y no hay causa identificada.** Standalone llega a
+   `started`; lanzado desde el `.app` se detiene justo antes, tras elegir `es-CL`. No falla
+   —no emite `canceled`, no escribe a stderr— está bloqueado en un `await`. Micrófono y
+   reconocimiento de voz concedidos y no cambia. Los `await` candidatos son
+   `SpeechTranscriber.installedLocales`, `AssetInventory.assetInstallationRequest` y
+   `SpeechAnalyzer.bestAvailableAudioFormat`. **Siguiente paso: instrumentar el Swift con
+   prints entre cada await, o reintentar con firma estable. No inventar la causa.**
+6. **Dos warts de whisper, ninguno del pipeline.** `language` guarda el ajuste (`"auto"`) en
+   vez del idioma detectado, porque el helper no lo reporta aunque whisper.cpp lo sabe — el
+   proyecto Electron guarda lo mismo. Y el helper abre el **dispositivo por defecto de SDL**,
+   ignorando `inputDeviceId`, así que el selector de micrófono no le aplica.
+7. **La key de Azure está expuesta y pendiente de regenerar** (viene de `loqui`).
    La transcripción real no se puede verificar hasta tener una nueva.
