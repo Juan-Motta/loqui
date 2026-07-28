@@ -33,9 +33,11 @@ const LABELS: Record<string, string> = {
   error: "",
 };
 
-// Static bars with an out-of-phase pulse delay and a per-bar level multiplier,
-// so the row reads like an equalizer rather than one block moving. Mirrors the
-// Home waveform so the two feel like the same indicator.
+// Static bars with a per-bar level multiplier, so the row reads like an equalizer rather
+// than one block moving. Mirrors the Home waveform so the two feel like the same indicator.
+//
+// The animation-delay is kept for the reduced-motion and transition timing, but there is no
+// longer a baseline sweep to be out of phase with: see the CSS for why that pulse was removed.
 function buildBars(): void {
   let html = "";
   for (let i = 0; i < BARS; i++) {
@@ -47,11 +49,16 @@ function buildBars(): void {
 }
 
 function render(): void {
-  // `metering` (set once real levels arrive) must survive a re-render, otherwise
-  // every state change would knock the bars back to the pulse baseline.
-  const metering = pillEl.classList.contains("metering") && state.status === "listening";
+  // `metering` (set once real levels arrive) must survive a re-render, otherwise every state
+  // change would knock the bars back to the flat armed line and the meter would appear to die
+  // mid-sentence.
+  const metering =
+    pillEl.classList.contains("metering") && state.status === "listening";
   pillEl.className = state.status + (metering ? " metering" : "");
-  labelEl.textContent = state.status === "error" ? state.error || "error" : LABELS[state.status] || "";
+  labelEl.textContent =
+    state.status === "error"
+      ? state.error || "error"
+      : LABELS[state.status] || "";
 }
 
 // Go pushes the already-reduced overlay state.

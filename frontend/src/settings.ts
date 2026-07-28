@@ -126,7 +126,11 @@ function setDictating(active: boolean): void {
 
   const wave = $<HTMLElement>("heroWave");
   if (wave) {
-    wave.classList.toggle("active", active);
+    // `armed` is a flat line above the idle baseline: dictating, nothing heard yet. It is NOT an
+    // animation, and that is the point — the sweeping pulse it replaced was indistinguishable from
+    // real metering, so it claimed to be hearing audio during whisper's one-to-two-second model
+    // load, and for any provider that cannot report levels at all.
+    wave.classList.toggle("armed", active);
     if (!active) {
       // Cleared on stop so the next session starts from the baseline rather than resuming at
       // whatever level the last frame happened to leave behind.
@@ -151,7 +155,7 @@ Events.On("dictation:state", (e: { data: boolean | boolean[] }) => {
 // the app is hearing you whether or not it is.
 Events.On("meter:level", (e: { data: number | number[] }) => {
   const wave = $<HTMLElement>("heroWave");
-  if (!wave || !wave.classList.contains("active")) return;
+  if (!wave || !wave.classList.contains("armed")) return;
   const level = Array.isArray(e.data) ? e.data[0] : e.data;
   wave.classList.add("metering");
   wave.style.setProperty("--level", String(Number(level) || 0));

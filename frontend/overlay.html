@@ -22,12 +22,12 @@
         width: 2px; height: 100%; border-radius: 1px; background: #5e5ce6;
         transform-origin: center; transform: scaleY(0.25);
       }
-      @keyframes pill-pulse {
-        0%, 100% { transform: scaleY(calc(0.2 * var(--m, 1))); }
-        50%      { transform: scaleY(calc(0.9 * var(--m, 1))); }
-      }
-      /* Baseline animation until real mic levels arrive (mic denied → stays here). */
-      #pill.listening #bars span { animation: pill-pulse 0.85s ease-in-out infinite backwards; }
+      /* ARMED: listening, nothing heard yet. STATIC, not an animation.
+         This used to sweep like an equalizer whenever the pill was listening, which looks
+         exactly like real metering — so with a provider that takes a moment to start, or one
+         that cannot report levels at all, the pill claimed to be hearing the user when it was
+         not. A flat line above the resting height says "armed" without saying "audio". */
+      #pill.listening #bars span { transform: scaleY(0.3); }
       /* Voice-reactive: bar height follows the live level × a per-bar factor. */
       #pill.metering #bars span {
         animation: none; transition: transform 0.08s ease-out;
@@ -40,7 +40,7 @@
       #label:empty { display: none; }
       #pill.error #label { color: #ff6b6b; }
       @media (prefers-reduced-motion: reduce) {
-        #pill.listening #bars span { animation: none; transform: scaleY(0.6); }
+        #pill.listening #bars span { transform: scaleY(0.3); }
         #pill.metering #bars span { transition: none; }
       }
     </style>

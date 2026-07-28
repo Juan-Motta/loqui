@@ -128,12 +128,13 @@
         animation: wave-silence 2.8s ease-in-out infinite backwards;
       }
       @keyframes wave-silence { 0%, 100% { transform: scaleY(0.03); } 50% { transform: scaleY(0.06); } }
-      /* Dictating but no real levels yet (mic denied / provider starting). */
-      @keyframes wave-pulse {
-        0%, 100% { transform: scaleY(calc(0.14 * var(--m, 1))); }
-        50%      { transform: scaleY(calc(0.92 * var(--m, 1))); }
-      }
-      .waveform.active span { animation: wave-pulse 0.85s ease-in-out infinite backwards; }
+      /* ARMED: dictating, nothing heard yet. A STATIC line, deliberately not an animation.
+         It used to sweep 0.14->0.92 like an equalizer, which is indistinguishable from
+         real metering — so during a provider's startup (whisper spends 1-2s loading its
+         model) the app appeared to be hearing speech that had not happened. Three states
+         that read differently: idle breathes near zero, armed is a flat line above it,
+         metering moves with the voice. None of them implies audio that is not there. */
+      .waveform.armed span { animation: none; transform: scaleY(0.12); }
       /* Voice-reactive: bar height follows the live mic level (× per-bar factor).
          The floor sits above the silence line so "dictating but quiet" still reads
          as armed-and-listening rather than as idle. */
@@ -141,7 +142,7 @@
         transform: scaleY(calc(0.12 + min(1, var(--level, 0) * var(--m, 1)) * 0.88)); }
       @media (prefers-reduced-motion: reduce) {
         .waveform span { animation: none; transform: scaleY(0.06); }
-        .waveform.active span { animation: none; transform: scaleY(calc(0.5 * var(--m, 1))); }
+        .waveform.armed span { animation: none; transform: scaleY(0.12); }
         .waveform.metering span { animation: none; transition: none; }
       }
       .hero-foot { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
