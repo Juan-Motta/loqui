@@ -22,3 +22,7 @@ helpers/*.bin
 # third-party source and build output, and it carries its own Go bindings that would
 # otherwise show up in gofmt and go vet over this module.
 scripts/whisper-vendor/
+
+# Taskfile's up-to-date cache. Build output: it changes on every compile and differs per
+# machine, so tracking it put unrelated churn in every commit.
+.task/
