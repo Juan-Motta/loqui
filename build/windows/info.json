@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "Juan Motta",
+			"FileDescription": "Dictado por voz que inserta el texto donde está el cursor",
+			"LegalCopyright": "© 2026 Juan Motta",
+			"ProductName": "Loqui",
+			"Comments": "Port a Go + Wails de Loqui (Electron)"
+		}
+	}
+}

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Loqui
+Comment=Dictado por voz que inserta el texto donde está el cursor
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/loqui %u
+Terminal=false
+Type=Application
+Icon=loqui
+Categories=Utility;
+StartupWMClass=loqui
+
+ 

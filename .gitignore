@@ -3,3 +3,17 @@
 .DS_Store
 .workflow/
 .claude/settings.local.json
+
+# build output
+bin/
+frontend/dist/
+frontend/node_modules/
+# Generated from the Go services on every build by the Wails binding generator.
+frontend/bindings/
+
+# Vendored third-party SDKs and compiled helpers. Fetched/built by scripts/, never
+# committed: the Azure framework is 10 MB of binary, the whisper model 465 MB, and the
+# Swift/C++ helpers are machine-specific output of the build scripts.
+vendor/speech-sdk/
+helpers/bin/
+helpers/*.bin

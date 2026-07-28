@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Loqui overlay</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+      /* A small presence pill, centered in a slightly larger transparent window so
+         its drop shadow has room and it stays centered whatever its width is. */
+      body { display: flex; align-items: center; justify-content: center; }
+      #pill {
+        font: 11px -apple-system, sans-serif; color: #f2f2f7;
+        background: rgba(30, 30, 32, 0.92); border-radius: 999px;
+        border: 0.5px solid rgba(255, 255, 255, 0.12);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        padding: 0 12px; height: 28px; max-width: 176px;
+        box-sizing: border-box; display: flex; align-items: center; gap: 8px;
+      }
+      /* Level bars: the whole point of the overlay — "we're capturing your voice". */
+      #bars { display: flex; align-items: center; gap: 2px; height: 14px; flex: none; }
+      #bars span {
+        width: 2px; height: 100%; border-radius: 1px; background: #5e5ce6;
+        transform-origin: center; transform: scaleY(0.25);
+      }
+      @keyframes pill-pulse {
+        0%, 100% { transform: scaleY(calc(0.2 * var(--m, 1))); }
+        50%      { transform: scaleY(calc(0.9 * var(--m, 1))); }
+      }
+      /* Baseline animation until real mic levels arrive (mic denied → stays here). */
+      #pill.listening #bars span { animation: pill-pulse 0.85s ease-in-out infinite backwards; }
+      /* Voice-reactive: bar height follows the live level × a per-bar factor. */
+      #pill.metering #bars span {
+        animation: none; transition: transform 0.08s ease-out;
+        transform: scaleY(calc(0.16 + min(1, var(--level, 0) * var(--m, 1)) * 0.84));
+      }
+      #pill.reconnecting #bars span { background: #ffb340; }
+      #pill.error #bars { display: none; }
+      /* Only shown for reconnecting/error — listening is bars-only, no text. */
+      #label { flex: none; color: #9aa0a6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      #label:empty { display: none; }
+      #pill.error #label { color: #ff6b6b; }
+      @media (prefers-reduced-motion: reduce) {
+        #pill.listening #bars span { animation: none; transform: scaleY(0.6); }
+        #pill.metering #bars span { transition: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Presence indicator only: level bars + (when relevant) a short status.
+         The transcript is never shown here — it's read where it's injected. -->
+    <div id="pill">
+      <div id="bars"></div>
+      <div id="label"></div>
+    </div>
+    <script type="module" src="/src/overlay.ts"></script>
+  </body>
+</html>

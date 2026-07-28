@@ -1,0 +1,1249 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Loqui</title>
+    <style>
+      /* ---- macOS Tahoe-style app shell: translucent sidebar + solid content ---- */
+      :root {
+        --accent: #5e5ce6;
+        --content-bg: #ffffff;
+        --card-bg: #f5f5f7;
+        --card-bg-hover: #eeeef0;
+        --text: #1d1d1f;
+        --text-2: #6e6e73;
+        --text-3: #9a9aa0;
+        --sep: rgba(0, 0, 0, 0.09);
+        --field-bg: #ffffff;
+        --field-border: rgba(0, 0, 0, 0.14);
+        --sidebar-hover: rgba(0, 0, 0, 0.05);
+        --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+        --ok: #1a8a3f;
+        --err: #d13438;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --accent: #7d7bf0;
+          --content-bg: #1e1e20;
+          --card-bg: #2b2b2e;
+          --card-bg-hover: #333337;
+          --text: #f5f5f7;
+          --text-2: #a1a1a8;
+          --text-3: #77777e;
+          --sep: rgba(255, 255, 255, 0.1);
+          --field-bg: #2b2b2e;
+          --field-border: rgba(255, 255, 255, 0.16);
+          --sidebar-hover: rgba(255, 255, 255, 0.07);
+          --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+          --ok: #30d158;
+          --err: #ff453a;
+        }
+      }
+
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0; height: 100%;
+        background: transparent; /* let the window vibrancy show through the sidebar */
+        color: var(--text);
+        font: 13px/1.45 -apple-system, "SF Pro Text", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      #app { display: grid; grid-template-columns: 216px 1fr; height: 100vh; }
+
+      /* ---- Sidebar (translucent) ---- */
+      #sidebar {
+        display: flex; flex-direction: column;
+        /* Room for the macOS traffic lights; elsewhere the window has a real
+           title bar, so that space would just be a gap. */
+        padding: 38px 10px 8px; gap: 2px;
+        -webkit-app-region: drag; /* the whole sidebar drags the window */
+        border-right: 0.5px solid var(--sep);
+      }
+      :root[data-platform="other"] #sidebar { padding-top: 12px; }
+      nav { display: flex; flex-direction: column; gap: 1px; }
+      .nav-item {
+        display: flex; align-items: center; gap: 9px;
+        padding: 6px 8px; border-radius: 7px;
+        color: var(--text); font-size: 13px; font-weight: 500;
+        cursor: default; -webkit-app-region: no-drag; user-select: none;
+      }
+      .nav-item svg { width: 17px; height: 17px; color: var(--text-2); flex: none; }
+      .nav-item:hover { background: var(--sidebar-hover); }
+      .nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+      .nav-item.active svg { color: var(--accent); }
+      .sidebar-foot { margin-top: auto; -webkit-app-region: no-drag; }
+      /* Support link: warm accent so it reads as an invitation, never a nag. */
+      .coffee-btn:hover { color: #d97706; }
+      .link-btn {
+        background: none; border: none; color: var(--text-2);
+        font: inherit; padding: 6px 8px; cursor: default; border-radius: 7px;
+        display: flex; align-items: center; gap: 8px; width: 100%;
+      }
+      .link-btn:hover { background: var(--sidebar-hover); color: var(--text); }
+      /* A foot button that opens a view shows the same active state as the nav. */
+      .link-btn.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+      .link-btn.active svg { color: var(--accent); }
+      .link-btn svg { width: 16px; height: 16px; }
+
+      /* ---- Content (solid) ---- */
+      #content { background: var(--content-bg); overflow-y: auto; border-top-left-radius: 10px; }
+      .view { display: none; padding: 22px 30px 40px; max-width: 1400px; width: 100%; margin-inline: auto; }
+      /* Home fits the viewport: fill height, no scroll — resizing only reflows/resizes. */
+      .view.view-home.active { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding-bottom: 30px; }
+      /* Same for Historial: header + filters stay put, only the list scrolls. */
+      .view.view-list.active { display: flex; flex-direction: column; height: 100%; overflow: hidden; padding-bottom: 30px; }
+      .view-list h1, .view-list .sub { flex: none; }
+      .view-home .engine-hint, .view-home .status { min-height: 0; margin: 0; text-align: center; }
+      .view-home .engine-hint:not(:empty) { margin: 4px 0 0; }
+      .view-home .status:not(:empty) { margin: 6px 0 0; }
+
+      /* Hero card */
+      .hero-card { flex: none; display: flex; flex-direction: column; gap: 26px; margin-bottom: 22px;
+        padding: 30px 36px 26px; border-radius: 16px; border: 1px solid var(--sep);
+        background: linear-gradient(100deg, color-mix(in srgb, var(--accent) 9%, var(--content-bg)) 0%, var(--content-bg) 58%); }
+      .hero-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+      .hero-brand { display: flex; align-items: center; gap: 13px; }
+      .hero-logo { width: 46px; height: 46px; flex: none; border-radius: 13px; display: flex; align-items: center; justify-content: center; gap: 2.5px;
+        background: linear-gradient(45deg, #6e6cf0, #4b48d6); box-shadow: 0 3px 8px color-mix(in srgb, var(--accent) 45%, transparent); }
+      .hero-logo span { width: 2.6px; background: #fff; border-radius: 2px; }
+      .hero-name { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); }
+      .hero-sub { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+      .engine-select { width: auto; max-width: 260px; background: color-mix(in srgb, var(--content-bg) 80%, transparent);
+        border: 1px solid var(--sep); border-radius: 9px; padding: 8px 11px; font-size: 12.5px; font-weight: 500; color: var(--text); }
+      /* All bars share one height; the waveform's shape comes from the per-bar
+         --m factor applied to scaleY. That way "silence" can be a genuinely flat
+         line (uniform scaleY) instead of frozen bars of differing heights. */
+      .waveform { height: 84px; display: flex; align-items: center; justify-content: center; gap: 3px; overflow: hidden; }
+      .waveform span {
+        width: 3px; height: 52px; flex: none; border-radius: 2px;
+        background: var(--accent); transform-origin: center;
+        /* Collapsed by default: the bars must never be painted at full height, not
+           even for one frame. Each bar has an animation-delay of up to 0.79s, and
+           during a delay an element sits in its UN-animated state — so without this
+           base transform (and fill-mode backwards below) the bars flash long on
+           open and then shrink. */
+        transform: scaleY(0.03);
+        /* Idle = silence: a near-flat line breathing slowly, so the default state
+           reads as "nothing to hear" rather than as captured audio. */
+        animation: wave-silence 2.8s ease-in-out infinite backwards;
+      }
+      @keyframes wave-silence { 0%, 100% { transform: scaleY(0.03); } 50% { transform: scaleY(0.06); } }
+      /* Dictating but no real levels yet (mic denied / provider starting). */
+      @keyframes wave-pulse {
+        0%, 100% { transform: scaleY(calc(0.14 * var(--m, 1))); }
+        50%      { transform: scaleY(calc(0.92 * var(--m, 1))); }
+      }
+      .waveform.active span { animation: wave-pulse 0.85s ease-in-out infinite backwards; }
+      /* Voice-reactive: bar height follows the live mic level (× per-bar factor).
+         The floor sits above the silence line so "dictating but quiet" still reads
+         as armed-and-listening rather than as idle. */
+      .waveform.metering span { animation: none; transition: transform 0.08s ease-out;
+        transform: scaleY(calc(0.12 + min(1, var(--level, 0) * var(--m, 1)) * 0.88)); }
+      @media (prefers-reduced-motion: reduce) {
+        .waveform span { animation: none; transform: scaleY(0.06); }
+        .waveform.active span { animation: none; transform: scaleY(calc(0.5 * var(--m, 1))); }
+        .waveform.metering span { animation: none; transition: none; }
+      }
+      .hero-foot { display: flex; align-items: center; justify-content: center; gap: 16px; flex-wrap: wrap; }
+      .btn-record { border: none; cursor: default; display: inline-flex; align-items: center; gap: 9px;
+        padding: 12px 24px 12px 20px; border-radius: 10px; color: #fff; font-weight: 600; font-size: 14.5px;
+        background: linear-gradient(90deg, #6e6cf0, #4b48d6); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 40%, transparent); }
+      .btn-record:hover { filter: brightness(1.05); }
+      .btn-record svg { width: 17px; height: 17px; }
+
+      /* Activity card (fills the rest of the height) */
+      .activity-card { flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; gap: 4px;
+        padding: 16px 20px; border-radius: 12px; border: 1px solid var(--sep); background: var(--content-bg); overflow: hidden; }
+      .activity-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; flex: none; }
+      .activity-title { font-size: 14px; font-weight: 600; color: var(--text); }
+      .activity-list { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+      .activity-list .hist-item { padding: 9px 0; }
+      .activity-list .hist-item + .hist-item { border-top: 0.5px solid var(--sep); }
+      .view.active { display: block; }
+      /* flex: none is load-bearing. Inside .view-list (a flex column) this strip
+         is a flex item, and without it the browser shrinks it to absorb overflow
+         from a long list — dragging the title up by however much it lost, so the
+         heading sat higher in Historial than in Ajustes. */
+      .view-drag { flex: none; height: 22px; -webkit-app-region: drag; margin: -22px -30px 0; }
+      h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 2px; }
+      /* ---- Home dashboard ---- */
+      .hero { display: flex; align-items: center; gap: 14px; margin: 4px 0 24px; }
+      .hero-badge {
+        width: 56px; height: 56px; border-radius: 15px; flex: none;
+        display: flex; align-items: center; justify-content: center;
+        background: linear-gradient(140deg, color-mix(in srgb, var(--accent) 22%, var(--card-bg)), var(--card-bg));
+        box-shadow: var(--shadow);
+      }
+      .hero-badge svg { height: 30px; width: auto; color: var(--accent); }
+      .hero-text h1 { margin: 0; font-size: 26px; display: flex; align-items: baseline; gap: 8px; }
+      .hero-text .ver { font-size: 13px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+      .hero-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; flex-wrap: wrap; }
+      .hero-tagline { color: var(--text-2); font-size: 13px; }
+      .chip { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 20px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0 0; flex: none; }
+      .stat { background: var(--card-bg); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+      .stat .num { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+      .stat .lbl { font-size: 12px; color: var(--text-2); margin-top: 3px; }
+
+      .home-cta { display: flex; align-items: center; gap: 14px; margin: 0 0 6px; }
+      .btn.lg { padding: 9px 16px; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+      .btn.lg svg { width: 16px; height: 16px; }
+      .cta-hint { color: var(--text-2); font-size: 12.5px; }
+      .cta-hint b { color: var(--text); font-weight: 600; }
+
+      .home-section-head { display: flex; align-items: center; justify-content: space-between; margin: 28px 0 8px; }
+      .home-section-head h2 { margin: 0; text-transform: none; font-size: 15px; color: var(--text); letter-spacing: -0.01em; }
+      .link-more { background: none; border: none; color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 500;
+        cursor: default; -webkit-app-region: no-drag; padding: 2px 6px; border-radius: 6px; }
+      .link-more:hover { background: var(--sidebar-hover); }
+
+      /* centered hero */
+      .hero-center { display: flex; flex-direction: column; align-items: center; text-align: center; margin: 6px 0 14px; flex: none; }
+      .hero-center .hero-badge { width: 64px; height: 64px; border-radius: 16px; margin-bottom: 10px; }
+      .hero-center .hero-badge svg { height: 36px; }
+      .hero-center h1 { margin: 0; font-size: 24px; }
+      .hero-center .hero-tagline { margin: 5px 0 0; color: var(--text-2); font-size: 13px; }
+
+      /* engine controls */
+      .home-controls { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; }
+      .motor-field { display: flex; align-items: center; gap: 8px; }
+      .motor-label { font-size: 12px; font-weight: 600; color: var(--text-2); }
+      .home-controls select { width: auto; min-width: 220px; }
+      .engine-hint { text-align: center; font-size: 12px; min-height: 16px; margin-top: 10px; color: var(--text-2); }
+      .engine-hint.warn { color: #c77700; }
+
+      /* usage charts */
+      /* Bottom panels fill the remaining height in 3 columns; resizing reflows them. */
+      /* Charts get a bounded, well-proportioned height (grow with the viewport but
+         never stretch absurdly); the whole home is centered vertically so extra
+         space stays balanced instead of stretching the charts. */
+      .home-panels { flex: 0 0 auto; height: clamp(200px, 34vh, 320px); min-height: 0; display: grid; grid-template-columns: 1fr 1fr 1fr; grid-auto-rows: 1fr; gap: 14px; margin-top: 16px; }
+      .chart { background: var(--card-bg); border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; min-height: 0; }
+      .chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; flex: none; }
+      .chart-head h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); letter-spacing: -0.01em; }
+      .chart-sub { font-size: 11.5px; color: var(--text-3); }
+      .bars { display: flex; align-items: stretch; gap: 8px; flex: 1; min-height: 60px; }
+      .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; }
+      .bar-track { flex: 1; width: 100%; display: flex; align-items: flex-end; }
+      .bar { width: 100%; background: var(--accent); border-radius: 4px 4px 0 0; min-height: 3px; }
+      .bar-lbl { font-size: 10.5px; color: var(--text-3); }
+      .chart-empty { color: var(--text-3); font-size: 12.5px; margin: auto; }
+      .recent-panel .recent-list { flex: 1; min-height: 0; overflow: hidden; }
+      .recent-panel .hist-item { padding: 7px 0; }
+      @media (max-width: 780px) { .home-panels { grid-template-columns: 1fr 1fr; } }
+      h2 { font-size: 13px; font-weight: 600; color: var(--text-2); text-transform: uppercase;
+           letter-spacing: 0.04em; margin: 26px 0 8px; }
+      .sub { color: var(--text-2); margin: 0 0 8px; }
+
+      .card { background: var(--card-bg); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+      .card + .card { margin-top: 10px; }
+      .row { display: flex; align-items: center; gap: 12px; padding: 9px 0; }
+      .row + .row { border-top: 0.5px solid var(--sep); }
+      .row .grow { flex: 1; min-width: 0; }
+      .row .rtitle { font-weight: 500; }
+      .row .rdesc { color: var(--text-2); font-size: 12px; }
+
+      label { display: block; margin: 14px 0 5px; font-weight: 600; font-size: 12px; color: var(--text-2); }
+      input, select {
+        font: inherit; padding: 7px 10px; width: 100%; max-width: 520px;
+        background: var(--field-bg); color: var(--text);
+        border: 1px solid var(--field-border); border-radius: 8px; outline: none;
+      }
+      input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+      .two { display: flex; gap: 12px; } .two > div { flex: 1; }
+
+      /* ---- Provider picker (icon cards) ---- */
+      .providers { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 4px; }
+      .prov {
+        display: flex; flex-direction: column; align-items: center; gap: 7px;
+        padding: 14px 10px; border-radius: 12px; text-align: center; user-select: none;
+        background: var(--card-bg); border: 1.5px solid transparent; cursor: default;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      .prov:hover { background: var(--card-bg-hover); }
+      .prov.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card-bg)); }
+      .prov .pico { height: 26px; display: flex; align-items: center; justify-content: center; color: var(--text); }
+      .prov .pico svg { height: 26px; width: auto; }
+      .prov .pname { font-weight: 600; font-size: 13px; color: var(--text); }
+      .prov.selected .pname { color: var(--accent); }
+      .prov .ptag { font-size: 11px; color: var(--text-2); }
+      /* Not-yet-available engines: shown but not selectable. */
+      .prov.disabled { opacity: 0.5; cursor: not-allowed; }
+      .prov.disabled:hover { background: var(--card-bg); }
+      .prov.disabled .ptag { color: #c77700; font-weight: 600; }
+
+      button.btn {
+        font: inherit; font-weight: 500; padding: 7px 14px; border-radius: 8px;
+        border: 1px solid var(--field-border); background: var(--card-bg); color: var(--text);
+        cursor: default;
+      }
+      button.btn:hover { background: var(--card-bg-hover); }
+      button.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
+      button.btn.primary:hover { filter: brightness(1.07); }
+      button.btn.small { padding: 4px 10px; font-size: 12px; }
+      .actions { margin-top: 20px; display: flex; gap: 10px; align-items: center; }
+
+      .status { margin-top: 12px; min-height: 18px; font-size: 12.5px; }
+      .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+      .badge { font-size: 12px; padding: 2px 8px; border-radius: 20px; font-weight: 600; }
+      .badge.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+      .badge.warn { background: color-mix(in srgb, #ff9f0a 20%, transparent); color: #c77700; }
+      .badge.err { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+      .muted { color: var(--text-2); }
+
+      .hist-item { display: flex; gap: 12px; align-items: center; padding: 9px 0; }
+      .hist-item + .hist-item { border-top: 0.5px solid var(--sep); }
+      /* Language chip (shared by Inicio's activity list and Historial). */
+      .hist-lang {
+        font-size: 11px; color: var(--accent); font-weight: 600; flex: none;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        padding: 3px 7px; border-radius: 6px; line-height: 1.2;
+      }
+      .hist-when { font-size: 12px; color: var(--text-3); flex: none; }
+
+      /* ---- Historial: filter row + row list ---- */
+      .hist-filters { display: flex; gap: 10px; align-items: center; margin: 10px 0 14px; flex: none; }
+      /* Input wrapper that hosts a leading icon; the input itself is chromeless. */
+      .field-icon {
+        flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+        background: var(--field-bg); border: 1px solid var(--field-border);
+        border-radius: 9px; padding: 0 12px;
+      }
+      .field-icon svg { flex: none; width: 15px; height: 15px; color: var(--text-3); }
+      .field-icon input {
+        flex: 1; min-width: 0; border: 0; background: none; padding: 9px 0;
+        font: inherit; color: var(--text); outline: none;
+      }
+      .field-icon:focus-within { border-color: var(--accent); }
+      .range-select {
+        flex: none; width: auto; padding: 9px 11px; font-size: 12.5px; font-weight: 500;
+        background: var(--field-bg); color: var(--text);
+        border: 1px solid var(--field-border); border-radius: 9px;
+      }
+      /* Hugs its content (so a short list isn't a big empty frame) but never grows
+         past the viewport — past that it scrolls internally. */
+      .hist-list {
+        flex: 0 1 auto; min-height: 0; overflow-y: auto;
+        background: var(--content-bg); border: 1px solid var(--sep); border-radius: 12px;
+      }
+      /* Empty state: centred in whatever container hosts it (the Historial list
+         or the Home activity panel), so it reads as a considered state rather
+         than a stray line of text stuck to the top-left. */
+      .empty-state {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        text-align: center; gap: 3px; padding: 40px 24px; min-height: 100%;
+      }
+      .empty-icon {
+        width: 46px; height: 46px; margin-bottom: 9px; border-radius: 13px;
+        display: flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent);
+      }
+      .empty-icon svg { width: 24px; height: 24px; }
+      .empty-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+      .empty-desc { font-size: 12.5px; color: var(--text-2); max-width: 34ch; line-height: 1.5; }
+      .empty-desc b { color: var(--text); font-weight: 600; }
+      /* The Home panel is short, so the same component sits tighter there. */
+      .recent-panel .empty-state { padding: 22px 12px; min-height: 0; }
+      .recent-panel .empty-icon { width: 38px; height: 38px; border-radius: 11px; margin-bottom: 7px; }
+      .recent-panel .empty-icon svg { width: 20px; height: 20px; }
+      .hrow { padding: 12px 16px; }
+      .hrow + .hrow { border-top: 0.5px solid var(--sep); }
+      .hrow.open { background: var(--card-bg); }
+      .hrow-line { display: flex; gap: 12px; align-items: center; }
+      .hrow.open .hrow-line { align-items: flex-start; }
+      /* Collapsed: one line with an ellipsis. Expanded: full text, wrapped. */
+      .hrow-text {
+        flex: 1; min-width: 0; font-size: 13.5px; font-weight: 500; color: var(--text);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .hrow.open .hrow-text { white-space: normal; overflow: visible; line-height: 1.5; }
+      .hrow-when { flex: none; font-size: 12px; color: var(--text-3); }
+      .icon-btn {
+        flex: none; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px;
+        background: none; color: var(--text-3); cursor: default;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .icon-btn:hover { background: var(--sidebar-hover); color: var(--text-2); }
+      .icon-btn svg { width: 16px; height: 16px; transition: transform 0.15s ease-out; }
+      @media (prefers-reduced-motion: reduce) { .icon-btn svg { transition: none; } }
+      /* Reserves the chevron's slot so rows without one stay column-aligned. */
+      .icon-btn.placeholder { visibility: hidden; }
+      .hrow.open .icon-btn { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+      .copy-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+      .copy-btn svg { width: 13px; height: 13px; }
+
+      /* ---- Ajustes: tabs ---- */
+      .tabs {
+        display: inline-flex; gap: 3px; padding: 3px; margin: 14px 0 18px; flex: none;
+        background: var(--card-bg); border: 1px solid var(--sep); border-radius: 10px;
+      }
+      .tab {
+        display: inline-flex; align-items: center; gap: 7px; padding: 6px 14px;
+        border: 1px solid transparent; border-radius: 7px; background: none;
+        font: inherit; font-size: 13px; font-weight: 500; color: var(--text-2); cursor: default;
+      }
+      .tab svg { width: 15px; height: 15px; }
+      .tab:hover { color: var(--text); }
+      .tab.active {
+        background: var(--content-bg); border-color: var(--sep); color: var(--text);
+        font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+      .tab.active svg { color: var(--accent); }
+      /* Header + tabs stay put; only the active panel scrolls. */
+      .tab-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 8px; }
+      .tab-panel { display: none; }
+      .tab-panel.active { display: block; }
+      /* Section caption above a grouped card. */
+      .sec-title {
+        font-size: 11.5px; font-weight: 600; letter-spacing: 0.6px;
+        color: var(--text-3); margin: 4px 0 10px;
+      }
+
+      /* ---- Ajustes: connection rows ---- */
+      .conn-list {
+        background: var(--content-bg); border: 1px solid var(--sep); border-radius: 12px;
+        overflow: hidden;
+      }
+      .conn { padding: 12px 16px; }
+      .conn + .conn { border-top: 0.5px solid var(--sep); }
+      .conn.open { background: var(--card-bg); }
+      .conn-line { display: flex; align-items: center; gap: 13px; }
+      .conn-tile {
+        width: 34px; height: 34px; flex: none; border-radius: 9px;
+        display: flex; align-items: center; justify-content: center;
+        background: var(--card-bg); border: 1px solid var(--sep); color: var(--text-2);
+      }
+      .conn.open .conn-tile, .conn.is-active .conn-tile {
+        background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent);
+      }
+      .conn-tile svg { width: 17px; height: 17px; }
+      .conn-mid { flex: 1; min-width: 0; }
+      .conn-name { font-size: 14px; font-weight: 600; color: var(--text); }
+      .conn-kind { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+      /* Status chip. Colors carry meaning, so each also has its own wording. */
+      .conn-state {
+        flex: none; display: inline-flex; align-items: center; gap: 5px;
+        padding: 4px 9px 4px 8px; border-radius: 20px;
+        font-size: 11.5px; font-weight: 600; white-space: nowrap;
+      }
+      /* An engine that cannot run on this OS: visibly out of reach, not broken. */
+      .conn.is-unsupported { opacity: 0.55; }
+      .conn.is-unsupported .conn-toggle { display: none; }
+      .wiz-engine[disabled] { opacity: 0.45; }
+      .conn-state .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+      .conn-state.active, .conn-state.connected {
+        color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
+      }
+      .conn-state.available { color: var(--text-2); background: var(--card-bg); }
+      .conn-state.unconfigured { color: #b26a00; background: color-mix(in srgb, #ff9f0a 18%, transparent); }
+      @media (prefers-color-scheme: dark) { .conn-state.unconfigured { color: #ffb340; } }
+      /* Expanded config, indented to line up under the name (tile + gap). */
+      .conn-form { padding: 14px 0 2px 47px; }
+      .conn-form label { margin-top: 12px; }
+      .conn-form > :first-child { margin-top: 0; }
+      .conn-form .none { color: var(--text-2); font-size: 12.5px; }
+      /* Per-provider dictation language. Shape follows the provider's capability:
+         a select for "auto or one" / "one required", toggleable chips for Azure
+         Speech's multi-locale LID. */
+      .conn-lang { margin-top: 14px; }
+      .conn-lang .lang-label { font-weight: 590; font-size: 12.5px; }
+      .conn-lang .lang-desc { color: var(--text-2); font-size: 12px; margin-top: 2px; }
+      .conn-lang select { margin-top: 8px; }
+      .lang-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+      .lang-chips button {
+        padding: 4px 10px; font-size: 12px; font-weight: 550;
+        border-radius: 999px; border: 1px solid var(--field-border);
+        background: var(--field-bg); color: var(--text-2); cursor: default;
+        transition: background 0.12s, color 0.12s, border-color 0.12s;
+      }
+      .lang-chips button:hover { border-color: var(--text-3); }
+      .lang-chips button[aria-pressed="true"] {
+        background: var(--accent); border-color: transparent; color: #fff;
+      }
+      /* Continuous LID allows one locale per base language, so the siblings of a
+         chosen locale are unselectable rather than silently rejected on save. */
+      .lang-chips button[disabled] { opacity: 0.38; }
+      .lang-chips button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+      @media (prefers-reduced-motion: reduce) { .lang-chips button { transition: none; } }
+      .lang-status { font-size: 12px; margin-top: 8px; }
+      .lang-status.ok { color: var(--ok); }
+      .lang-status.err { color: var(--err); }
+
+      .conn-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 16px; }
+      .conn-actions .status { margin: 0; flex: 1; }
+
+      /* ---- Ajustes > Sistema: grouped label/control rows ---- */
+      .group {
+        background: var(--content-bg); border: 1px solid var(--sep); border-radius: 12px;
+        overflow: hidden; margin-bottom: 18px;
+      }
+      .srow {
+        display: flex; align-items: center; justify-content: space-between; gap: 20px;
+        padding: 13px 16px;
+      }
+      .srow + .srow { border-top: 0.5px solid var(--sep); }
+      /* Stack when the control needs the full width (e.g. the language pair). */
+      .srow.stacked { display: block; }
+      .srow-label { font-size: 13.5px; font-weight: 500; color: var(--text); }
+      .srow-desc { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+      .srow-ctl { flex: none; display: flex; align-items: center; gap: 8px; }
+      .srow-ctl select { width: auto; margin: 0; }
+      .srow.stacked .srow-ctl { margin-top: 10px; display: block; }
+      .srow.stacked .two { margin: 0; }
+
+      /* Segmented control (radio group styled as a pill switch). */
+      .seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--card-bg);
+        border: 1px solid var(--sep); border-radius: 8px; }
+      .seg label {
+        margin: 0; padding: 5px 12px; border-radius: 6px; border: 1px solid transparent;
+        font-size: 12.5px; font-weight: 500; color: var(--text-2); white-space: nowrap;
+      }
+      .seg input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .seg label:hover { color: var(--text); }
+      .seg input:checked + span {
+        background: var(--content-bg); border-color: var(--sep); color: var(--text);
+        font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+      }
+      .seg span { display: inline-block; padding: 5px 12px; margin: -5px -12px;
+        border: 1px solid transparent; border-radius: 6px; }
+      .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+      /* Report a bug */
+      .rep-list { margin: 0; padding: 6px 18px 10px 34px; }
+      .rep-list li { margin: 10px 0; font-size: 12.5px; }
+      .rep-list li::marker { color: var(--text-3); font-weight: 600; }
+      .rep-list b { display: block; font-weight: 590; margin-bottom: 2px; }
+      .rep-list span { color: var(--text-2); line-height: 1.5; }
+      .rep-diag {
+        margin: 0; padding: 12px 16px; border-top: 0.5px solid var(--sep);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px;
+        color: var(--text-2); white-space: pre-wrap; word-break: break-word;
+      }
+      /* Destructive, so it reads as such — but muted until hovered, since it sits
+         next to content the user is browsing, not acting on. */
+      /* Overflow menu in the filters row: an icon, not a wide destructive button,
+         so browsing the list isn't dominated by an action you rarely want. */
+      /* Stretch to the row so it matches the height of the search field and the
+         date select. As a plain .btn.small it was 26px next to 39px neighbours —
+         a shrunken chip floating between two tall controls. */
+      .hist-menu { position: relative; flex: none; align-self: stretch; }
+      .btn.small.menu-btn {
+        padding: 0; width: 38px; height: 100%; border-radius: 9px;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--text-2);
+      }
+      .btn.small.menu-btn:hover { color: var(--text); }
+      .btn.small.menu-btn svg { width: 18px; height: 18px; }
+      .menu {
+        position: absolute; top: calc(100% + 6px); right: 0; z-index: 5; min-width: 172px;
+        padding: 5px; border-radius: 10px; background: var(--card-bg);
+        border: 1px solid var(--sep); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+      }
+      .menu[hidden] { display: none; }
+      .menu-item {
+        display: block; width: 100%; text-align: left; padding: 7px 10px;
+        border: 0; border-radius: 6px; background: none; color: var(--text);
+        font: inherit; font-size: 12.5px; cursor: default; white-space: nowrap;
+      }
+      .menu-item:hover { background: var(--sidebar-hover); }
+      .menu-item.danger { color: var(--err); }
+      .menu-item.danger:hover { background: color-mix(in srgb, var(--err) 12%, transparent); }
+      .menu-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+      /* Whisper model download. */
+      .model-box { margin-top: 12px; }
+      .model-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .model-state { font-size: 12.5px; }
+      .model-state.ready { color: var(--ok); }
+      .model-state.warn { color: var(--err); }
+      .model-bar {
+        height: 6px; border-radius: 999px; background: var(--field-border);
+        overflow: hidden; margin-top: 10px;
+      }
+      .model-bar > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.2s linear; }
+      @media (prefers-reduced-motion: reduce) { .model-bar > span { transition: none; } }
+      .model-sub { color: var(--text-2); font-size: 12px; margin-top: 6px; }
+      .copy-btn.copy-failed { color: var(--err); border-color: var(--err); }
+      .rep-privacy { margin-top: 10px; }
+      .log-dir {
+        margin-top: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px; color: var(--text-2); word-break: break-all;
+      }
+      .rep-logbtns { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+      .rep-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
+
+      /* About */
+      .view-about { padding-bottom: 48px; }
+      .about-head { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
+      .about-mark {
+        width: 62px; height: 62px; border-radius: 15px; flex: none;
+        display: flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent);
+      }
+      .about-mark svg { width: auto; height: 30px; }
+      .about-head h1 { margin: 0; }
+      .about-version { color: var(--text-2); font-size: 12.5px; margin-top: 4px; }
+      .about-note { margin: 0; padding: 14px 16px; color: var(--text-2); font-size: 12.5px; line-height: 1.55; }
+      .arow {
+        display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+        padding: 9px 16px; border-top: 0.5px solid var(--sep);
+      }
+      .arow:first-child { border-top: 0; }
+      .arow .ak { color: var(--text-2); font-size: 12.5px; flex: none; }
+      .arow .av {
+        font-size: 12px; text-align: right; word-break: break-all;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      /* Wizard engine picker: the same information as a Conexiones row, as a
+         selectable card. */
+      .wiz-engines { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .wiz-engine {
+        text-align: left; padding: 10px 12px; border-radius: 10px;
+        border: 1px solid var(--field-border); background: var(--field-bg);
+        color: var(--text); cursor: default;
+      }
+      .wiz-engine:hover { border-color: var(--text-3); }
+      .wiz-engine.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+      .wiz-engine .we-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .wiz-engine .we-name { font-weight: 590; font-size: 13px; }
+      .wiz-engine .we-kind { color: var(--text-2); font-size: 11.5px; margin-top: 2px; }
+      .wiz-engine .conn-state { font-size: 11px; }
+      .wiz-skip { margin-right: 10px; }
+
+      /* Activation shortcut: chip + capture button. While capturing, the chip
+         shows the live combination being held. */
+      .trigger-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+      .trigger-note { color: var(--text-2); font-size: 12px; margin-top: 8px; max-width: 46ch; }
+      .keycap.capturing { border-color: var(--accent); color: var(--accent); }
+      /* Hold mode is unavailable unless the trigger can report key release. */
+      .seg label.disabled { opacity: 0.4; }
+      .seg label.disabled span { cursor: default; }
+      .keycap.capturing kbd { color: var(--accent); }
+
+      /* Key chip. */
+      .keycap {
+        display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px;
+        background: var(--card-bg); border: 1px solid var(--sep); border-radius: 8px;
+      }
+      .keycap kbd {
+        font: 600 12px -apple-system, system-ui, sans-serif; color: var(--text);
+        background: var(--content-bg); border: 1px solid var(--sep);
+        border-radius: 6px; padding: 2px 8px;
+      }
+      .keycap .note { font-size: 11.5px; color: var(--text-3); }
+
+      /* ---- Ajustes > Permisos ---- */
+      .pbanner {
+        display: flex; align-items: center; gap: 11px; padding: 13px 15px; margin-bottom: 18px;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        color: color-mix(in srgb, var(--accent) 80%, var(--text));
+        border-radius: 10px; font-size: 12.5px; line-height: 1.45; font-weight: 500;
+      }
+      .pbanner svg { width: 18px; height: 18px; flex: none; color: var(--accent); }
+      .prow { display: flex; align-items: center; gap: 13px; padding: 14px 16px; }
+      .prow + .prow { border-top: 0.5px solid var(--sep); }
+      .ptile {
+        width: 34px; height: 34px; flex: none; border-radius: 9px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .ptile svg { width: 17px; height: 17px; }
+      /* Tile + chip share the state color, so a row reads at a glance. */
+      .prow.granted .ptile { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
+      .prow.missing .ptile { background: color-mix(in srgb, #ff9f0a 18%, transparent); color: #b26a00; }
+      .prow.unknown .ptile { background: var(--card-bg); color: var(--text-3); }
+      @media (prefers-color-scheme: dark) { .prow.missing .ptile { color: #ffb340; } }
+      .pmid { flex: 1; min-width: 0; }
+      .pname { font-size: 14px; font-weight: 600; color: var(--text); }
+      .pdesc { font-size: 12.5px; color: var(--text-2); margin-top: 2px; }
+      .pchip {
+        flex: none; display: inline-flex; align-items: center; gap: 5px;
+        padding: 4px 9px 4px 8px; border-radius: 20px;
+        font-size: 11.5px; font-weight: 600; white-space: nowrap;
+      }
+      .pchip svg { width: 12px; height: 12px; }
+      .prow.granted .pchip { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+      .prow.missing .pchip { color: #b26a00; background: color-mix(in srgb, #ff9f0a 18%, transparent); }
+      @media (prefers-color-scheme: dark) { .prow.missing .pchip { color: #ffb340; } }
+      .prow.unknown .pchip { color: var(--text-2); background: var(--card-bg); }
+      .prow .btn { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+      .prow .btn svg { width: 14px; height: 14px; }
+
+      /* ---- Onboarding wizard (full-window overlay) ---- */
+      #onboarding {
+        position: fixed; inset: 0; z-index: 20;
+        background: var(--content-bg);
+        display: flex; flex-direction: column;
+      }
+      #onboarding[hidden] { display: none; }
+      .wiz-drag { height: 40px; -webkit-app-region: drag; flex: none; }
+      .wiz-body { flex: 1; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; text-align: center; padding: 20px 48px; overflow-y: auto; }
+      .wiz-body .step { display: none; width: 100%; max-width: 460px; }
+      .wiz-body .step.active { display: block; }
+      .wiz-icon {
+        width: 64px; height: 64px; margin: 0 auto 18px; border-radius: 16px;
+        display: flex; align-items: center; justify-content: center;
+        background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent);
+      }
+      .wiz-icon svg { width: auto; height: 34px; }
+      .wiz-body h2 { font-size: 24px; font-weight: 700; color: var(--text); text-transform: none;
+        letter-spacing: -0.02em; margin: 0 0 8px; }
+      .wiz-body .sub { font-size: 14px; }
+      .wiz-body .step .left { text-align: left; margin-top: 16px; }
+      /* Three columns so the dots sit dead centre no matter how wide the buttons
+         get — with plain space-between, adding "Saltar" shoved them left. */
+      .wiz-foot { flex: none; display: grid; grid-template-columns: 1fr auto 1fr;
+        align-items: center; padding: 16px 32px 26px; gap: 12px; }
+      .wiz-foot .wiz-left { justify-self: start; }
+      .wiz-foot .wiz-right { justify-self: end; display: flex; align-items: center; gap: 10px; }
+      /* Longer labels ("Empezar a dictar" / "Start dictating") must not wrap the
+         button onto a second line. */
+      .wiz-foot .btn, .wiz-foot .wiz-skip { white-space: nowrap; }
+      /* .link-btn is the full-width sidebar style; in this row it must size to
+         its text or it squeezes the other controls out of reach. */
+      .wiz-foot .wiz-skip { width: auto; }
+      .dots { display: flex; gap: 7px; justify-self: center; }
+      .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--field-border); }
+      .dot.on { background: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <nav id="nav">
+          <div class="nav-item active" data-view="inicio">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.8 12 3l9 7.8"/><path d="M5 9.6V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.6"/></svg>
+            <span data-i18n>Inicio</span>
+          </div>
+          <div class="nav-item" data-view="historial">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.2v5l3.2 2"/></svg>
+            <span data-i18n>Historial</span>
+          </div>
+          <div class="nav-item" data-view="ajustes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9"/><path d="M17 6h3"/><circle cx="15" cy="6" r="2"/><path d="M4 12h3"/><path d="M11 12h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h9"/><path d="M17 18h3"/><circle cx="15" cy="18" r="2"/></svg>
+            <span data-i18n>Ajustes</span>
+          </div>
+          <div class="nav-item" data-view="about">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/></svg>
+            <span data-i18n>Acerca de</span>
+          </div>
+        </nav>
+        <div class="sidebar-foot">
+          <button class="link-btn" id="openReport" data-view="report">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6.5a4 4 0 0 1 8 0"/><rect x="5" y="6.5" width="14" height="12" rx="6"/><path d="M3 11h2M19 11h2M3 16h2.5M18.5 16H21M12 9v7"/></svg>
+            <span data-i18n>Reportar un error</span>
+          </button>
+          <button class="link-btn coffee-btn" id="openDonate">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9h13v5a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5V9z"/><path d="M17 10h1.5a2.5 2.5 0 0 1 0 5H17"/><path d="M7 2.5v2M10.5 2.5v2M14 2.5v2"/></svg>
+            <span data-i18n>Invítame un café</span>
+          </button>
+          <button class="link-btn" id="openTutorial">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.2-2.5 3.9"/><path d="M12 17.2h.01"/></svg>
+            <span data-i18n>Ver tutorial</span>
+          </button>
+        </div>
+      </aside>
+
+      <main id="content">
+        <!-- INICIO -->
+        <section class="view view-home active" data-view="inicio">
+          <div class="view-drag"></div>
+          <div class="hero-card">
+            <div class="hero-top">
+              <div class="hero-brand">
+                <div class="hero-logo">
+                  <span style="height:10px"></span><span style="height:18px"></span><span style="height:26px"></span><span style="height:18px"></span><span style="height:10px"></span>
+                </div>
+                <div>
+                  <div class="hero-name">Loqui</div>
+                  <div class="hero-sub" data-i18n>Dictado multilingüe en tiempo real</div>
+                </div>
+              </div>
+              <select id="homeEngine" class="engine-select">
+                <option value="whisper" data-i18n>Whisper — local (offline)</option>
+                <option value="macos" data-i18n>macOS — on-device</option>
+                <option value="azure" data-i18n>Azure Speech</option>
+                <option value="openai" data-i18n>OpenAI</option>
+                <option value="grok" data-i18n>Grok (xAI)</option>
+                <option value="elevenlabs" data-i18n>ElevenLabs</option>
+              </select>
+            </div>
+            <div class="waveform" id="heroWave"></div>
+            <div class="hero-foot">
+              <button class="btn-record" id="testDictate">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0"/><path d="M12 17v4"/></svg>
+                <span class="btn-label" data-i18n>Probar dictado</span>
+              </button>
+              <span class="cta-hint" id="ctaHint"></span>
+            </div>
+          </div>
+
+          <div class="engine-hint" id="engineHint"></div>
+
+          <div class="activity-card">
+            <div class="activity-head">
+              <span class="activity-title" data-i18n>Actividad reciente</span>
+              <button class="link-more" data-goto="historial" data-i18n>Ver todo</button>
+            </div>
+            <div class="activity-list" id="homeRecent"><span class="muted">…</span></div>
+          </div>
+
+          <div class="status" id="inicioStatus"></div>
+        </section>
+
+        <!-- HISTORIAL -->
+        <section class="view view-list" data-view="historial">
+          <div class="view-drag"></div>
+          <h1 data-i18n>Historial</h1>
+          <p class="sub" data-i18n>Transcripciones recientes guardadas localmente.</p>
+          <div class="hist-filters">
+            <div class="field-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" />
+              </svg>
+              <input id="histSearch" placeholder="Buscar…" data-i18n-attr="placeholder" />
+            </div>
+            <select id="histRange" class="range-select" aria-label="Filtrar por fecha" data-i18n-attr="aria-label">
+              <option value="all" data-i18n>Cualquier fecha</option>
+              <option value="today" data-i18n>Hoy</option>
+              <option value="7" data-i18n>Últimos 7 días</option>
+              <option value="30" data-i18n>Últimos 30 días</option>
+            </select>
+            <div class="hist-menu">
+              <button class="btn small menu-btn" id="histMenuBtn" aria-haspopup="menu"
+                      aria-expanded="false" aria-label="Más acciones" data-i18n-attr="aria-label"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+              <div class="menu" id="histMenu" role="menu" hidden>
+                <button class="menu-item danger" role="menuitem" id="clearHistory" data-i18n>Borrar historial</button>
+              </div>
+            </div>
+          </div>
+          <div class="hist-list" id="historyBox"><span class="empty">…</span></div>
+        </section>
+
+        <!-- AJUSTES -->
+        <section class="view view-list" data-view="ajustes">
+          <div class="view-drag"></div>
+          <h1 data-i18n>Ajustes</h1>
+          <p class="sub" data-i18n>Configura tus motores de transcripción y las preferencias de la app.</p>
+
+          <div class="tabs" id="ajustesTabs">
+            <button class="tab active" data-tab="conexiones">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6"/><path d="M15 2v6"/><path d="M7 8h10v3a5 5 0 0 1-10 0V8z"/><path d="M12 16v6"/></svg>
+              <span data-i18n>Conexiones</span>
+            </button>
+            <button class="tab" data-tab="sistema">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9"/><path d="M17 6h3"/><circle cx="15" cy="6" r="2"/><path d="M4 12h3"/><path d="M11 12h9"/><circle cx="9" cy="12" r="2"/><path d="M4 18h9"/><path d="M17 18h3"/><circle cx="15" cy="18" r="2"/></svg>
+              <span data-i18n>Sistema</span>
+            </button>
+            <button class="tab" data-tab="permisos">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.5c0 4.3 3 7.4 7 8.9 4-1.5 7-4.6 7-8.9V6l-7-3z"/><path d="m9 12 2 2 4-4"/></svg>
+              <span data-i18n>Permisos</span>
+            </button>
+          </div>
+
+          <div class="tab-body">
+            <!-- ===== CONEXIONES ===== -->
+            <div class="tab-panel active" data-tab="conexiones">
+              <div class="sec-title" data-i18n>MOTORES DE TRANSCRIPCIÓN</div>
+              <div class="conn-list" id="connList">
+
+                <div class="conn" data-provider="whisper">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M9 3v2M15 3v2M9 19v2M15 19v2M3 9h2M3 15h2M19 9h2M19 15h2"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>Whisper</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <p class="none" data-i18n>Se ejecuta en tu equipo, sin clave ni internet. Necesita descargar un modelo una sola vez.</p>
+                    <!-- Built by renderModelRow(): status, progress and actions. -->
+                    <div class="model-box" id="modelBox"></div>
+                    <div class="conn-actions"><span class="status"></span><button class="btn primary conn-use" data-i18n>Usar este motor</button></div>
+                  </div>
+                </div>
+
+                <div class="conn" data-provider="macos">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 384 512" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>macOS</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <p class="none" data-i18n>No requiere clave ni internet: usa el reconocimiento on-device de Apple. Necesita un idioma concreto — no puede autodetectar.</p>
+                    <div class="conn-actions"><span class="status"></span><button class="btn primary conn-use" data-i18n>Usar este motor</button></div>
+                  </div>
+                </div>
+
+                <div class="conn" data-provider="azure">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M5.483 21.3H24L14.025 4.013l-3.038 8.347 5.836 6.938L5.483 21.3zM13.23 2.7L6.105 8.677 0 19.253h5.505v.014L13.23 2.7z"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>Azure</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <label data-i18n>Servicio</label>
+                    <select id="azureService">
+                      <option value="speech" data-i18n>Azure Speech</option>
+                      <option value="openai" data-i18n>Azure OpenAI — realtime (gpt-realtime-whisper)</option>
+                    </select>
+                    <p class="sub" id="azureServiceHint" style="margin-top:6px"></p>
+
+                    <div id="openaiConfig">
+                      <label data-i18n>Recurso Azure OpenAI</label>
+                      <input id="azureOpenAiResource" placeholder="ej. my-openai-resource" data-i18n-attr="placeholder" />
+                      <label data-i18n>Deployment</label>
+                      <input id="azureOpenAiDeployment" placeholder="gpt-realtime-whisper" data-i18n-attr="placeholder" />
+                    </div>
+
+                    <div id="speechConfig">
+                      <label data-i18n>Región</label>
+                      <select id="region"></select>
+                    </div>
+
+                    <label id="keyLabel">Clave API <span id="keyState" class="muted"></span></label>
+                    <input id="key" type="password" placeholder="pega tu clave (se cifra al guardar)" data-i18n-attr="placeholder" />
+
+                    <div class="conn-actions">
+                      <span class="status" id="azureStatus"></span>
+                      <button class="btn" id="test" data-i18n>Probar conexión</button>
+                      <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn primary conn-save" data-i18n>Guardar</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="conn" data-provider="openai">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>OpenAI</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <p class="none" data-i18n>Transcripción en tiempo real por WebSocket. Tu API key se guarda cifrada en el keychain.</p>
+                    <label data-i18n>Modelo</label>
+                    <select id="openaiModel">
+                      <option value="gpt-realtime-whisper" data-i18n>gpt-realtime-whisper — streaming realtime (recomendado)</option>
+                      <option value="gpt-4o-transcribe" data-i18n>gpt-4o-transcribe — mayor precisión</option>
+                      <option value="gpt-4o-mini-transcribe" data-i18n>gpt-4o-mini-transcribe — más rápido/barato</option>
+                    </select>
+                    <label>API key <span id="openaiKeyState" class="muted"></span></label>
+                    <input id="openaiApiKey" type="password" placeholder="sk-… (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <div class="conn-actions">
+                      <span class="status"></span>
+                      <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn primary conn-save" data-i18n>Guardar</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="conn" data-provider="grok">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>Grok</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <p class="none" data-i18n>Transcripción en streaming. La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
+                    <label>API key <span id="grokKeyState" class="muted"></span></label>
+                    <input id="grokApiKey" type="password" placeholder="xai-… (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <div class="conn-actions">
+                      <span class="status"></span>
+                      <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn primary conn-save" data-i18n>Guardar</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="conn" data-provider="elevenlabs">
+                  <div class="conn-line">
+                    <span class="conn-tile"><svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M4.6035 0v24h4.9317V0zm9.8613 0v24h4.9317V0z"/></svg></span>
+                    <div class="conn-mid"><div class="conn-name" data-i18n>ElevenLabs</div><div class="conn-kind"></div></div>
+                    <span class="conn-state"></span>
+                    <button class="btn small conn-toggle" data-i18n>Configurar</button>
+                  </div>
+                  <div class="conn-form" hidden>
+                    <p class="none" data-i18n>Scribe v2 Realtime (streaming). La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
+                    <label>API key <span id="elevenKeyState" class="muted"></span></label>
+                    <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <div class="conn-actions">
+                      <span class="status"></span>
+                      <button class="btn conn-use" data-i18n>Usar este motor</button>
+                      <button class="btn primary conn-save" data-i18n>Guardar</button>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+              <p class="sub" id="providerHint" style="margin-top:12px"></p>
+            </div>
+
+            <!-- ===== SISTEMA ===== -->
+            <div class="tab-panel" data-tab="sistema">
+              <div class="sec-title" data-i18n>APARIENCIA</div>
+              <div class="group">
+                <div class="srow">
+                  <div>
+                    <div class="srow-label" data-i18n>Modo</div>
+                    <div class="srow-desc" data-i18n>Apariencia de la aplicación</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <div class="seg" id="appearanceSeg" role="radiogroup" aria-label="Modo de apariencia" data-i18n-attr="aria-label">
+                      <label><input type="radio" name="appearance" value="system" /><span data-i18n>Sistema</span></label>
+                      <label><input type="radio" name="appearance" value="light" /><span data-i18n>Claro</span></label>
+                      <label><input type="radio" name="appearance" value="dark" /><span data-i18n>Oscuro</span></label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sec-title" data-i18n>IDIOMA DE LA APLICACIÓN</div>
+              <div class="group">
+                <div class="srow">
+                  <div>
+                    <div class="srow-label" data-i18n>Idioma de la interfaz</div>
+                    <div class="srow-desc" data-i18n>Se aplica al instante en toda la aplicación.</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <select id="appLanguage"></select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="sec-title" data-i18n>ACTIVACIÓN Y ENTRADA</div>
+              <div class="group">
+                <div class="srow">
+                  <div>
+                    <div class="srow-label" data-i18n>Método de activación</div>
+                    <div class="srow-desc" data-i18n>Cómo inicias y detienes el dictado</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <div class="seg" id="modeSeg" role="radiogroup" aria-label="Método de activación" data-i18n-attr="aria-label">
+                      <label><input type="radio" name="mode" value="hold" /><span data-i18n>Mantener</span></label>
+                      <label><input type="radio" name="mode" value="toggle" /><span data-i18n>Alternar</span></label>
+                    </div>
+                  </div>
+                </div>
+                <div class="srow stacked">
+                  <div>
+                    <div class="srow-label" data-i18n>Atajo de teclado</div>
+                    <div class="srow-desc" data-i18n>Tecla o combinación que inicia el dictado</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <!-- Built by renderTriggerInto(); the wizard mounts the same
+                         component into its own .trigger-box. -->
+                    <div class="trigger-box" id="triggerBox"></div>
+                  </div>
+                </div>
+                <div class="srow">
+                  <div>
+                    <div class="srow-label" data-i18n>Micrófono</div>
+                    <div class="srow-desc" data-i18n>Se aplica en el siguiente dictado</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <select id="device"><option value="" data-i18n>Predeterminado del sistema</option></select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="actions">
+                <button class="btn primary" id="save" data-i18n>Guardar</button>
+              </div>
+              <div class="status" id="ajustesStatus"></div>
+            </div>
+
+            <!-- ===== PERMISOS ===== -->
+            <div class="tab-panel" data-tab="permisos">
+              <div class="pbanner">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5.5c0 4.3 3 7.4 7 8.9 4-1.5 7-4.6 7-8.9V6l-7-3z"/><path d="m9 12 2 2 4-4"/></svg>
+                <span data-i18n>
+                  Los permisos se conceden en Ajustes del sistema de macOS. Loqui nunca accede al
+                  micrófono ni a otras apps sin tu autorización.
+                </span>
+              </div>
+              <div class="group" id="perms"><span class="muted" style="padding:14px 16px;display:block">…</span></div>
+              <div class="status" id="permsStatus"></div>
+            </div>
+          </div>
+        </section>
+              <!-- Plain .view, NOT .view-list: that variant pins height:100% + overflow
+             hidden and expects an inner scroller (the history list, the tab
+             panels). About has no fixed header, so it just grows and lets
+             #content scroll it. -->
+        <section class="view view-about" data-view="report">
+          <div class="view-drag"></div>
+          <h1 data-i18n>Reportar un error</h1>
+          <p class="sub" data-i18n>Un reporte con detalles se resuelve mucho más rápido. Antes de abrirlo, revisa estos puntos.</p>
+
+          <div class="sec-title" data-i18n>QUÉ INCLUIR</div>
+          <div class="group">
+            <ol class="rep-list">
+              <li>
+                <b data-i18n>Qué esperabas y qué pasó en su lugar</b>
+                <span data-i18n>Describe primero el resultado que esperabas y luego lo que ocurrió. «No funciona» no permite reproducir nada.</span>
+              </li>
+              <li>
+                <b data-i18n>Pasos para reproducirlo</b>
+                <span data-i18n>Enumera lo que hiciste, en orden, desde que abriste la app. Indica si ocurre siempre o solo a veces.</span>
+              </li>
+              <li>
+                <b data-i18n>Capturas de pantalla</b>
+                <span data-i18n>Adjunta una imagen del problema. Si es algo que ocurre al dictar, un vídeo corto ayuda todavía más.</span>
+              </li>
+              <li>
+                <b data-i18n>Una captura de la pantalla «Acerca de»</b>
+                <span data-i18n>Incluye la versión, el sistema y las rutas. También puedes copiar esos datos como texto con el botón de abajo.</span>
+              </li>
+              <li>
+                <b data-i18n>El archivo de registro del día</b>
+                <span data-i18n>Adjunta el registro correspondiente a la fecha del fallo. Abajo encontrarás la carpeta donde se guardan.</span>
+              </li>
+              <li>
+                <b data-i18n>Tu motor de transcripción y su idioma</b>
+                <span data-i18n>Muchos errores dependen del proveedor: no es lo mismo Whisper local que Azure o ElevenLabs.</span>
+              </li>
+            </ol>
+          </div>
+
+          <div class="sec-title" data-i18n>DATOS DEL SISTEMA</div>
+          <div class="group">
+            <div class="srow">
+              <div>
+                <div class="srow-label" data-i18n>Copiar los detalles técnicos</div>
+                <div class="srow-desc" data-i18n>Versión, sistema operativo, motor activo y atajo, listos para pegar en el reporte.</div>
+              </div>
+              <div class="srow-ctl">
+                <button class="btn" id="copyDiag" data-i18n>Copiar detalles</button>
+              </div>
+            </div>
+            <pre class="rep-diag" id="repDiag" hidden></pre>
+          </div>
+
+          <div class="sec-title" data-i18n>REGISTROS DE ERRORES</div>
+          <div class="group">
+            <div class="srow">
+              <div>
+                <div class="srow-label" data-i18n>Adjunta los registros del día del fallo</div>
+                <div class="srow-desc" data-i18n>Loqui guarda un archivo por día con los errores que detecta. Es lo más útil que puedes adjuntar.</div>
+                <div class="log-dir" id="logDir">…</div>
+                <div class="srow-desc" id="logCount"></div>
+              </div>
+              <div class="srow-ctl rep-logbtns">
+                <button class="btn" id="openLogs" data-i18n>Abrir carpeta</button>
+                <button class="btn" id="toggleLogTail" data-i18n>Ver últimas entradas</button>
+              </div>
+            </div>
+            <pre class="rep-diag" id="logTail" hidden></pre>
+          </div>
+
+          <div class="group rep-privacy">
+            <p class="about-note" data-i18n>Ni los detalles técnicos ni los registros incluyen tus claves API o el texto que hayas dictado: se eliminan antes de escribirlos. Revisa igualmente las capturas antes de adjuntarlas, por si contienen información privada.</p>
+          </div>
+
+          <div class="rep-actions">
+            <button class="btn primary" id="openIssue" data-i18n>Abrir reporte en GitHub</button>
+          </div>
+        </section>
+
+        <section class="view view-about" data-view="about">
+          <div class="view-drag"></div>
+          <div class="about-head">
+            <span class="about-mark"><svg viewBox="0 0 364 336" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M17.6269 118.971C19.9494 118.946 22.2531 119.4 24.4003 120.304C26.5329 121.223 28.4724 122.552 30.1127 124.219C31.7305 125.939 33.0297 127.943 33.9479 130.135C34.8529 132.323 35.3248 134.674 35.3355 137.049V202.283C35.3368 204.668 34.8756 207.029 33.9793 209.231C33.0829 211.433 31.769 213.432 30.1127 215.113C28.4866 216.809 26.5439 218.155 24.3993 219.071C22.2547 219.987 19.9516 220.454 17.6269 220.445C12.9377 220.426 8.44783 218.508 5.14163 215.113C1.84882 211.689 0.00291233 207.082 0.00048461 202.283V137.466C-0.0167684 135.096 0.426814 132.745 1.30594 130.551C2.22416 128.359 3.52386 126.355 5.14163 124.636C6.78196 122.969 8.72147 121.639 10.8541 120.72C12.9771 119.688 15.2784 119.093 17.6269 118.971Z"/><path d="M180.511 336C178.184 335.989 175.882 335.508 173.738 334.584C171.59 333.695 169.645 332.362 168.025 330.668C166.365 328.994 165.054 326.995 164.171 324.79C163.287 322.585 162.85 320.22 162.885 317.838V17.9126C162.885 13.1398 164.742 8.5626 168.047 5.18779C171.353 1.81297 175.836 -0.0830078 180.511 -0.0830078C185.186 -0.0830078 189.669 1.81297 192.975 5.18779C196.281 8.5626 198.138 13.1398 198.138 17.9126V316.588C198.267 319.053 197.907 321.519 197.079 323.838C196.252 326.158 194.975 328.282 193.323 330.085C191.714 331.89 189.736 333.312 187.529 334.251C185.335 335.327 182.944 335.923 180.511 336Z"/><path d="M261.705 279.013C257.014 278.947 252.535 277.01 249.225 273.616C245.916 270.222 244.038 265.64 243.996 260.85V76.3962C243.986 74.0103 244.443 71.6463 245.34 69.4431C246.236 67.2398 247.555 65.2417 249.219 63.566C250.845 61.87 252.788 60.5243 254.933 59.6085C257.078 58.6926 259.38 58.2252 261.705 58.234C264.03 58.2449 266.331 58.7234 268.475 59.642C270.62 60.5607 272.566 61.9016 274.203 63.5881C275.839 65.2746 277.135 67.2737 278.015 69.4714C278.895 71.669 279.342 74.022 279.331 76.3962V260.6C279.366 262.982 278.929 265.347 278.045 267.552C277.162 269.757 275.85 271.757 274.19 273.431C272.576 275.15 270.631 276.512 268.478 277.43C266.343 278.405 264.042 278.942 261.705 279.013Z"/><path d="M96.7002 56.4019C98.9915 56.3957 101.259 56.8822 103.354 57.8296C105.448 58.777 107.324 60.164 108.859 61.9006C112.142 65.5002 113.977 70.2292 114 75.1473V263.601C113.531 268.159 111.509 272.405 108.288 275.598C105.249 278.676 101.145 280.411 96.8636 280.43C92.5623 280.389 88.4418 278.659 85.3575 275.598C82.1889 272.376 80.201 268.14 79.7268 263.601V75.1473C79.7054 70.2516 81.4813 65.5254 84.7045 61.9006C86.2212 60.1848 88.0709 58.8099 90.1361 57.8633C92.2012 56.9167 94.4365 56.419 96.7002 56.4019Z"/><path d="M343.15 219.78C340.827 219.804 338.523 219.351 336.376 218.447C334.223 217.529 332.279 216.167 330.664 214.448C327.327 211.047 325.448 206.432 325.441 201.617V136.883C325.44 134.499 325.901 132.138 326.797 129.936C327.694 127.734 329.008 125.735 330.664 124.053C332.29 122.357 334.233 121.012 336.378 120.096C338.522 119.18 340.825 118.713 343.15 118.721C347.839 118.741 352.329 120.658 355.635 124.053C358.928 127.478 360.774 132.085 360.776 136.883V201.617C360.753 204.011 360.311 206.381 359.471 208.616C358.57 210.793 357.269 212.773 355.635 214.448C354.01 216.192 352.033 217.557 349.841 218.447C347.721 219.344 345.445 219.797 343.15 219.78Z"/></svg></span>
+            <div>
+              <h1>Loqui</h1>
+              <p class="sub" data-i18n>Dictado multilingüe en tiempo real</p>
+              <div class="about-version" id="aboutVersion">…</div>
+            </div>
+          </div>
+
+          <div class="sec-title" data-i18n>PRIVACIDAD</div>
+          <div class="group">
+            <p class="about-note" data-i18n>El historial se guarda solo en tu equipo y las claves API se cifran en el llavero del sistema. Nada se envía a ningún servidor salvo al proveedor de transcripción que elijas, y los motores locales no usan internet.</p>
+          </div>
+
+          <div class="sec-title" data-i18n>APOYA EL PROYECTO</div>
+          <div class="group">
+            <div class="srow">
+              <div>
+                <div class="srow-label" data-i18n>Loqui es gratis y de uso libre</div>
+                <div class="srow-desc" data-i18n>Si te resulta útil, puedes invitarme un café. Es totalmente voluntario.</div>
+              </div>
+              <div class="srow-ctl">
+                <button class="btn" id="aboutDonate" data-i18n>Invítame un café</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-title" data-i18n>SISTEMA</div>
+          <div class="group" id="aboutSystem"></div>
+
+          <div class="sec-title" data-i18n>ARCHIVOS</div>
+          <div class="group" id="aboutPaths"></div>
+        </section>
+
+</main>
+    </div>
+
+    <!-- ONBOARDING WIZARD -->
+    <div id="onboarding" hidden>
+      <div class="wiz-drag"></div>
+      <div class="wiz-body">
+        <div class="step active" data-step="0">
+          <div class="wiz-icon"><svg viewBox="0 0 364 336" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M17.6269 118.971C19.9494 118.946 22.2531 119.4 24.4003 120.304C26.5329 121.223 28.4724 122.552 30.1127 124.219C31.7305 125.939 33.0297 127.943 33.9479 130.135C34.8529 132.323 35.3248 134.674 35.3355 137.049V202.283C35.3368 204.668 34.8756 207.029 33.9793 209.231C33.0829 211.433 31.769 213.432 30.1127 215.113C28.4866 216.809 26.5439 218.155 24.3993 219.071C22.2547 219.987 19.9516 220.454 17.6269 220.445C12.9377 220.426 8.44783 218.508 5.14163 215.113C1.84882 211.689 0.00291233 207.082 0.00048461 202.283V137.466C-0.0167684 135.096 0.426814 132.745 1.30594 130.551C2.22416 128.359 3.52386 126.355 5.14163 124.636C6.78196 122.969 8.72147 121.639 10.8541 120.72C12.9771 119.688 15.2784 119.093 17.6269 118.971Z"/><path d="M180.511 336C178.184 335.989 175.882 335.508 173.738 334.584C171.59 333.695 169.645 332.362 168.025 330.668C166.365 328.994 165.054 326.995 164.171 324.79C163.287 322.585 162.85 320.22 162.885 317.838V17.9126C162.885 13.1398 164.742 8.5626 168.047 5.18779C171.353 1.81297 175.836 -0.0830078 180.511 -0.0830078C185.186 -0.0830078 189.669 1.81297 192.975 5.18779C196.281 8.5626 198.138 13.1398 198.138 17.9126V316.588C198.267 319.053 197.907 321.519 197.079 323.838C196.252 326.158 194.975 328.282 193.323 330.085C191.714 331.89 189.736 333.312 187.529 334.251C185.335 335.327 182.944 335.923 180.511 336Z"/><path d="M261.705 279.013C257.014 278.947 252.535 277.01 249.225 273.616C245.916 270.222 244.038 265.64 243.996 260.85V76.3962C243.986 74.0103 244.443 71.6463 245.34 69.4431C246.236 67.2398 247.555 65.2417 249.219 63.566C250.845 61.87 252.788 60.5243 254.933 59.6085C257.078 58.6926 259.38 58.2252 261.705 58.234C264.03 58.2449 266.331 58.7234 268.475 59.642C270.62 60.5607 272.566 61.9016 274.203 63.5881C275.839 65.2746 277.135 67.2737 278.015 69.4714C278.895 71.669 279.342 74.022 279.331 76.3962V260.6C279.366 262.982 278.929 265.347 278.045 267.552C277.162 269.757 275.85 271.757 274.19 273.431C272.576 275.15 270.631 276.512 268.478 277.43C266.343 278.405 264.042 278.942 261.705 279.013Z"/><path d="M96.7002 56.4019C98.9915 56.3957 101.259 56.8822 103.354 57.8296C105.448 58.777 107.324 60.164 108.859 61.9006C112.142 65.5002 113.977 70.2292 114 75.1473V263.601C113.531 268.159 111.509 272.405 108.288 275.598C105.249 278.676 101.145 280.411 96.8636 280.43C92.5623 280.389 88.4418 278.659 85.3575 275.598C82.1889 272.376 80.201 268.14 79.7268 263.601V75.1473C79.7054 70.2516 81.4813 65.5254 84.7045 61.9006C86.2212 60.1848 88.0709 58.8099 90.1361 57.8633C92.2012 56.9167 94.4365 56.419 96.7002 56.4019Z"/><path d="M343.15 219.78C340.827 219.804 338.523 219.351 336.376 218.447C334.223 217.529 332.279 216.167 330.664 214.448C327.327 211.047 325.448 206.432 325.441 201.617V136.883C325.44 134.499 325.901 132.138 326.797 129.936C327.694 127.734 329.008 125.735 330.664 124.053C332.29 122.357 334.233 121.012 336.378 120.096C338.522 119.18 340.825 118.713 343.15 118.721C347.839 118.741 352.329 120.658 355.635 124.053C358.928 127.478 360.774 132.085 360.776 136.883V201.617C360.753 204.011 360.311 206.381 359.471 208.616C358.57 210.793 357.269 212.773 355.635 214.448C354.01 216.192 352.033 217.557 349.841 218.447C347.721 219.344 345.445 219.797 343.15 219.78Z"/></svg></div>
+          <h2 data-i18n>Bienvenido a Loqui</h2>
+          <p class="sub" data-i18n>Dictado en tiempo real con historial local. Elige tu motor y configúralo en un minuto.</p>
+        </div>
+
+        <div class="step" data-step="1">
+          <div class="wiz-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 5 6v5.5c0 4.3 3 7.4 7 8.9 4-1.5 7-4.6 7-8.9V6l-7-3z"/></svg></div>
+          <h2 data-i18n>Permisos</h2>
+          <p class="sub" data-i18n>Concede acceso al micrófono y, para pegar y usar la tecla fn, Accesibilidad e Input Monitoring.</p>
+          <div class="card left" id="wizPerms" style="margin-top:16px"><span class="muted">…</span></div>
+        </div>
+
+        <div class="step" data-step="2">
+          <h2 data-i18n>Elige tu motor</h2>
+          <p class="sub" data-i18n>Puedes cambiarlo después, y configurar varios, desde Ajustes.</p>
+          <!-- Built from the same pure connectionRows() the Conexiones tab uses. -->
+          <div class="left wiz-engines" id="wizEngines"></div>
+        </div>
+
+        <div class="step" data-step="3">
+          <h2 id="wizConfigTitle" data-i18n>Configura tu motor</h2>
+          <p class="sub" id="wizConfigSub"></p>
+          <!-- Built by renderWizConfig(): credentials (if any) + the per-provider
+               language control, mounted from the same component as Ajustes. -->
+          <div class="left" id="wizConfig"></div>
+        </div>
+
+        <div class="step" data-step="4">
+          <h2 data-i18n>Preferencias</h2>
+          <p class="sub" data-i18n>Apariencia, idioma de la aplicación y atajo de activación.</p>
+          <div class="left" id="wizPrefs"></div>
+        </div>
+
+        <div class="step" data-step="5">
+          <div class="wiz-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></div>
+          <h2 data-i18n>¡Todo listo!</h2>
+          <p class="sub"><span data-i18n>Mantén la tecla</span> <b>fn</b> <span data-i18n>(o usa el ícono de la bandeja) y empieza a hablar. El texto aparece en el cursor.</span></p>
+        </div>
+      </div>
+      <div class="wiz-foot">
+        <div class="wiz-left"><button class="btn" id="wizBack" data-i18n>Atrás</button></div>
+        <div class="dots" id="wizDots"></div>
+        <div class="wiz-right">
+          <button class="link-btn wiz-skip" id="wizSkip" data-i18n>Saltar</button>
+          <button class="btn primary" id="wizNext" data-i18n>Continuar</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/settings.ts"></script>
+  </body>
+</html>
