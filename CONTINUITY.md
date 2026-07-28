@@ -4,15 +4,15 @@
 > Keep it current; refresh it with the `checkpoint` skill before closing a session.
 
 - **Focus:** Port de **Loqui** (Electron/TS, `../loqui`) a **Go + Wails v3**, sólo macOS arm64.
-- **Next step:** **Firmar los builds de dev con una identidad estable** (self-signed o
-  Developer ID) y volver a correr `LOQUI_DEBUG_DICTATE=6`. Es lo que bloquea la primera
-  transcripción real: con firma ad-hoc el Keychain no contesta y no hay clave que leer.
-  Después, fase 3 — el resto de proveedores.
+- **Next step:** los tres proveedores cloud que faltan de fase 3 (openai, grok, elevenlabs)
+  — son WebSockets planos y no dependen de nada de lo bloqueado. En paralelo conviene
+  **firmar los builds de dev con una identidad estable**, que ya está implicada en tres
+  fallos distintos.
 - **Blockers:** (1) **firma ad-hoc** — el Keychain no responde, así que la app no puede
   leer su propia clave; (2) para verificar transcripción real hace falta una **key de Azure
   Speech nueva** (la de `loqui` está marcada como expuesta).
 - **Active workflow:** none (trabajo directo en la rama `port/foundation`).
-- **Updated:** 2026-07-27 (fase 2)
+- **Updated:** 2026-07-28 (fase 3, parcial)
 
 ## Handoff notes
 
@@ -74,6 +74,54 @@ El proveedor Azure y la captura de audio existen y funcionan:
 ```bash
 SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/go.sh run ./cmd/stt-probe -seconds 20
 ```
+
+## ✅ LA APP DICTA — verificado 2026-07-28
+
+Primer transcript real, con **whisper local** (sin red, sin cuenta, sin clave), en
+`~/Library/Application Support/LoquiGo/history.jsonl`:
+
+```json
+{"text":"Hala Hala Hala Esto es una prueba probando 123 Hello Hello",
+ "language":"auto","trigger":"hold","at":1785251225843}
+```
+
+Un solo registro, no uno por pausa: whisper emitió varios `final` y el controlador los unió
+en un mensaje (`JoinTranscript`) y lo entregó una vez. Guardó aunque no pegó, porque falta
+Accesibilidad — que es el diseño: un fallo al pegar no pierde lo dicho.
+
+Cómo reproducirlo:
+
+```bash
+./scripts/task.sh package
+open --env LOQUI_DEBUG_DICTATE=10 --stdout /tmp/loqui.log --stderr /tmp/loqui.log bin/loqui.app
+# habla 10s, luego: cat ~/Library/Application\ Support/LoquiGo/history.jsonl
+```
+
+Dos warts observados, ninguno del pipeline:
+
+- **`language: "auto"`** es el ajuste que le pasamos, no el idioma detectado. whisper.cpp sí
+  lo sabe; el helper no lo reporta. Viene igual del proyecto Electron.
+- **Texto repetido** (`Hala Hala Hala`) es whisper alucinando sobre silencio, comportamiento
+  del modelo. Se mitiga con umbrales de VAD en el helper.
+
+## Fase 3 — parcial
+
+**Hecho:** `internal/stt/helper` (un proveedor para los dos motores locales, mismo protocolo
+de líneas), `internal/permissions` (micrófono + reconocimiento de voz, pedidos al arrancar).
+
+- **whisper: FUNCIONA.** Modelo desde el bundle, mic a 16 kHz mono, Metal, salida limpia (0).
+- **macos (Apple SpeechAnalyzer): BLOQUEADO, causa desconocida.** Standalone llega a
+  `started`; lanzado desde el `.app` se para justo antes, tras elegir `es-CL`. No falla —no
+  emite `canceled` ni escribe a stderr— está bloqueado en un `await`. Micrófono y
+  reconocimiento de voz concedidos y sigue igual. **No inventar una causa: hay que
+  instrumentar el helper o probarlo con firma estable.**
+- **Falta:** openai, grok, elevenlabs (WebSockets planos, independientes de lo anterior).
+
+**Tres bugs encontrados ejecutando, ya arreglados** (ver los commits): el watchdog mataba al
+helper al instante llevándose la cola; `WhisperModelPath` no miraba dentro del bundle; y el
+script de whisper producía un binario no relocalizable — **ese último bug lo tiene también el
+DMG de Electron**, cuyo `whisper-stt` lleva un rpath absoluto a esta máquina y ninguna dylib
+al lado.
 
 ## Fase 2 — hecha, con un blocker de entorno
 
