@@ -38,22 +38,30 @@ tasks:
 
   test:
     summary: Runs the Go test suite
-    # Same cgo flags as the build: any package that reaches the Azure binding needs the
-    # framework's headers to compile at all, so `go test ./...` cannot work without them.
     cmds:
-      - ./scripts/vendor-speech-sdk.sh
-      - go test ./... {{.CLI_ARGS}}
-    env:
-      CGO_ENABLED: 1
-      CGO_CFLAGS: "-I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
-      CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
+      - ./scripts/go.sh test ./... {{.CLI_ARGS}}
+
+  test:clipboard:
+    summary: Runs the tests that touch the real macOS pasteboard (overwrites your clipboard)
+    cmds:
+      - LOQUI_TEST_CLIPBOARD=1 ./scripts/go.sh test ./internal/inject/ -run Clipboard -v -count=1
 
   vet:
     summary: go vet across the module
     cmds:
-      - ./scripts/vendor-speech-sdk.sh
-      - go vet ./...
-    env:
-      CGO_ENABLED: 1
-      CGO_CFLAGS: "-I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
-      CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
+      - ./scripts/go.sh vet ./...
+
+  probe:
+    summary: 'Run one dictation from the CLI. Needs SPEECH_KEY. Extra flags after --'
+    cmds:
+      - ./scripts/go.sh run ./cmd/stt-probe {{.CLI_ARGS}}
+
+  probe:mic:
+    summary: Check the microphone alone — levels only, contacts nothing
+    cmds:
+      - ./scripts/go.sh run ./cmd/stt-probe -mic-only -seconds 8
+
+  probe:devices:
+    summary: List input devices
+    cmds:
+      - ./scripts/go.sh run ./cmd/stt-probe -list

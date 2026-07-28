@@ -10,8 +10,13 @@
 // It is deliberately not part of the app: no windows, no tray, no session controller.
 // When a dictation misbehaves, this is how you find out which half is at fault.
 //
-//	SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe
-//	SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe -seconds 20 -langs es-CO,en-US
+// Run it through the wrapper, NOT with a bare `go run`: this binary links the Azure Speech
+// SDK, so without the cgo flags in scripts/go.sh the build fails with
+// "'speechapi_c_error.h' file not found" — even for -mic-only, which never touches Azure.
+//
+//	./scripts/go.sh run ./cmd/stt-probe -mic-only
+//	SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/go.sh run ./cmd/stt-probe -seconds 20
+//	wails3 task probe:mic          # the same thing, shorter
 //
 // Without SPEECH_KEY it still exercises everything up to authentication, which is enough
 // to tell a broken microphone from a broken credential.

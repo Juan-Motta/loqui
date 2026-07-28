@@ -72,7 +72,7 @@ El proveedor Azure y la captura de audio existen y funcionan:
 **Lo único que sigue sin verificar es la transcripción real**, que necesita la key:
 
 ```bash
-SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe -seconds 20
+SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/go.sh run ./cmd/stt-probe -seconds 20
 ```
 
 ## Fase 2 — hecha, con un blocker de entorno
@@ -132,11 +132,17 @@ wails3 task package    # arma bin/loqui.app y firma ad-hoc
 wails3 task dev        # hot reload
 LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # muestra el pill a los 2s
 LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dicta 6s sin tocar una tecla
-go run ./cmd/stt-probe -mic-only                             # ¿el micrófono produce audio?
+wails3 task probe:mic                                        # ¿el micrófono produce audio?
 ```
 
-**`wails3 task test -- -race` se traga la salida** (cosa del paso de CLI_ARGS de task). Para
-el detector de carreras, exportar los flags de cgo y correr `go test ./... -race` directo.
+**Nunca uses `go` a secas en este repo.** El binding de Azure no declara sus `#cgo`, así que
+los flags salen del entorno, y sin ellos cualquier build que alcance el SDK muere con
+`'speechapi_c_error.h' file not found` — incluso `-mic-only`, que no toca Azure. Usa
+`./scripts/go.sh <cmd>` (o las tareas), que es donde viven los flags. Sourcéalo
+(`. scripts/go.sh`) si querés `go` normal en esa shell.
+
+**`wails3 task test -- -race` se traga la salida** (cosa del paso de CLI_ARGS de task).
+Para carreras: `./scripts/go.sh test ./... -race`.
 
 **Para depurar un cuelgue:** `GOTRACEBACK=all` + `kill -QUIT <pid>` volcó los dos bugs de
 arriba. Fue la única forma de verlos; ninguno producía log.
