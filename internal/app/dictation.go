@@ -72,6 +72,14 @@ type Dictation struct {
 	idleStop     chan struct{}
 	reconnect    *time.Timer
 
+	// peakLevel is the loudest microphone level seen this session, 0..1.
+	//
+	// Logged when the session ends, because "did the microphone hear anything at all" is the first
+	// question every empty-transcript report raises and the only one nothing else answers. A peak of
+	// zero says the audio never arrived, which is a different problem from a transcript that came back
+	// empty — and they send you to completely different places.
+	peakLevel float64
+
 	// getSecret overrides the Keychain read. Only the tests set it — see secretReader.
 	getSecret func(store.KeySlot) (string, error)
 }
@@ -318,6 +326,10 @@ func (d *Dictation) buildAppleProvider() (stt.Provider, error) {
 		BuildCmd: "./scripts/build-macos-stt.sh",
 		Locale:   locale,
 		Log:      d.ui.Log,
+		// The helper opens the microphone itself, so the host cannot meter it. If this helper
+		// reports levels they reach the UI; if it does not, the meter simply stays quiet — which
+		// is the honest outcome, and better than an animation that implies audio is arriving.
+		OnLevel: d.noteLevel,
 	}), nil
 }
 
@@ -349,7 +361,23 @@ func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
 		GPUEnabled: gpu,
 		Log:        d.ui.Log,
 		OnGPUCrash: d.store.MarkWhisperGPUBroken,
+		// Levels come from the helper because it, not the host, owns the microphone.
+		OnLevel: d.noteLevel,
 	}), nil
+}
+
+// noteLevel forwards a microphone level to the UI and remembers the session peak.
+//
+// Every level goes through here, whoever measured it — the host's own capture for the cloud
+// providers, or the helper's reports for the local engines — so the meter and the peak mean the same
+// thing regardless of which engine ran.
+func (d *Dictation) noteLevel(level float64) {
+	d.mu.Lock()
+	if level > d.peakLevel {
+		d.peakLevel = level
+	}
+	d.mu.Unlock()
+	d.ui.EmitLevel(level)
 }
 
 // ---- capture -----------------------------------------------------------------
@@ -376,7 +404,7 @@ func (d *Dictation) startCapture(provider stt.Provider) error {
 					return
 				}
 				provider.PushAudio(frame.PCM)
-				d.ui.EmitLevel(frame.Level)
+				d.noteLevel(frame.Level)
 				// Any sound at all counts as activity for the idle guard. Using the
 				// transcript instead would stop a session whenever the provider was slow
 				// to recognise, which is exactly when the user is still talking.
@@ -402,6 +430,15 @@ func (d *Dictation) stopCapture() {
 		cap.Close()
 	}
 	d.ui.EmitLevel(0)
+
+	// Report what the microphone actually heard. A peak of zero is the single most useful fact when a
+	// dictation produced nothing: it separates "no audio reached us" from "audio arrived and the
+	// engine returned nothing", and no other line in the log distinguishes those.
+	d.mu.Lock()
+	peak := d.peakLevel
+	d.peakLevel = 0
+	d.mu.Unlock()
+	d.ui.Log("MIC", fmt.Sprintf("peak level this session: %.2f", peak))
 }
 
 // ---- timers ------------------------------------------------------------------

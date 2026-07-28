@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -444,5 +445,99 @@ sleep 60    # asked to stop, says nothing, never exits — only SIGKILL ends thi
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Errorf("took %s to give up; the watchdog is not firing", elapsed)
+	}
+}
+
+// The helper reports microphone levels, and they must be recognised as levels rather than reaching
+// the log.
+//
+// TWO REASONS THIS IS A SEPARATE PARSE from ParseLine. A level is telemetry, not a session event —
+// feeding it into the event stream would make the controller reason about it. And they arrive about
+// ten times a second, so falling through to the STT-INFO log would bury every real diagnostic the
+// helper emits, which is precisely what those logs exist for.
+func TestParseLevelRecognisesALevelLine(t *testing.T) {
+	got, ok := ParseLevel(`{"type":"level","value":0.42}`)
+	if !ok {
+		t.Fatal("a level line was not recognised")
+	}
+	if got != 0.42 {
+		t.Errorf("value = %v, want 0.42", got)
+	}
+}
+
+func TestParseLevelIgnoresEverythingElse(t *testing.T) {
+	for _, line := range []string{
+		`{"type":"final","text":"hola"}`,
+		`{"type":"info","stage":"transcribing","progress":0}`,
+		`whisper_model_load: loading model`,
+		``,
+		`{`,
+	} {
+		if _, ok := ParseLevel(line); ok {
+			t.Errorf("ParseLevel(%q) claimed it was a level", line)
+		}
+	}
+}
+
+// A level outside 0..1 must be clamped rather than passed through: the CSS multiplies it, so a
+// value of 40 would peg every bar and a negative one would invert them.
+func TestParseLevelClampsToTheUnitRange(t *testing.T) {
+	if got, _ := ParseLevel(`{"type":"level","value":40}`); got != 1 {
+		t.Errorf("40 became %v, want 1", got)
+	}
+	if got, _ := ParseLevel(`{"type":"level","value":-3}`); got != 0 {
+		t.Errorf("-3 became %v, want 0", got)
+	}
+}
+
+// A level line must not be treated as a session event by the event parser.
+func TestParseLineIgnoresLevels(t *testing.T) {
+	if _, ok := ParseLine(`{"type":"level","value":0.42}`); ok {
+		t.Error("ParseLine accepted a level as a session event")
+	}
+}
+
+// A level line must reach OnLevel and must NOT reach the log.
+//
+// The log part is the half that matters operationally: ten lines a second would drown the helper's
+// own diagnostics, which are the only explanation available when a session produces no transcript.
+func TestLevelLinesReachOnLevelAndNotTheLog(t *testing.T) {
+	var levels []float64
+	var logged []string
+
+	cfg := Config{
+		Log:     func(tag, msg string) { logged = append(logged, tag+": "+msg) },
+		OnLevel: func(l float64) { levels = append(levels, l) },
+	}
+	p := New(cfg)
+
+	lines := "{\"type\":\"level\",\"value\":0.25}\n" +
+		"{\"type\":\"info\",\"stage\":\"transcribing\"}\n" +
+		"{\"type\":\"level\",\"value\":0.75}\n"
+	p.readStdout(strings.NewReader(lines))
+
+	if len(levels) != 2 || levels[0] != 0.25 || levels[1] != 0.75 {
+		t.Errorf("levels = %v, want [0.25 0.75]", levels)
+	}
+	for _, line := range logged {
+		if strings.Contains(line, "\"level\"") {
+			t.Errorf("a level line reached the log: %q", line)
+		}
+	}
+	// The genuine diagnostic still gets through.
+	if len(logged) != 1 || !strings.Contains(logged[0], "transcribing") {
+		t.Errorf("logged = %v, want just the info line", logged)
+	}
+}
+
+// With no OnLevel configured, level lines must be dropped rather than crash or be logged.
+func TestLevelLinesAreHarmlessWithNoHandler(t *testing.T) {
+	var logged []string
+	p := New(Config{Log: func(tag, msg string) { logged = append(logged, msg) }})
+
+	p.readStdout(strings.NewReader("{\"type\":\"level\",\"value\":0.5}\n"))
+
+	if len(logged) != 0 {
+		t.Errorf("logged %v with no OnLevel handler", logged)
 	}
 }

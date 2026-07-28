@@ -92,14 +92,48 @@ function wireNavigation(): void {
   );
 }
 
+// ---- the Home waveform -------------------------------------------------------------
+//
+// The markup ships an EMPTY <div class="waveform" id="heroWave">, and the stylesheet already has
+// everything it needs: `.active` runs a baseline pulse, `.metering` drives bar heights from --level
+// and a per-bar --m multiplier. Only the bars themselves and the wiring were missing, so the
+// indicator never appeared at all.
+const WAVE_BARS = 28;
+
+// buildWave creates the bars, with the SAME phase and multiplier formulas the overlay pill uses
+// (frontend/src/overlay.ts). They have to match: the two are meant to read as one indicator, and a
+// different scatter makes the Home bar and the pill look like they disagree about the audio.
+function buildWave(): void {
+  const wave = $<HTMLElement>("heroWave");
+  if (!wave || wave.childElementCount > 0) return;
+  let html = "";
+  for (let i = 0; i < WAVE_BARS; i++) {
+    const delay = (((i * 53) % 80) / 100).toFixed(2);
+    const m = (0.55 + (((i * 29) % 50) / 50) * 0.85).toFixed(2);
+    html += `<span style="animation-delay:${delay}s;--m:${m}"></span>`;
+  }
+  wave.innerHTML = html;
+}
+
 // ---- the record button -------------------------------------------------------------
 
-// setDictating reflects the engine's state in the Home button and on the root element.
+// setDictating reflects the engine's state in the Home button, the waveform and the root element.
 function setDictating(active: boolean): void {
   document.documentElement.dataset.dictating = String(active);
   const label =
     $<HTMLElement>("testDictate")?.querySelector<HTMLElement>(".btn-label");
   if (label) label.textContent = active ? "Detener" : "Probar dictado";
+
+  const wave = $<HTMLElement>("heroWave");
+  if (wave) {
+    wave.classList.toggle("active", active);
+    if (!active) {
+      // Cleared on stop so the next session starts from the baseline rather than resuming at
+      // whatever level the last frame happened to leave behind.
+      wave.classList.remove("metering");
+      wave.style.removeProperty("--level");
+    }
+  }
 }
 
 // The engine is the authority on whether a dictation is running: it can start from the trigger key
@@ -107,6 +141,20 @@ function setDictating(active: boolean): void {
 Events.On("dictation:state", (e: { data: boolean | boolean[] }) => {
   const active = Array.isArray(e.data) ? e.data[0] : e.data;
   setDictating(!!active);
+});
+
+// Live microphone level, 0..1. The same event the overlay pill listens to, so the two indicators
+// cannot disagree.
+//
+// `metering` is only added once a real level arrives, which is what distinguishes "audio is reaching
+// the app" from the baseline pulse. That distinction is the point: a pulse that runs regardless says
+// the app is hearing you whether or not it is.
+Events.On("meter:level", (e: { data: number | number[] }) => {
+  const wave = $<HTMLElement>("heroWave");
+  if (!wave || !wave.classList.contains("active")) return;
+  const level = Array.isArray(e.data) ? e.data[0] : e.data;
+  wave.classList.add("metering");
+  wave.style.setProperty("--level", String(Number(level) || 0));
 });
 
 function wireRecordButton(): void {
@@ -677,6 +725,7 @@ function wire(): void {
 // to answer leaves the whole window dead — not just the part that needed the data. The user could
 // not even reach About to read what went wrong.
 wireNavigation();
+buildWave();
 wireRecordButton();
 wireTabs();
 wireHistory();

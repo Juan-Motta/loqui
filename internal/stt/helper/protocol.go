@@ -98,3 +98,38 @@ func FormatExitCode(code *int) string {
 	}
 	return fmt.Sprintf("%d", *code)
 }
+
+// levelType is the wire type for a microphone level line.
+const levelType = "level"
+
+// ParseLevel recognises a microphone-level line, clamped to 0..1.
+//
+// SEPARATE FROM ParseLine on purpose, for two reasons. A level is telemetry rather than a session
+// event, so putting it in the event stream would make the controller reason about something that has
+// no bearing on the state machine. And they arrive roughly ten times a second: left to fall through
+// to the STT-INFO log, they would bury every diagnostic the helper emits — which is what that log
+// exists for.
+//
+// Clamped because the value drives a CSS multiplier: 40 would peg every bar and a negative would
+// invert them. The helper is a separate process, so its arithmetic is not something to trust here.
+func ParseLevel(line string) (float64, bool) {
+	s := strings.TrimSpace(line)
+	if s == "" {
+		return 0, false
+	}
+	var raw struct {
+		Type  string  `json:"type"`
+		Value float64 `json:"value"`
+	}
+	if err := json.Unmarshal([]byte(s), &raw); err != nil || raw.Type != levelType {
+		return 0, false
+	}
+	switch {
+	case raw.Value < 0:
+		return 0, true
+	case raw.Value > 1:
+		return 1, true
+	default:
+		return raw.Value, true
+	}
+}

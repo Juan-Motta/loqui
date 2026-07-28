@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <iostream>
 #include <mutex>
@@ -90,6 +91,33 @@ static void heartbeat_loop() {
     std::this_thread::sleep_for(std::chrono::seconds(2));
     if (g_transcribing) emit("{\"type\":\"info\",\"stage\":\"transcribing\"}");
   }
+}
+
+// The microphone level, so the UI can show that audio is actually arriving.
+//
+// IT HAS TO COME FROM HERE. This process owns the microphone — the host's WantsAudio is false for
+// helper engines — so nothing upstream can measure it. Without these lines the overlay pill has no
+// levels and falls back to its baseline pulse, which looks exactly like continuous speech: the app
+// appears to be hearing the user whether or not it is.
+//
+// RMS with the same x4 gain the host applies to the providers it captures for (internal/audio.Level),
+// so one indicator does not read differently depending on which engine is running.
+static float level_of(const std::vector<float> & pcm) {
+  if (pcm.empty()) return 0.0f;
+  double sum = 0.0;
+  for (float s : pcm) sum += (double) s * (double) s;
+  double rms = std::sqrt(sum / (double) pcm.size());
+  double scaled = rms * 4.0;
+  if (scaled > 1.0) scaled = 1.0;
+  return (float) scaled;
+}
+
+// Rounded to two decimals before emitting: the CSS cannot show more, and full precision would be
+// noise on a line sent ten times a second.
+static void emit_level(float level) {
+  char buf[48];
+  snprintf(buf, sizeof(buf), "{\"type\":\"level\",\"value\":%.2f}", level);
+  emit(buf);
 }
 
 // RAII so an early `break` or an exception cannot leave the flag stuck on.
@@ -190,6 +218,18 @@ int main(int argc, char ** argv) {
     if (!sdl_poll_events()) break; // SDL quit
     const auto t_now = std::chrono::high_resolution_clock::now();
     const auto t_diff = std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_last).count();
+    // Metered on the poll tick, off the ring buffer SDL keeps filling. A short window so the bars
+    // track speech instead of lagging behind it.
+    //
+    // No check for whether a pass is running: whisper_full is called from THIS thread, so while one is
+    // in flight the loop is not ticking and nothing is emitted anyway. The UI holds the last level for
+    // that second or so, which is the honest thing to show — audio is still being buffered.
+    {
+      std::vector<float> meter;
+      audio.get(120, meter);
+      emit_level(level_of(meter));
+    }
+
     if (t_diff < 2000) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;

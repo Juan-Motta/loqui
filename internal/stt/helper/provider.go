@@ -42,6 +42,13 @@ type Config struct {
 	// OnGPUCrash is called when the GPU backend took the process down, so the caller can
 	// remember it and stop offering that backend on this machine.
 	OnGPUCrash func(reason string)
+	// OnLevel receives microphone levels, 0..1, roughly ten times a second.
+	//
+	// It exists because these helpers open the microphone THEMSELVES (WantsAudio is false), so the
+	// host never sees their audio and cannot meter it. Without this the overlay pill has no levels
+	// to show and sits on its baseline pulse — which looks exactly like continuous speech, telling
+	// the user the app is hearing them when it may not be.
+	OnLevel func(level float64)
 
 	// SilenceGrace and ExitCap override the stop-protocol timings. Zero means the defaults.
 	// Only the tests set them — a 10 s wait per case would make the suite unusable.
@@ -169,6 +176,14 @@ func (p *Provider) readStdout(r io.Reader) {
 	for scan.Scan() {
 		p.noteOutput()
 		line := scan.Text()
+		// Checked BEFORE the event parse and before the log: levels arrive about ten times a
+		// second, and letting them fall through to STT-INFO would bury every real diagnostic.
+		if level, ok := ParseLevel(line); ok {
+			if p.cfg.OnLevel != nil {
+				p.cfg.OnLevel(level)
+			}
+			continue
+		}
 		evt, ok := ParseLine(line)
 		if !ok {
 			// Log what we dropped instead of discarding it silently. These are the
