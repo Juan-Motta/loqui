@@ -4,6 +4,23 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Payload de bootstrap de Ajustes (fase 4) — 2026-07-28
+
+- `Settings.Load()`, un servicio Wails que devuelve en **una** llamada todo lo que la página de
+  Ajustes necesita para pintarse. Hasta ahora la app **no se podía configurar por la interfaz**:
+  había que editar `settings.json` a mano y pasar las keys por variable de entorno.
+- La presencia de keys pasa a **tres estados** (`store.KeyStatus`: present / absent /
+  unreadable). `HasKey` colapsaba `ErrKeychainTimeout` en `false`, así que en un build ad-hoc un
+  slot que sí tenía key se reportaba vacío — y eso manda al usuario a reescribir una credencial
+  que ya estaba ahí.
+- Los slots resueltos por `LOQUI_*_KEY` no se consultan y los demás se leen en paralelo: en serie
+  eran 15s (5 × 3s de timeout) con la página en blanco.
+- Idiomas normalizados por slot (`store.AllLanguageSlots`, `store.LanguagesIn`). Cuatro slots de
+  nube caían al último recurso `en-US`, que fija un motor de nube a inglés en vez de dejarlo
+  autodetectar.
+- `.task/` deja de estar trackeado: es caché de Taskfile.
+
+
 ## Unreleased
 
 ### Proveedor Grok (xAI) STT — fase 3 del port
