@@ -4,13 +4,15 @@
 > Keep it current; refresh it with the `checkpoint` skill before closing a session.
 
 - **Focus:** Port de **Loqui** (Electron/TS, `../loqui`) a **Go + Wails v3**, sólo macOS arm64.
-- **Next step:** Fase 2 — portar `internal/session/` (sessionController + dictationState +
-  sessionTracker + sessionPolicy) con su suite de tests, y cablearlo a
-  `internal/stt/azure` + `internal/audio` en `main.go`.
-- **Blockers:** para verificar transcripción real hace falta una **key de Azure Speech
-  nueva** (la de `loqui` está marcada como expuesta). El código compila y conecta sin ella.
+- **Next step:** **Firmar los builds de dev con una identidad estable** (self-signed o
+  Developer ID) y volver a correr `LOQUI_DEBUG_DICTATE=6`. Es lo que bloquea la primera
+  transcripción real: con firma ad-hoc el Keychain no contesta y no hay clave que leer.
+  Después, fase 3 — el resto de proveedores.
+- **Blockers:** (1) **firma ad-hoc** — el Keychain no responde, así que la app no puede
+  leer su propia clave; (2) para verificar transcripción real hace falta una **key de Azure
+  Speech nueva** (la de `loqui` está marcada como expuesta).
 - **Active workflow:** none (trabajo directo en la rama `port/foundation`).
-- **Updated:** 2026-07-27
+- **Updated:** 2026-07-27 (fase 2)
 
 ## Handoff notes
 
@@ -73,6 +75,38 @@ El proveedor Azure y la captura de audio existen y funcionan:
 SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe -seconds 20
 ```
 
+## Fase 2 — hecha, con un blocker de entorno
+
+Portado con tests (todo verde, incluido `-race`): `internal/session` (controller, machine,
+tracker, policy, overlay), `internal/history`, `internal/inject` (paste + focus guard +
+queue), `internal/hotkey` (protocolo fn + listener), `internal/store` (settings JSON +
+Keychain). Cableado en `internal/app/dictation.go` + `wiring.go`: el tray y la tecla `fn`
+disparan el pipeline real.
+
+**DOS BUGS REALES QUE EL PORT INTRODUJO Y QUE YA ESTÁN ARREGLADOS. No re-introducirlos:**
+
+1. **Deadlock por reentrada en el controlador.** `Press()` tomaba el mutex, llamaba
+   `StartEngine` dentro, el proveedor fallaba y emitía `Canceled` sincrónicamente, y
+   `ProviderEvent` se bloqueaba en el mismo mutex. El micrófono nunca abría y no se
+   registraba nada. **En Electron no podía pasar** — JavaScript es monohilo y esa versión no
+   tiene lock; el mutex que Go necesita creó el riesgo. **Regla ahora: las decisiones se
+   toman bajo el lock, los efectos de `io` corren después de liberarlo** (cola `effects` en
+   `controller.go`). Guardado por `TestSynchronousProviderFailureDoesNotDeadlock`.
+2. **Colisión de directorio de datos.** El directorio era `Loqui`, y macOS tiene filesystem
+   **case-insensitive**, así que era el MISMO directorio que el `loqui` de Electron —
+   verificado por inode. El port leía los ajustes de Electron y los habría sobrescrito.
+   Ahora es `LoquiGo`. Guardado por `TestAppDirCannotCollideWithTheElectronApp`.
+
+**El blocker: la firma ad-hoc rompe el Keychain.** `SecItemCopyMatching` **nunca retorna**
+cuando el binario no lo reconoce macOS (firma ad-hoc, que cambia en cada build): quiere
+preguntar al usuario y el prompt no se puede presentar. Sólo se vio con un volcado de
+goroutines. `GetKey` ahora tiene timeout de 3 s y devuelve `ErrKeychainTimeout`, así que la
+app reporta la causa real y cierra la sesión limpiamente en vez de congelarse — pero **sin
+firma estable no hay clave que leer, y por lo tanto no hay transcripción**.
+
+Es el riesgo que ya estaba anotado, confirmado y peor de lo esperado: no sólo re-pide
+permisos, cuelga llamadas.
+
 ## Estado del código
 
 - `main.go` — 2 ventanas + tray + single instance. Corre. El item "Dictar (prueba)" del
@@ -82,9 +116,10 @@ SPEECH_KEY=... SPEECH_REGION=eastus go run ./cmd/stt-probe -seconds 20
   líneas del original se portan en fase 4, contra un payload de bootstrap de Go.
 - `helpers/` — los 3 helpers nativos copiados sin cambios (Swift/C++). Aún sin compilar
   ni lanzar desde Go.
-- `internal/` — `assets`, `macos`, `audio` (captura + PCM/nivel), `settings`
-  (azureConfig portado), `stt` (contrato de proveedor), `stt/azure` (recognizer + tokens).
-  **Todavía nada de esto está cableado a `main.go`**: eso es la fase 2.
+- `internal/` — `app` (motor de dictado), `assets`, `audio`, `history`, `hotkey`, `inject`,
+  `macos`, `session`, `settings`, `store`, `stt`, `stt/azure`. Cableado y corriendo.
+- **Sólo el proveedor `azure` existe.** Cualquier otro reporta "todavía no está portado" en
+  vez de sustituir motor en silencio.
 - Plan completo con el mapa módulo por módulo: `docs/plans/loqui-go-port.md`.
 
 ## Comandos
@@ -96,4 +131,12 @@ wails3 task build      # compila (frontend + go)
 wails3 task package    # arma bin/loqui.app y firma ad-hoc
 wails3 task dev        # hot reload
 LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # muestra el pill a los 2s
+LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dicta 6s sin tocar una tecla
+go run ./cmd/stt-probe -mic-only                             # ¿el micrófono produce audio?
 ```
+
+**`wails3 task test -- -race` se traga la salida** (cosa del paso de CLI_ARGS de task). Para
+el detector de carreras, exportar los flags de cgo y correr `go test ./... -race` directo.
+
+**Para depurar un cuelgue:** `GOTRACEBACK=all` + `kill -QUIT <pid>` volcó los dos bugs de
+arriba. Fue la única forma de verlos; ninguno producía log.

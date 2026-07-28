@@ -189,6 +189,14 @@ tasks:
       - frontend/bindings/**/*
     cmds:
       - wails3 generate bindings -f '{{.BUILD_FLAGS}}' -clean=true{{if eq .OBFUSCATED "true"}} -obfuscated{{end}} -ts -i
+    env:
+      # The generator type-checks the whole module, which includes the cgo packages that
+      # reach the Azure Speech SDK. Without the framework's include path it cannot resolve
+      # their C imports and prints a wall of "could not import C" warnings on every build.
+      # Harmless — no service is exposed from those packages — but it buries real output.
+      CGO_ENABLED: 1
+      CGO_CFLAGS: "-I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
+      CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
 
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).

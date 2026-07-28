@@ -168,6 +168,14 @@ tasks:
       # Notarisation also requires it to be signed, which codesign --deep below does.
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks"
       - cp -R third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks/"
+      # The native helpers are separate executables and must live OUTSIDE any archive —
+      # macOS cannot exec a binary that isn't a real file on disk. Resources/helpers is
+      # where wiring.go looks first (see globeListenerPath).
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers"
+      - |
+        if [ -d helpers/bin ]; then
+          cp helpers/bin/* "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true
+        fi
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
   codesign:adhoc:

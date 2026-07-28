@@ -81,7 +81,13 @@ func main() {
 
 	wins.settings = newSettingsWindow(app)
 	wins.overlay = newOverlayWindow(app)
-	newTray(app)
+	tray := newTray(app)
+
+	// The engine needs the windows and the tray to already exist, since it drives both.
+	if err := startDictation(app, tray); err != nil {
+		log.Fatal("cannot start the dictation engine: ", err)
+	}
+	defer stopDictation()
 
 	// Dev affordance: show the pill a moment after launch, so the non-activating
 	// show path can be checked without a human clicking the tray — including the
@@ -199,19 +205,18 @@ func newTray(app *application.App) *application.SystemTray {
 	tray.SetTemplateIcon(assets.TrayTemplate)
 
 	menu := app.Menu.New()
-	// TODO(port, phase 3): this becomes controller.Press() / RequestStop(). For now it
-	// toggles the overlay alone, which is what exercises the non-activating show path.
-	overlayShown := false
+	// The same toggle the trigger key performs, for when no shortcut is configured or
+	// the fn listener could not start.
 	menu.Add("Dictar (prueba)").OnClick(func(*application.Context) {
-		overlayShown = !overlayShown
-		if overlayShown {
-			showOverlay(app, wins.overlay)
-			tray.SetIcon(assets.TrayActive) // real red: a template image would tint it away
-		} else {
-			hideOverlay(wins.overlay)
-			tray.SetTemplateIcon(assets.TrayTemplate)
+		if dictation == nil {
+			return
 		}
-		log.Println("tray: overlay shown =", overlayShown)
+		c := dictation.Controller()
+		if c.Desired() {
+			c.RequestStop()
+		} else {
+			c.Press()
+		}
 	})
 	menu.Add("Ajustes…").OnClick(func(*application.Context) {
 		if w := wins.settings; w != nil {

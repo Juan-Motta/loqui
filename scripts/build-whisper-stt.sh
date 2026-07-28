@@ -19,7 +19,7 @@ fi
 
 echo ">> injecting whisper-stt target…"
 mkdir -p "$VENDOR/examples/whisper-stt"
-cp "$ROOT/resources/native/whisper-stt.cpp" "$VENDOR/examples/whisper-stt/whisper-stt.cpp"
+cp "$ROOT/helpers/whisper-stt.cpp" "$VENDOR/examples/whisper-stt/whisper-stt.cpp"
 # The target file is shared with build-whisper-stt.ps1 so the two cannot drift.
 cp "$ROOT/scripts/whisper-stt.CMakeLists.txt" "$VENDOR/examples/whisper-stt/CMakeLists.txt"
 grep -q "add_subdirectory(whisper-stt)" "$VENDOR/examples/CMakeLists.txt" \
@@ -39,7 +39,8 @@ cmake -S "$VENDOR" -B "$VENDOR/build" -DWHISPER_SDL2=ON -DGGML_NATIVE="$NATIVE" 
   -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build "$VENDOR/build" -j --target whisper-stt
 
-cp "$VENDOR/build/bin/whisper-stt" "$ROOT/resources/native/whisper-stt"
+mkdir -p "$ROOT/helpers/bin"
+cp "$VENDOR/build/bin/whisper-stt" "$ROOT/helpers/bin/whisper-stt"
 echo ">> built resources/native/whisper-stt"
 
 # Multilingual model, placed next to the binary (main passes this path).
@@ -51,7 +52,7 @@ if [ -n "${LOQUI_SKIP_MODEL:-}" ]; then
   exit 0
 fi
 
-MODEL="$ROOT/resources/native/ggml-small.bin"
+MODEL="$ROOT/helpers/bin/ggml-small.bin"
 SPIKE_MODEL="$ROOT/scripts/spikes/whisper/whisper.cpp/models/ggml-small.bin"
 if [ ! -f "$MODEL" ]; then
   if [ -f "$SPIKE_MODEL" ]; then

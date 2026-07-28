@@ -90,23 +90,37 @@ que son independientes del lenguaje del host. Copiados ya a `helpers/`:
 - **Fase 1 — Azure Speech real.** Mover el spike a `internal/stt/azure/`; script de
   vendorizado del framework; captura con malgo; `tokenService`; probar transcripción
   real con key válida.
-- **Fase 2 — sesión y entrega.** `internal/session/` completo con tests; hotkey (`fn` +
-  atajo global); inyección de texto con `changeCount`; focus guard; historial.
-  **Al final de esta fase la app ya dicta.**
+- **Fase 2 — sesión y entrega.** ✅ **HECHA** (bloqueada por firma, ver riesgos).
+  `internal/session` completo con tests, hotkey `fn`, inyección con `changeCount` real,
+  focus guard por AX, historial, settings + Keychain, todo cableado. Falta el atajo global
+  no-`fn` (ver riesgo 2) y la primera transcripción real (necesita firma estable + key).
 - **Fase 3 — el resto de proveedores.** whisper, macos, openai, grok, elevenlabs.
 - **Fase 4 — la UI.** Portar `settings.ts` (1828 líneas) contra un payload de
   bootstrap calculado en Go; i18n; onboarding; historial; permisos; About; logs.
 - **Fase 5 — empaquetado.** Firma, entitlements, la dylib de Azure en
   `Contents/Frameworks` con `@rpath`, notarización, DMG.
 
+## Lecciones del port (no re-introducir)
+
+- **El mutex que Go necesita crea reentrada que JavaScript no tenía.** El
+  `SessionController` de Electron llamaba a `io.startEngine()` desde dentro de un método y
+  recibía el fallo del proveedor sincrónicamente de vuelta en `engineEvent()`. Sin lock eso
+  funciona; con lock es deadlock. **Regla: decidir bajo el lock, ejecutar efectos fuera.**
+- **macOS tiene filesystem case-insensitive.** `Loqui` y `loqui` son el mismo directorio
+  (verificado por inode), así que "le puse mayúscula para separarlo" no separa nada.
+- **Los cuelgues del port no dejan log.** Los dos bugs anteriores se encontraron con
+  `GOTRACEBACK=all` + `kill -QUIT`. Cuando algo se queda quieto, volcar goroutines es el
+  primer paso, no el último.
+
 ## Riesgos abiertos
 
-1. **Firma ad-hoc en desarrollo rota los permisos.** `wails3 task run` firma ad-hoc, y
-   la firma cambia en cada build → macOS revoca Accesibilidad e Input Monitoring y
-   vuelve a preguntar. Con Electron esto no pasaba porque el binario de dev era el de
-   Electron, con firma estable. **Mitigación a decidir en fase 2:** firmar los builds
-   de dev con una identidad estable (Developer ID o un certificado self-signed fijo).
-   Sin esto, cada iteración cuesta re-conceder permisos a mano.
+1. **Firma ad-hoc en desarrollo — CONFIRMADO Y PEOR DE LO ESPERADO.** No sólo revoca
+   Accesibilidad e Input Monitoring en cada build: **cuelga el Keychain**.
+   `SecItemCopyMatching` nunca retorna cuando macOS no reconoce el binario, porque quiere
+   pedir autorización y el prompt no se puede presentar. `GetKey` ahora tiene timeout de
+   3 s (`ErrKeychainTimeout`) para que falle diagnosticable en vez de congelarse, pero eso
+   no lo resuelve: **sin identidad estable la app no puede leer su propia clave, así que no
+   puede dictar.** Es el siguiente paso del proyecto, no un detalle de comodidad.
 2. **`triggerKey` ya no puede hablar de acceleradores de Electron.** El formato
    (`"CommandOrControl+Shift+D"`) es de Electron y no hay `globalShortcut` en Go. Habrá
    que elegir librería (`golang.design/x/hotkey`) o registrar un `NSEvent` global
