@@ -1,0 +1,17 @@
+# Codex-native options for codeforge (no scripts/hooks).
+# Best-effort ship prompt (NOT a hard gate): on-request asks when a command crosses the
+# sandbox boundary — it does NOT fire before every command, does NOT read
+# .workflow/state.md, and is bypassable. See shared/rules/ship-gates.md. Check the gate
+# checklist yourself before approving a push/PR.
+
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# This file is the CANONICAL source for Codex config; ./sync.sh copies it to .codex/config.toml.
+# Repo skills are generated under <repo>/.agents/skills (Codex discovers project skills there —
+# NOT under .codex/skills). Sync also writes <repo>/.claude/skills (Claude Code + OpenCode).
+# Discipline is loaded from AGENTS.md (a generated copy of CLAUDE.md) at the repo root.
+
+# To harden the ship-gate into an actual command block (still no bash script), add a
+# Codex execpolicy `.rules` file that requires approval specifically for
+# `git push` / `gh pr create`. Left out of this first cut to keep it minimal.

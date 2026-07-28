@@ -1,0 +1,5 @@
+
+# codeforge (local state — do not commit)
+.DS_Store
+.workflow/
+.claude/settings.local.json

@@ -1,0 +1,15 @@
+rule:approach-comparison.md
+rule:continuity.md
+rule:docs-layout.md
+rule:execution.md
+rule:goal-autonomy-setup.md
+rule:goal-state.md
+rule:memory.md
+rule:models.md
+rule:project-rules.md
+rule:research.md
+rule:severity.md
+rule:ship-gates.md
+rule:tdd.md
+rule:workflow.md
+localsettings:managed
