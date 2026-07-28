@@ -144,6 +144,10 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// Same reason as LOQUI_DEBUG_DICTATE — the real trigger cannot be scripted. A <select> inside
 	// a Wails webview cannot be clicked from a shell script, so without this the write half of the
 	// settings loop could only ever be checked by hand.
+	wailsApp.Event.On("ui:overlay-geometry", func(e *application.CustomEvent) {
+		u.Log("OVERLAY-GEO", fmt.Sprintf("%v", e.Data))
+	})
+
 	wailsApp.Event.On("ui:nav-probe", func(e *application.CustomEvent) {
 		u.Log("UI-NAV", fmt.Sprintf("%v", e.Data))
 	})

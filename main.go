@@ -35,10 +35,26 @@ var frontend embed.FS
 // Overlay geometry, carried over from the Electron windowOptions: the pill is 176px
 // wide at most, inside a slightly larger transparent window so its own drop shadow
 // has room and is not clipped square at the window edge.
+// THE WINDOW IS BIGGER THAN THE PILL ON PURPOSE, and the amount matters. The pill draws its own
+// rounded drop shadow (the OS window shadow is disabled, because that one would be a square behind a
+// rounded pill), and `body { overflow: hidden }` clips anything that does not fit.
+//
+// Measured: the pill lays out at 64x28 centred in the window, and its shadow — `0 4px 14px` — reaches
+// 18px below it (14 blur + 4 offset) and 14px above. At the old height of 60 the bottom of the shadow
+// landed at 62 and was CUT SQUARE by the window edge, which is exactly what read as "a transparent
+// container behind the pill": a straight horizontal line where a soft shadow should have faded out.
+// Being clipped on one side only, it also made the pill look like it sat too high inside that shape.
+//
+// So the height is the pill plus the shadow's larger reach on both sides — 28 + 2x18 = 64 — with a
+// little slack. The width follows the same rule against the pill's WIDEST state: it grows to
+// max-width 176px when a status word is shown ("reconectando…"), so 176 + 2x18 = 212 fits inside 216.
 const (
 	overlayWidth  = 216
-	overlayHeight = 60
-	overlayMargin = 16 // gap from the bottom of the work area
+	overlayHeight = 68
+	// overlayMargin is the gap from the work area to the WINDOW, so it absorbs the height change
+	// above: 12 + (68-28)/2 puts the pill exactly where 16 + (60-28)/2 did. The pill does not move
+	// on screen; only its shadow stops being cut off.
+	overlayMargin = 12
 )
 
 type windows struct {

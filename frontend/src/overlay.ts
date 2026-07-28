@@ -87,3 +87,25 @@ buildBars();
 render();
 
 Events.Emit("ui:ready", { page: "overlay", title: document.title, bars: BARS });
+
+// Report the real geometry once laid out.
+//
+// A pill that looks off-centre or larger than it should be cannot be diagnosed by reading the CSS:
+// what matters is what the layout engine actually produced inside a 216x60 transparent window. This
+// measures it rather than reasoning about it.
+requestAnimationFrame(() => {
+  const pill = pillEl.getBoundingClientRect();
+  const bars = barsEl.getBoundingClientRect();
+  Events.Emit("ui:overlay-geometry", {
+    window: `${window.innerWidth}x${window.innerHeight}`,
+    pill: `${Math.round(pill.width)}x${Math.round(pill.height)} at ${Math.round(pill.left)},${Math.round(pill.top)}`,
+    bars: `${Math.round(bars.width)}x${Math.round(bars.height)} at ${Math.round(bars.left)},${Math.round(bars.top)}`,
+    labelHidden: getComputedStyle(labelEl).display === "none",
+    pillCentredX: Math.round(
+      pill.left + pill.width / 2 - window.innerWidth / 2,
+    ),
+    pillCentredY: Math.round(
+      pill.top + pill.height / 2 - window.innerHeight / 2,
+    ),
+  });
+});
