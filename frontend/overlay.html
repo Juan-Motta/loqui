@@ -12,7 +12,12 @@
         font: 11px -apple-system, sans-serif; color: #f2f2f7;
         background: rgba(30, 30, 32, 0.92); border-radius: 999px;
         border: 0.5px solid rgba(255, 255, 255, 0.12);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+        /* Deliberately soft. The Electron original used `0 4px 14px rgba(0,0,0,0.45)`, which over a
+           LIGHT background is a strong dark halo — big enough that the pill reads as sitting inside a
+           box rather than floating. Over the dark backgrounds it was designed against that never
+           showed. Lower alpha and a tighter blur keep the pill separated from what is behind it
+           without drawing a shape of their own. */
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
         padding: 0 12px; height: 28px; max-width: 176px;
         box-sizing: border-box; display: flex; align-items: center; gap: 8px;
       }
