@@ -142,6 +142,10 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// never reaches the list is exactly the failure that made the history look lost.
 	// The CLASS NAMES the rendered rows use, so fidelity to the original markup is checkable.
 	// Never carries transcript text — see reportShape in frontend/src/history.ts.
+	wailsApp.Event.On("ui:perms", func(e *application.CustomEvent) {
+		u.Log("PERMS", fmt.Sprintf("%v", e.Data))
+	})
+
 	wailsApp.Event.On("ui:system", func(e *application.CustomEvent) {
 		u.Log("SYS", fmt.Sprintf("%v", e.Data))
 	})

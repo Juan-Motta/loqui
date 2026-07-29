@@ -115,6 +115,7 @@ func main() {
 			})),
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),
+			application.NewService(app.NewPermissionsService()),
 			// The engine does not exist yet — it needs the windows and the tray this very call
 			// creates — so the service resolves it lazily. By the time the page can call it,
 			// startDictation has run.

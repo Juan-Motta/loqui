@@ -37,6 +37,11 @@ import {
 } from "./history.js";
 import { renderAllLanguages, setLanguageSaveHandler } from "./language.js";
 import { paintSystem, setSystemSaveHandler, wireSystem } from "./system.js";
+import {
+  refreshPermissions,
+  setPermissionsChangeHandler,
+  wirePermissions,
+} from "./permissions.js";
 
 console.info(
   "[loqui] settings shell loaded (partial port: nav + engine + keys + history)",
@@ -622,6 +627,9 @@ wireRecordButton();
 wireTabs();
 wireHistory();
 wireSystem();
+wirePermissions();
+// Read once at load so the Permisos tab is already correct when opened, and again on every action.
+void refreshPermissions();
 // The transcripts are on disk regardless of whether the settings payload arrives, so they are read
 // on their own rather than behind it.
 void refreshHistory();
@@ -670,6 +678,11 @@ Settings.Load().then(
       // itself in isolation would leave the rest of the row describing the other service.
       setLanguageSaveHandler(paint);
       setSystemSaveHandler(paint);
+      // A granted microphone is what makes real device NAMES available, so the whole payload is
+      // re-read after a grant rather than only the permissions list.
+      setPermissionsChangeHandler(() => {
+        void Settings.Load().then(paint, () => {});
+      });
       paint(payload);
       wire();
       Events.Emit("ui:painted", { provider: payload.provider });
