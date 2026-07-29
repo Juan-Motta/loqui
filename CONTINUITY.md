@@ -8,12 +8,8 @@
   configura y se usa. El usuario la probó y dice que "se ve bien todo"; quedan detalles menores de
   UI que él pulirá.
 
-- **Next step:** dos acciones, en este orden.
-
-  1. **Mergear `fix/ui-navigation` a `main`** — 13 commits sin mergear, `main` va detrás.
-     `git checkout main && git merge --ff-only fix/ui-navigation` (fast-forward limpio, sin
-     divergencia).
-  2. **Portar la fila del modelo de whisper**, lo único que falta del encargo de fidelidad. Empezar
+- **Next step:** **portar la fila del modelo de whisper**, lo único que falta del encargo de
+  fidelidad (el trabajo de la sesión anterior ya está mergeado en `main`, hasta `14a3241`). Empezar
      por el test rojo de `modelSpec` en Go: portar `../loqui/src/shared/modelSpec.ts` a
      `internal/store/model.go` (nombre del archivo, tamaño esperado, URL de descarga) con tests, y
      sólo después el servicio de descarga con progreso y el DOM de `renderModelInto` en `#modelRow`.
