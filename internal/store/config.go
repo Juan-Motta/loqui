@@ -50,6 +50,14 @@ type Settings struct {
 	Provider string `json:"provider"`
 	// Region is the Azure Speech region.
 	Region string `json:"region"`
+	// AzureService selects which Azure product is in use: "speech" or "openai". They are separate
+	// resources with separate keys and separate required fields, which is why the connection state
+	// cannot be computed from the provider name alone.
+	AzureService string `json:"azureService"`
+	// AzureOpenAiResource and AzureOpenAiDeployment address the Azure OpenAI realtime endpoint,
+	// which is named rather than regional — the reason "azure" has two sub-services here.
+	AzureOpenAiResource   string `json:"azureOpenAiResource"`
+	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
 	// LanguageBySlot holds the dictation languages per provider slot. Per-slot because a
 	// single global list only ever worked for Azure: every other provider silently used
 	// just the first entry.
@@ -117,6 +125,9 @@ func DefaultSettings() Settings {
 		Mode:       "hold",
 		TriggerKey: "fn",
 		Appearance: "system",
+		// Matching the Electron defaults so a settings.json written by either build reads the same.
+		AzureService:          "speech",
+		AzureOpenAiDeployment: "gpt-realtime-whisper",
 	}
 }
 

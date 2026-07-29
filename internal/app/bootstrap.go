@@ -14,9 +14,11 @@ package app
 
 import (
 	"os"
+	"runtime"
 	"sync"
 
 	"github.com/Juan-Motta/loqui-go/internal/audio"
+	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
@@ -64,14 +66,20 @@ type SettingsPayload struct {
 	// Region is the Azure Speech region. Carried even though only one engine uses it: Azure
 	// needs it as much as it needs a key, and a form painted without it would blank a field
 	// the user already filled in — then wipe a working configuration on the next save.
-	Region         string              `json:"region"`
-	Mode           string              `json:"mode"`
-	TriggerKey     string              `json:"triggerKey"`
-	Appearance     string              `json:"appearance"`
-	AppLanguage    string              `json:"appLanguage"`
-	Onboarded      bool                `json:"onboarded"`
-	LanguageBySlot map[string][]string `json:"languageBySlot"`
-	InputDeviceID  string              `json:"inputDeviceId"`
+	Region string `json:"region"`
+	// AzureService, AzureOpenAiResource and AzureOpenAiDeployment are the second Azure product's
+	// configuration. Carried because the connection state depends on which sub-service is selected:
+	// the realtime endpoint is addressed by resource name, the speech one by region.
+	AzureService          string              `json:"azureService"`
+	AzureOpenAiResource   string              `json:"azureOpenAiResource"`
+	AzureOpenAiDeployment string              `json:"azureOpenAiDeployment"`
+	Mode                  string              `json:"mode"`
+	TriggerKey            string              `json:"triggerKey"`
+	Appearance            string              `json:"appearance"`
+	AppLanguage           string              `json:"appLanguage"`
+	Onboarded             bool                `json:"onboarded"`
+	LanguageBySlot        map[string][]string `json:"languageBySlot"`
+	InputDeviceID         string              `json:"inputDeviceId"`
 
 	// ---- computed state ----
 	Keys        []KeyState       `json:"keys"`
@@ -90,6 +98,15 @@ type SettingsPayload struct {
 	// put the same facts in two languages — the duplication this payload exists to remove.
 	Providers    []ProviderOption  `json:"providers"`
 	AzureRegions []settings.Region `json:"azureRegions"`
+	// Connections is the Conexiones list: one row per engine with its kind line and its readiness
+	// state, computed by store.ConnectionRows.
+	//
+	// It replaces status text the page used to invent. Those two are not the same thing: the real
+	// model distinguishes "configured but not selected" from "nothing to configure" from "cannot run
+	// on this machine at all", and a page guessing from key presence alone collapsed them.
+	Connections []store.ConnectionRow `json:"connections"`
+	// ProviderHint is the paragraph under the picker describing the ACTIVE engine.
+	ProviderHint string `json:"providerHint"`
 }
 
 // Bootstrap computes the payload. Every dependency that touches the machine is a field
@@ -165,24 +182,62 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		devicesError = err.Error()
 	}
 
-	return SettingsPayload{
-		Provider:       cfg.Provider,
-		Region:         cfg.Region,
-		Mode:           cfg.Mode,
-		TriggerKey:     cfg.TriggerKey,
-		Appearance:     cfg.Appearance,
-		AppLanguage:    cfg.AppLanguage,
-		Onboarded:      cfg.Onboarded,
-		LanguageBySlot: languages(cfg),
-		InputDeviceID:  cfg.InputDeviceID,
+	keys := b.keyStates()
 
-		Keys:         b.keyStates(),
+	return SettingsPayload{
+		Provider:              cfg.Provider,
+		Region:                cfg.Region,
+		AzureService:          cfg.AzureService,
+		AzureOpenAiResource:   cfg.AzureOpenAiResource,
+		AzureOpenAiDeployment: cfg.AzureOpenAiDeployment,
+		Mode:                  cfg.Mode,
+		TriggerKey:            cfg.TriggerKey,
+		Appearance:            cfg.Appearance,
+		AppLanguage:           cfg.AppLanguage,
+		Onboarded:             cfg.Onboarded,
+		LanguageBySlot:        languages(cfg),
+		InputDeviceID:         cfg.InputDeviceID,
+
+		Keys:         keys,
 		Permissions:  b.perms(),
 		InputDevices: devices,
 		DevicesError: devicesError,
 		DataDir:      b.store.Dir(),
 		Providers:    providerOptions(),
 		AzureRegions: settings.Regions,
+		// Computed from the SAME key states the payload reports, not from a second read: two reads
+		// could disagree, and a row saying "Sin configurar" beside a field saying "clave guardada" is
+		// the kind of contradiction that makes a user distrust the whole screen.
+		Connections:  store.ConnectionRows(cfg, presenceMap(keys), b.hostCapabilities()),
+		ProviderHint: store.ProviderHint(cfg.Provider),
+	}
+}
+
+// presenceMap reduces the key states to what the connection model needs: which slots hold a usable
+// credential. "Unreadable" counts as absent HERE, and only here — the Keychain could not be
+// consulted, so the honest thing for a readiness badge is not to claim readiness. The key field
+// itself still shows the three-way state, which is where that distinction matters.
+func presenceMap(states []KeyState) map[store.KeySlot]bool {
+	out := make(map[store.KeySlot]bool, len(states))
+	for _, k := range states {
+		out[store.KeySlot(k.Slot)] = k.Status == store.KeyPresent
+	}
+	return out
+}
+
+// hostCapabilities is what this machine can actually run.
+//
+// Every field is optional by design: an unknown condition must not disqualify an engine. So a
+// helper that cannot be found is reported as a definite false, while a version that cannot be read
+// stays zero and the model ignores it.
+func (b *Bootstrap) hostCapabilities() store.HostCapabilities {
+	return store.HostCapabilities{
+		Platform: runtime.GOOS,
+		OSMajor:  macos.ProductVersionMajor(),
+		Helpers: map[string]bool{
+			"whisper-stt": HelperPath("whisper-stt") != "",
+			"macos-stt":   HelperPath("macos-stt") != "",
+		},
 	}
 }
 

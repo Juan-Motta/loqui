@@ -333,9 +333,18 @@ function paint(p: SettingsPayload): void {
     region.value = p.region;
   }
 
-  const availability = new Map(
-    (p.providers ?? []).map((prov) => [prov.id, prov.available]),
-  );
+  // The Conexiones model, computed in Go (store.ConnectionRows). What the page used to do instead
+  // was guess a status from key presence, which collapsed three different situations —
+  // "configured but not selected", "nothing to configure", "cannot run on this machine" — into one
+  // label. The row carries its own state, kind line and text.
+  const rows = new Map((p.connections ?? []).map((r) => [r.id, r]));
+  // The states the model produced, so fidelity is checkable from the log rather than by eye.
+  Events.Emit("ui:connections", {
+    rows: (p.connections ?? []).map((r) => `${r.id}=${r.state}`).join(" "),
+    hint: p.providerHint !== "",
+  });
+  const hint = $<HTMLElement>("providerHint");
+  if (hint) hint.textContent = p.providerHint;
 
   // The Azure card's subservice picker. An option whose slot the app cannot read must not be
   // selectable: this form writes to KEY_SLOT_BY_PROVIDER["azure"], so choosing the unported
@@ -365,28 +374,38 @@ function paint(p: SettingsPayload): void {
     ".conn[data-provider]",
   )) {
     const provider = card.dataset.provider ?? "";
-    const active = provider === p.provider;
-    // Unknown to the backend counts as unavailable: a card in the markup for an engine Go does not
-    // list is not something to offer.
-    const available = availability.get(provider) ?? false;
+    const row = rows.get(provider);
+    // A card the backend does not describe is treated as unsupported: the markup ships six, and Go
+    // is the authority on which of them this machine can run.
+    const state = row?.state ?? "unsupported";
+    const active = state === "active";
+    const available = state !== "unsupported";
+
     card.classList.toggle("is-active", active);
-    // The markup already styles .is-unsupported by hiding the Configurar button.
     card.classList.toggle("is-unsupported", !available);
+
+    // The kind line — what the engine IS. For Azure it follows the selected sub-service.
+    const kind = card.querySelector<HTMLElement>(".conn-kind");
+    if (kind) kind.textContent = row?.kind ?? "";
+
+    // The badge carries the STATE AS A CLASS, which is what colours its dot; the label is the
+    // model's own wording. Setting only textContent, as this page did before, left every badge
+    // styled the same regardless of whether the engine was ready.
+    const badge = card.querySelector<HTMLElement>(".conn-state");
+    if (badge) {
+      badge.className = "conn-state " + state;
+      badge.innerHTML = `<span class="dot"></span>${escapeHtml(row?.label ?? "")}`;
+    }
 
     const slot = KEY_SLOT_BY_PROVIDER[provider];
     const key = slot ? statusBySlot.get(slot) : undefined;
 
-    const state = card.querySelector<HTMLElement>(".conn-state");
-    if (state)
-      state.textContent = available
-        ? connStateLabel(active, key)
-        : "no disponible aún";
-
-    // "Usar este motor" is pointless on the engine already in use, and must not be OFFERED for one
-    // that cannot dictate. The backend refuses it either way; presenting a button whose outcome is
-    // known to be an error is just a worse way to say the same thing.
-    const use = card.querySelector<HTMLButtonElement>(".conn-use");
-    if (use) use.disabled = active || !available;
+    // "Usar este motor" is HIDDEN — not disabled — on the engine already in use and on one that
+    // cannot run here, matching the original. A disabled button still occupies the row and invites
+    // the question of why it is dead; an absent one does not.
+    for (const use of card.querySelectorAll<HTMLButtonElement>(".conn-use")) {
+      use.style.display = active || !available ? "none" : "";
+    }
 
     // The key field stays EMPTY even when a key is stored: the payload carries presence, never
     // the secret, so there is nothing to prefill. The label beside it says whether one is there.
@@ -414,31 +433,14 @@ function paint(p: SettingsPayload): void {
   }
 }
 
-// connStateLabel is what a card's badge says.
+// The badge's wording is NOT decided here any more. It comes from store.ConnectionRows, which is the
+// ported model — a label invented in the page collapsed "configured but not selected", "nothing to
+// configure" and "cannot run here" into the same sentence.
 //
-// An unreadable credential gets its OWN wording rather than "sin clave". The two send the user to
-// completely different places — one means type your key in, the other means the signing identity
-// is broken and typing it in will not help — and telling someone to retype a key that is already
-// stored is worse than saying nothing.
-function connStateLabel(
-  active: boolean,
-  k?: { status: string; fromEnv: boolean },
-): string {
-  if (!k) return active ? "en uso" : "";
-  const prefix = active ? "en uso · " : "";
-  switch (k.status) {
-    case "present":
-      return (
-        prefix +
-        (k.fromEnv ? "clave por variable de entorno" : "clave guardada")
-      );
-    case "absent":
-      return prefix + "sin clave";
-    default:
-      return prefix + "no se pudo leer el Keychain";
-  }
-}
-
+// The three-way key state still gets its own wording, below, because that distinction lives in the
+// FIELD rather than the badge: "the Keychain did not answer" sends the user somewhere completely
+// different from "you never set a key", and telling them to retype a stored credential is worse
+// than saying nothing.
 function keyStateLabel(status?: string, fromEnv?: boolean): string {
   switch (status) {
     case "present":
