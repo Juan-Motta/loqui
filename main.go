@@ -103,6 +103,15 @@ func main() {
 					}
 					return applyTriggerChange(settingsUI, trigger)
 				},
+				AppearanceChanged: func(appearance string) {
+					// Both windows: the pill is transparent, but its own appearance still decides how
+					// system-drawn chrome inside it resolves.
+					for _, w := range []*application.WebviewWindow{wins.settings, wins.overlay} {
+						if w != nil {
+							macos.SetWindowAppearance(w.NativeWindow(), appearance)
+						}
+					}
+				},
 			})),
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),

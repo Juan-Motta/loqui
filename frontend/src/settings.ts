@@ -36,6 +36,7 @@ import {
   wireHistory,
 } from "./history.js";
 import { renderAllLanguages, setLanguageSaveHandler } from "./language.js";
+import { paintSystem, setSystemSaveHandler, wireSystem } from "./system.js";
 
 console.info(
   "[loqui] settings shell loaded (partial port: nav + engine + keys + history)",
@@ -436,6 +437,7 @@ function paint(p: SettingsPayload): void {
   // The per-engine language controls, drawn last because they insert themselves into each row's
   // form. Their shape, options and copy all come from the payload — see frontend/src/language.ts.
   renderAllLanguages(p);
+  paintSystem(p);
 }
 
 // The badge's wording is NOT decided here any more. It comes from store.ConnectionRows, which is the
@@ -619,6 +621,7 @@ buildWave();
 wireRecordButton();
 wireTabs();
 wireHistory();
+wireSystem();
 // The transcripts are on disk regardless of whether the settings payload arrives, so they are read
 // on their own rather than behind it.
 void refreshHistory();
@@ -666,6 +669,7 @@ Settings.Load().then(
       // control: changing Azure's sub-service moves which slot the row edits, so a control patching
       // itself in isolation would leave the rest of the row describing the other service.
       setLanguageSaveHandler(paint);
+      setSystemSaveHandler(paint);
       paint(payload);
       wire();
       Events.Emit("ui:painted", { provider: payload.provider });

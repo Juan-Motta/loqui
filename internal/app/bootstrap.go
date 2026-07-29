@@ -348,6 +348,9 @@ type SettingsService struct {
 	// fn listener is a child process started at launch from the stored trigger, so without this the
 	// new shortcut is saved while the old one keeps working.
 	onTriggerChanged func(trigger string) error
+	// onAppearanceChanged repaints the live windows. Same reason again: the appearance is applied once
+	// at construction, so a persisted-only change waits for the next launch.
+	onAppearanceChanged func(appearance string)
 }
 
 // LiveHooks lets main connect the running engine and listener without this package importing Wails.
@@ -361,13 +364,16 @@ type LiveHooks struct {
 	ModeChanged func(mode string)
 	// TriggerChanged re-registers the shortcut listener, reporting why if it could not.
 	TriggerChanged func(trigger string) error
+	// AppearanceChanged applies the light/dark preference to the open windows.
+	AppearanceChanged func(appearance string)
 }
 
 func NewSettingsService(st *store.Store, hooks LiveHooks) *SettingsService {
 	return &SettingsService{
-		bootstrap:        NewBootstrap(st),
-		onModeChanged:    hooks.ModeChanged,
-		onTriggerChanged: hooks.TriggerChanged,
+		bootstrap:           NewBootstrap(st),
+		onModeChanged:       hooks.ModeChanged,
+		onTriggerChanged:    hooks.TriggerChanged,
+		onAppearanceChanged: hooks.AppearanceChanged,
 	}
 }
 

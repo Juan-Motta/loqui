@@ -166,6 +166,61 @@ func (s *SettingsService) applyMode(mode string) {
 	}
 }
 
+// SetAppearance stores the light/dark preference. Bound as Settings.SetAppearance().
+//
+// Applied to the LIVE windows as well as persisted. The window's appearance is set once at
+// construction from the stored value, so a change that is only written to disk takes effect at the
+// next launch — the user picks "Oscuro", nothing happens, and the setting looks broken.
+func (s *SettingsService) SetAppearance(appearance string) WriteResult {
+	if appearance != "system" && appearance != "light" && appearance != "dark" {
+		return s.failed("apariencia desconocida: %q", appearance)
+	}
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Appearance = appearance
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar la apariencia: %v", err)
+	}
+	if s.onAppearanceChanged != nil {
+		s.onAppearanceChanged(appearance)
+	}
+	return s.ok()
+}
+
+// SetAppLanguage stores the interface language. Bound as Settings.SetAppLanguage().
+//
+// Empty means "follow the OS", which is a real choice and not a missing value.
+func (s *SettingsService) SetAppLanguage(language string) WriteResult {
+	if language != "" && language != "es" && language != "en" {
+		return s.failed("idioma de interfaz desconocido: %q", language)
+	}
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AppLanguage = language
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el idioma de la interfaz: %v", err)
+	}
+	return s.ok()
+}
+
+// SetInputDevice stores the chosen microphone. Bound as Settings.SetInputDevice().
+//
+// NOT validated against the enumerated list, deliberately. A device id can be stored while the
+// device is unplugged, and refusing it would mean a user cannot keep their usual microphone selected
+// while working on battery with it detached. The capture path already falls back to the system
+// default when the id no longer resolves.
+//
+// Empty means the system default.
+func (s *SettingsService) SetInputDevice(id string) WriteResult {
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.InputDeviceID = id
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el dispositivo: %v", err)
+	}
+	return s.ok()
+}
+
 // SetLanguages stores one slot's dictation languages. Bound as Settings.SetLanguages().
 //
 // PER SLOT, not per whole settings object, matching the original's light `settings:language` channel.
