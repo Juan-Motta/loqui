@@ -13,7 +13,11 @@ import (
 )
 
 // homeRecentLimit is how many transcripts the Home activity card shows.
-const homeRecentLimit = 5
+//
+// Eight, matching the Electron original's `.slice(0, 8)`. Not a free choice: the card is sized for
+// that many rows in the stylesheet this port inherited, so a smaller number leaves it looking
+// short and a larger one overflows it.
+const homeRecentLimit = 8
 
 // historyReadLimit bounds what a single query reads off disk.
 //

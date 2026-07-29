@@ -32,9 +32,8 @@ import (
 //go:embed all:frontend/dist
 var frontend embed.FS
 
-// Overlay geometry, carried over from the Electron windowOptions: the pill is 176px
-// wide at most, inside a slightly larger transparent window so its own drop shadow
-// has room and is not clipped square at the window edge.
+// Overlay geometry, carried over from the Electron windowOptions.
+//
 // THE WINDOW IS BIGGER THAN THE PILL ON PURPOSE, and the amount matters. The pill draws its own
 // rounded drop shadow (the OS window shadow is disabled, because that one would be a square behind a
 // rounded pill), and `body { overflow: hidden }` clips anything that does not fit.
@@ -91,6 +90,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(app.NewSettingsService(st)),
 			application.NewService(app.NewHistoryService(st)),
+			application.NewService(app.NewClipboardService()),
 			// The engine does not exist yet — it needs the windows and the tray this very call
 			// creates — so the service resolves it lazily. By the time the page can call it,
 			// startDictation has run.

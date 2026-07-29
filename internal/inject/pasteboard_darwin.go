@@ -114,7 +114,11 @@ static bool loqui_ax_trusted(void) {
 */
 import "C"
 
-import "unsafe"
+import (
+	"errors"
+	"strings"
+	"unsafe"
+)
 
 // pasteboardSnapshot is a retained copy of the clipboard, plus the change count it had.
 type pasteboardSnapshot struct {
@@ -169,4 +173,22 @@ func sendPasteKeystroke() {
 // the focused element. Both the paste and the secure-field guard depend on it.
 func AccessibilityTrusted() bool {
 	return bool(C.loqui_ax_trusted())
+}
+
+// CopyText puts text on the clipboard and leaves it there.
+//
+// DELIBERATELY NOT THE INJECTION PATH. Injection writes the clipboard, presses Cmd+V and then
+// RESTORES what the user had, because the clipboard was only ever a transport. A copy is the
+// opposite: the whole point is that the text stays, so nothing is saved or put back.
+//
+// The change count is discarded for the same reason — it exists so the injection guard can tell
+// whether the user copied something during the paste window, and there is no such window here.
+func CopyText(text string) error {
+	if strings.TrimSpace(text) == "" {
+		// Refused rather than silently clearing the clipboard: a copy button that wipes what the
+		// user had, because the row it belonged to happened to be empty, is worse than doing nothing.
+		return errors.New("inject: nothing to copy")
+	}
+	writeText(text)
+	return nil
 }

@@ -135,6 +135,15 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	})
 	// How many transcripts the Historial actually painted. Worth a line: a stored transcript that
 	// never reaches the list is exactly the failure that made the history look lost.
+	// The CLASS NAMES the rendered rows use, so fidelity to the original markup is checkable.
+	// Never carries transcript text — see reportShape in frontend/src/history.ts.
+	wailsApp.Event.On("ui:hist-shape", func(e *application.CustomEvent) {
+		u.Log("HIST-SHAPE", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:recent-shape", func(e *application.CustomEvent) {
+		u.Log("RECENT-SHAPE", fmt.Sprintf("%v", e.Data))
+	})
+
 	wailsApp.Event.On("ui:history", func(e *application.CustomEvent) {
 		u.Log("UI-HIST", fmt.Sprintf("%v", e.Data))
 	})
