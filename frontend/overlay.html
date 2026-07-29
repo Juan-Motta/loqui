@@ -11,13 +11,18 @@
       #pill {
         font: 11px -apple-system, sans-serif; color: #f2f2f7;
         background: rgba(30, 30, 32, 0.92); border-radius: 999px;
-        border: 0.5px solid rgba(255, 255, 255, 0.12);
+        /* NO BORDER. The Electron original had `0.5px solid rgba(255,255,255,0.12)` to lift the pill
+           off dark backgrounds. Two problems with it here: a HALF-pixel border on a 1x display is a
+           rendering edge case — the browser draws a full pixel at reduced alpha, a light hairline
+           where a crisp half-pixel was intended — and on a light background it contributes nothing
+           except one more transition at the rim. The pill is near-black; it does not need help being
+           seen. */
         /* Deliberately soft. The Electron original used `0 4px 14px rgba(0,0,0,0.45)`, which over a
            LIGHT background is a strong dark halo — big enough that the pill reads as sitting inside a
            box rather than floating. Over the dark backgrounds it was designed against that never
            showed. Lower alpha and a tighter blur keep the pill separated from what is behind it
            without drawing a shape of their own. */
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
         padding: 0 12px; height: 28px; max-width: 176px;
         box-sizing: border-box; display: flex; align-items: center; gap: 8px;
       }
