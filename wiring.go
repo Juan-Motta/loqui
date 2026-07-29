@@ -87,6 +87,10 @@ func (u *ui) setTrayActive(active bool) {
 // dictation is the running engine, built on ready.
 var dictation *app.Dictation
 
+// settingsUI is the same ui the engine drives, kept package-level so a settings change made after
+// startup can reach the logger and the listener. Set once, by startDictation.
+var settingsUI *ui
+
 // startDictation wires the store, the engine and the fn trigger together.
 //
 // The store arrives from main rather than being opened here: the settings service needs it at
@@ -95,6 +99,7 @@ var dictation *app.Dictation
 // one from the engine.
 func startDictation(wailsApp *application.App, tray *application.SystemTray, st *store.Store) error {
 	u := &ui{wails: wailsApp, tray: tray}
+	settingsUI = u
 	dictation = app.NewDictation(st, u)
 
 	// Log each window announcing itself. See frontend/src/settings.ts for why: a broken
@@ -262,6 +267,33 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 }
 
 var fnListener *hotkey.Listener
+
+// applyTriggerChange restarts the shortcut listener for a newly saved trigger.
+//
+// PERSISTING IS NOT ENOUGH. The fn listener is a CHILD PROCESS started at launch from the stored
+// trigger, so without restarting it the new shortcut is saved while the old one keeps working —
+// which is the most confusing possible outcome: the interface says one thing and the keyboard does
+// another, with nothing to suggest they disagree.
+func applyTriggerChange(u *ui, trigger string) error {
+	// Stopped first and unconditionally: switching away from fn has to release the old listener even
+	// though the new trigger starts nothing.
+	if fnListener != nil {
+		fnListener.Stop()
+		fnListener = nil
+	}
+	if trigger == "fn" {
+		return startFnListener(u)
+	}
+	if trigger != "" {
+		// TODO(port, phase 4): ordinary accelerators. The stored format is Electron's
+		// ("CommandOrControl+Shift+D") and there is no globalShortcut in Go, so this needs a mapping
+		// plus either a hotkey library or an NSEvent monitor. Reported rather than swallowed: the
+		// shortcut IS saved, and the user has to know it will not fire yet.
+		return fmt.Errorf("los atajos que no son fn todavía no están implementados — usa el tray o “Probar dictado”")
+	}
+	u.Log("HOTKEY", "sin atajo configurado")
+	return nil
+}
 
 func startFnListener(u *ui) error {
 	bin, err := globeListenerPath()

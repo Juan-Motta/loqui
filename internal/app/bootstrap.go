@@ -115,6 +115,51 @@ type SettingsPayload struct {
 	// with an "auto" sentinel — and a page picking the list itself is how a picker ends up offering
 	// "es" to an engine that needs "es-CO".
 	LanguageControls []LanguageControl `json:"languageControls"`
+	// Trigger is the state of the activation-shortcut control.
+	Trigger TriggerControl `json:"trigger"`
+}
+
+// TriggerControl is everything the shortcut control needs to draw itself.
+type TriggerControl struct {
+	// Key is the stored accelerator, or "" for no shortcut.
+	Key string `json:"key"`
+	// Label is the short human form: "fn (Globe)", "⌘⇧D", or "Sin atajo".
+	Label string `json:"label"`
+	// SupportsHold is whether hold-to-talk is possible at all with this trigger. The interface must
+	// DISABLE that choice rather than accept it and downgrade underneath the user.
+	SupportsHold bool `json:"supportsHold"`
+	// AllowedModes is the modes this trigger can deliver.
+	AllowedModes []string `json:"allowedModes"`
+	// Note is the sentence under the control, which depends on the trigger actually configured.
+	Note string `json:"note"`
+	// ResetLabel is what the reset button offers, and ShowReset whether offering it means anything —
+	// it is hidden when it would be a no-op, which on macOS means the trigger is already fn.
+	ResetLabel string `json:"resetLabel"`
+	ShowReset  bool   `json:"showReset"`
+}
+
+// triggerControl builds the shortcut control's state.
+//
+// The reset button is macOS-specific for a reason worth keeping: off macOS "Restaurar fn" is not
+// merely useless, it is impossible — ValidateTriggerKey refuses fn there, so the button could only
+// ever produce an error.
+func triggerControl(cfg store.Settings) TriggerControl {
+	mac := runtime.GOOS == "darwin"
+	resetLabel := "Restaurar fn"
+	showReset := mac && !store.IsFnTrigger(cfg.TriggerKey)
+	if !mac {
+		resetLabel = ""
+		showReset = false
+	}
+	return TriggerControl{
+		Key:          cfg.TriggerKey,
+		Label:        store.FormatTrigger(cfg.TriggerKey),
+		SupportsHold: store.SupportsHold(cfg.TriggerKey),
+		AllowedModes: store.AllowedModes(cfg.TriggerKey),
+		Note:         store.TriggerNote(cfg.TriggerKey),
+		ResetLabel:   resetLabel,
+		ShowReset:    showReset,
+	}
 }
 
 // LanguageControl is everything the page needs to draw one slot's language control.
@@ -251,6 +296,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		Connections:      store.ConnectionRows(cfg, presenceMap(keys), b.hostCapabilities()),
 		ProviderHint:     store.ProviderHint(cfg.Provider),
 		LanguageControls: languageControls(cfg),
+		Trigger:          triggerControl(cfg),
 	}
 }
 
@@ -294,10 +340,35 @@ type SettingsService struct {
 	// secretWriter for why the real ones cannot run in a unit test.
 	setSecret    func(store.KeySlot, string) error
 	deleteSecret func(store.KeySlot) error
+
+	// onModeChanged pushes a new mode into the running controller. Persisting alone is not enough:
+	// the engine reads the mode once, at construction.
+	onModeChanged func(mode string)
+	// onTriggerChanged re-registers the shortcut listener. Persisting alone is not enough either: the
+	// fn listener is a child process started at launch from the stored trigger, so without this the
+	// new shortcut is saved while the old one keeps working.
+	onTriggerChanged func(trigger string) error
 }
 
-func NewSettingsService(st *store.Store) *SettingsService {
-	return &SettingsService{bootstrap: NewBootstrap(st)}
+// LiveHooks lets main connect the running engine and listener without this package importing Wails.
+//
+// PASSED AT CONSTRUCTION, not through setter methods, and that is not a style choice: Wails binds
+// every EXPORTED method of a service to the webview. An OnModeChanged method would have been
+// published to anything running script in that window — and it takes a Go func, which cannot be
+// bound at all.
+type LiveHooks struct {
+	// ModeChanged pushes a new mode into the running controller.
+	ModeChanged func(mode string)
+	// TriggerChanged re-registers the shortcut listener, reporting why if it could not.
+	TriggerChanged func(trigger string) error
+}
+
+func NewSettingsService(st *store.Store, hooks LiveHooks) *SettingsService {
+	return &SettingsService{
+		bootstrap:        NewBootstrap(st),
+		onModeChanged:    hooks.ModeChanged,
+		onTriggerChanged: hooks.TriggerChanged,
+	}
 }
 
 // ServiceName is the name Wails uses for this service in its own logs and diagnostics. It does

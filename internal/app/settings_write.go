@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 
 	"github.com/Juan-Motta/loqui-go/internal/settings"
@@ -88,6 +89,81 @@ func (s *SettingsService) SetRegion(region string) WriteResult {
 		return s.failed("no se pudo guardar la región: %v", err)
 	}
 	return s.ok()
+}
+
+// SetTrigger stores the activation shortcut. Bound as Settings.SetTrigger().
+//
+// TWO THINGS BEYOND PERSISTING, and both are the difference between a setting that works and one
+// that looks saved:
+//
+//  1. The MODE is coerced. Only fn reports release, so hold-to-talk is impossible with any other
+//     accelerator — leaving mode="hold" on a trigger that cannot deliver it would start dictations
+//     that never end on their own.
+//  2. The listener is RE-REGISTERED through onTriggerChanged. The fn listener is a child process
+//     started at launch from the stored trigger; without restarting it, the new shortcut is saved and
+//     the old one keeps working, which is the most confusing possible outcome.
+func (s *SettingsService) SetTrigger(trigger string) WriteResult {
+	canonical, err := store.ValidateTriggerKey(trigger, runtime.GOOS)
+	if err != nil {
+		return s.failed("%v", err)
+	}
+
+	var mode string
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.TriggerKey = canonical
+		cfg.Mode = store.CoerceMode(canonical, cfg.Mode)
+		mode = cfg.Mode
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el atajo: %v", err)
+	}
+
+	// The engine and the listener are told AFTER the write, so what they act on is what is stored.
+	s.applyMode(mode)
+	if s.onTriggerChanged != nil {
+		if err := s.onTriggerChanged(canonical); err != nil {
+			// The shortcut IS saved; only the registration failed. Saying so lets the user retry or
+			// pick another, instead of believing the setting did not take.
+			return s.failed("el atajo se guardó, pero no se pudo registrar: %v", err)
+		}
+	}
+	return s.ok()
+}
+
+// SetMode switches between hold and toggle. Bound as Settings.SetMode().
+//
+// Coerced against the current trigger for the same reason SetTrigger coerces: the interface disables
+// the impossible choice, but this binding is reachable regardless of what the page does.
+func (s *SettingsService) SetMode(mode string) WriteResult {
+	if mode != "hold" && mode != "toggle" {
+		return s.failed("modo desconocido: %q", mode)
+	}
+	var stored string
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Mode = store.CoerceMode(cfg.TriggerKey, mode)
+		stored = cfg.Mode
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el modo: %v", err)
+	}
+	s.applyMode(stored)
+	if stored != mode {
+		// Told plainly rather than silently changed: the user asked for hold and got toggle, and the
+		// reason is the trigger they have, not a failure.
+		return s.failed("%s no admite mantener: se guardó en modo Alternar", store.FormatTrigger(s.store().LoadSettings().TriggerKey))
+	}
+	return s.ok()
+}
+
+// applyMode pushes the mode into the RUNNING controller.
+//
+// Load-bearing: the engine reads the mode ONCE, when it is constructed, so a mode that is only
+// persisted takes effect at the next launch. Without this the setting appears to save and the app
+// keeps behaving the old way until restarted.
+func (s *SettingsService) applyMode(mode string) {
+	if s.onModeChanged != nil {
+		s.onModeChanged(mode)
+	}
 }
 
 // SetLanguages stores one slot's dictation languages. Bound as Settings.SetLanguages().

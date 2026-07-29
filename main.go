@@ -26,6 +26,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/app"
 	"github.com/Juan-Motta/loqui-go/internal/assets"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
+	"github.com/Juan-Motta/loqui-go/internal/session"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
 
@@ -88,7 +89,21 @@ func main() {
 		// was no way to configure the app from the interface at all — settings.json had to
 		// be hand-edited and keys passed through env vars.
 		Services: []application.Service{
-			application.NewService(app.NewSettingsService(st)),
+			// The hooks connect the RUNNING engine and listener. Passed at construction rather than
+			// through setters because Wails binds every exported method of a service to the webview.
+			application.NewService(app.NewSettingsService(st, app.LiveHooks{
+				ModeChanged: func(mode string) {
+					if dictation != nil {
+						dictation.Controller().SetMode(session.Mode(mode))
+					}
+				},
+				TriggerChanged: func(trigger string) error {
+					if settingsUI == nil {
+						return nil
+					}
+					return applyTriggerChange(settingsUI, trigger)
+				},
+			})),
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),
 			// The engine does not exist yet — it needs the windows and the tray this very call
