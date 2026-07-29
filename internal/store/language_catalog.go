@@ -97,6 +97,34 @@ func LanguageLabel(code string) string {
 	return code
 }
 
+// LanguageCopy is the heading and explanation above a slot's control.
+//
+// It varies by CAPABILITY, not by engine, because what the user needs told is what the control can
+// do: that Azure switches between several by itself, that "automatic" means no language is sent at
+// all, or that Apple's engine cannot detect and so needs a choice. Ported verbatim.
+type LanguageCopy struct {
+	Label string `json:"label"`
+	Desc  string `json:"desc"`
+}
+
+var languageCopy = map[CapabilityKind]LanguageCopy{
+	CapMulti: {
+		Label: "Idiomas del dictado",
+		Desc:  "Azure Speech alterna entre ellos automáticamente (LID continuo). Un locale por idioma; hasta 10.",
+	},
+	CapAutoOrOne: {
+		Label: "Idioma del dictado",
+		Desc:  "Con detección automática no se envía ningún idioma y el proveedor lo deduce del audio.",
+	},
+	CapOneRequired: {
+		Label: "Idioma del dictado",
+		Desc:  "El reconocimiento on-device de Apple necesita un idioma concreto: no puede autodetectar.",
+	},
+}
+
+// LanguageCopyFor is the copy for a slot's control.
+func LanguageCopyFor(slot string) LanguageCopy { return languageCopy[LangCapabilityFor(slot).Kind] }
+
 // LanguageOptionsFor is the list a slot's control should offer, given its capability.
 //
 // It is the one place that maps capability to value space, so a picker cannot end up offering base

@@ -90,6 +90,37 @@ func (s *SettingsService) SetRegion(region string) WriteResult {
 	return s.ok()
 }
 
+// SetLanguages stores one slot's dictation languages. Bound as Settings.SetLanguages().
+//
+// PER SLOT, not per whole settings object, matching the original's light `settings:language` channel.
+// The reason is concrete: language is per engine, so validating the whole object would let one
+// misconfigured engine block editing another's language — the user could not fix Azure's region
+// without also satisfying whatever is wrong with Grok.
+//
+// The value is validated against the slot's CAPABILITY, and the message is shown verbatim: a full
+// locale sent to an API expecting "es", or "auto" sent to an engine that cannot detect, would
+// otherwise be accepted here and rejected mid-dictation.
+func (s *SettingsService) SetLanguages(slot string, values []string) WriteResult {
+	valid, err := store.ValidateLanguagesFor(slot, values)
+	if err != nil {
+		return s.failed("%v", err)
+	}
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		// The map is replaced rather than mutated in place: LoadSettings may hand back the defaults
+		// map itself, and writing into that would change the defaults for the rest of the process.
+		next := make(map[string][]string, len(cfg.LanguageBySlot)+1)
+		for k, v := range cfg.LanguageBySlot {
+			next[k] = v
+		}
+		next[slot] = valid
+		cfg.LanguageBySlot = next
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el idioma: %v", err)
+	}
+	return s.ok()
+}
+
 // SetKey stores one provider's credential in the Keychain. Bound as Settings.SetKey().
 //
 // The secret is never logged and never echoed back: the payload carries presence only.

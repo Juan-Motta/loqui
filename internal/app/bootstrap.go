@@ -107,6 +107,46 @@ type SettingsPayload struct {
 	Connections []store.ConnectionRow `json:"connections"`
 	// ProviderHint is the paragraph under the picker describing the ACTIVE engine.
 	ProviderHint string `json:"providerHint"`
+	// LanguageControls is one entry per language slot: the capability, its copy, the options it may
+	// offer and what is currently chosen.
+	//
+	// The page draws a control from this and decides nothing. That matters here more than elsewhere:
+	// the three capabilities take three different VALUE SPACES — full locales, base codes, or either
+	// with an "auto" sentinel — and a page picking the list itself is how a picker ends up offering
+	// "es" to an engine that needs "es-CO".
+	LanguageControls []LanguageControl `json:"languageControls"`
+}
+
+// LanguageControl is everything the page needs to draw one slot's language control.
+type LanguageControl struct {
+	Slot string               `json:"slot"`
+	Kind store.CapabilityKind `json:"kind"`
+	// Max is the ceiling for the multi capability; zero for the others.
+	Max      int                    `json:"max"`
+	Label    string                 `json:"label"`
+	Desc     string                 `json:"desc"`
+	Options  []store.LanguageOption `json:"options"`
+	Selected []string               `json:"selected"`
+}
+
+// languageControls builds one control per slot from the settings already loaded.
+func languageControls(cfg store.Settings) []LanguageControl {
+	byslot := languages(cfg)
+	out := make([]LanguageControl, 0, len(store.AllLanguageSlots))
+	for _, slot := range store.AllLanguageSlots {
+		rule := store.LangCapabilityFor(slot)
+		copy := store.LanguageCopyFor(slot)
+		out = append(out, LanguageControl{
+			Slot:     slot,
+			Kind:     rule.Kind,
+			Max:      rule.Max,
+			Label:    copy.Label,
+			Desc:     copy.Desc,
+			Options:  store.LanguageOptionsFor(slot),
+			Selected: byslot[slot],
+		})
+	}
+	return out
 }
 
 // Bootstrap computes the payload. Every dependency that touches the machine is a field
@@ -208,8 +248,9 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		// Computed from the SAME key states the payload reports, not from a second read: two reads
 		// could disagree, and a row saying "Sin configurar" beside a field saying "clave guardada" is
 		// the kind of contradiction that makes a user distrust the whole screen.
-		Connections:  store.ConnectionRows(cfg, presenceMap(keys), b.hostCapabilities()),
-		ProviderHint: store.ProviderHint(cfg.Provider),
+		Connections:      store.ConnectionRows(cfg, presenceMap(keys), b.hostCapabilities()),
+		ProviderHint:     store.ProviderHint(cfg.Provider),
+		LanguageControls: languageControls(cfg),
 	}
 }
 

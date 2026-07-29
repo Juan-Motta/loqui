@@ -47,6 +47,12 @@ type ConnectionRow struct {
 	Kind  string          `json:"kind"`
 	State ConnectionState `json:"state"`
 	Label string          `json:"label"`
+	// LangSlot is the language slot this row edits, resolved HERE rather than in the page.
+	//
+	// It has to travel with the row because Azure's slot depends on its sub-service: switching Speech
+	// to OpenAI realtime changes which slot the row is editing, and a page reimplementing that rule
+	// would silently save a language into the other service's slot.
+	LangSlot string `json:"langSlot"`
 }
 
 // connections is the engines and their order. The page paints them top to bottom, so the order is
@@ -228,12 +234,13 @@ func ConnectionRows(s Settings, keys map[KeySlot]bool, caps HostCapabilities) []
 	for _, c := range connections {
 		state := ConnectionStateFor(c.id, s, keys, caps)
 		out = append(out, ConnectionRow{
-			ID:    c.id,
-			Name:  c.name,
-			Cloud: c.cloud,
-			Kind:  kindOf(c.id, s),
-			State: state,
-			Label: connectionLabels[state],
+			ID:       c.id,
+			Name:     c.name,
+			Cloud:    c.cloud,
+			Kind:     kindOf(c.id, s),
+			State:    state,
+			Label:    connectionLabels[state],
+			LangSlot: LangSlotFor(c.id, s.AzureService),
 		})
 	}
 	return out
