@@ -3,148 +3,131 @@
 > The first thing to read on a new session (auto-loaded via `CLAUDE.md` / `AGENTS.md`).
 > Keep it current and SMALL; refresh it with the `checkpoint` skill before closing a session.
 
-- **Focus:** port de **Loqui** (Electron/TS, en `../loqui`) a **Go + Wails v3**, sólo macOS
-  arm64. Fases 0-3 hechas salvo dos proveedores; **el port está mergeado en `main`**. Ahora
-  **fase 4: la UI**, con la primera costura ya puesta.
+- **Focus:** port de **Loqui** (Electron/TS, en `../loqui`) a **Go + Wails v3**, sólo macOS arm64.
+  Fases 0-3 hechas salvo dos proveedores. **Fase 4 (la UI) casi cerrada:** la app se navega, se
+  configura y se usa. El usuario la probó y dice que "se ve bien todo"; quedan detalles menores de
+  UI que él pulirá.
 
-- **Next step:** seguir portando la vista de Ajustes contra la misma costura. El lazo ya está
-  cerrado para **motor + key + región**; lo que falta en esta pantalla son los **selectores de
-  idioma por slot** (el payload ya trae `languageBySlot` con los siete slots y sus defaults; falta
-  el setter y la **validación por capacidad** — cuántos idiomas acepta cada motor), y después
-  **tecla de activación**, **apariencia**, **dispositivo de entrada** y el **modo** hold/toggle.
+- **Next step:** dos acciones, en este orden.
 
-  Dos cosas que hay que saber antes de tocarlo:
-  1. **El modo se lee UNA vez, al construir el motor** (`app.NewDictation` hace
-     `session.Mode(st.LoadSettings().Mode)`), así que un `SetMode` que sólo persista **no tendrá
-     efecto** hasta reiniciar. Hay que decidir si el controlador relee o si se le notifica.
-  2. **Todo setter nuevo va por `store.UpdateSettings`**, nunca Load-then-Save: son dos secciones
-     críticas distintas y Wails despacha cada llamada en su propia goroutine. Hay un test de 50
-     rondas que lo caza.
-
-  Después de Ajustes: **historial**, **About** y el **onboarding**. Y el que es load-bearing:
-  **modelSpec + descarga del modelo de whisper**, porque sin modelo no arranca y hoy no hay UI
-  para bajarlo.
+  1. **Mergear `fix/ui-navigation` a `main`** — 13 commits sin mergear, `main` va detrás.
+     `git checkout main && git merge --ff-only fix/ui-navigation` (fast-forward limpio, sin
+     divergencia).
+  2. **Portar la fila del modelo de whisper**, lo único que falta del encargo de fidelidad. Empezar
+     por el test rojo de `modelSpec` en Go: portar `../loqui/src/shared/modelSpec.ts` a
+     `internal/store/model.go` (nombre del archivo, tamaño esperado, URL de descarga) con tests, y
+     sólo después el servicio de descarga con progreso y el DOM de `renderModelInto` en `#modelRow`.
+     Es **load-bearing**: sin `ggml-small.bin` whisper no arranca, y hoy sólo existe bajarlo con
+     `./scripts/build-whisper-stt.sh`.
 
 - **Blockers:**
-  1. **Todo está commiteado sólo en local.** Este repo **no tiene remoto** (`git remote -v`
-     vacío), así que no hay push ni PR. El usuario dijo explícitamente que **lo configura
-     después**, así que no es una decisión pendiente que bloquee el trabajo — pero sigue siendo
-     cierto que no hay copia fuera de esta máquina. Cuando toque: el module path dice
-     `github.com/Juan-Motta/loqui-go` y `gh` está autenticado como `Juan-Andres-LM`, y crear el
-     repo publicaría el código, así que hay que elegir owner + público/privado.
-  2. **Firma ad-hoc de desarrollo.** Implicada en tres fallos: el Keychain no responde (de ahí
-     las escotillas `LOQUI_*_KEY`), los permisos se revocan en cada rebuild, y probablemente el
-     motor de Apple. Decisión pendiente: certificado self-signed fijo vs Developer ID.
-  3. **Keys de nube.** La de Azure de `loqui` está marcada como expuesta; de xAI no hay ninguna.
-     Sin ellas no se verifica transcripción real por Azure ni por Grok (el resto de esas rutas sí
-     está probado).
+  1. **Sin remoto.** `git remote -v` vacío: no hay copia fuera de esta máquina. El usuario dijo que
+     lo configura después. Cuando toque: el module path dice `github.com/Juan-Motta/loqui-go` pero
+     `gh` está autenticado como `Juan-Andres-LM`, y crear el repo publicaría el código → hace falta
+     elegir owner + público/privado.
+  2. **Firma ad-hoc.** Implicada en tres síntomas: el Keychain no responde (de ahí las escotillas
+     `LOQUI_*_KEY`), los permisos se revocan en cada rebuild, y probablemente el motor de Apple.
+     Arreglarla haría desaparecer también el residuo declarado del Keychain. Decisión pendiente:
+     self-signed fijo vs Developer ID.
+  3. **Keys de nube.** La de Azure está marcada como expuesta; de xAI no hay ninguna. Sin ellas no
+     se verifica transcripción real por esas rutas.
 
-- **Deuda, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un
-  `tsconfig.json` con opciones de TS5 (`verbatimModuleSyntax`, `moduleResolution: bundler`): `tsc`
-  no puede leer la config y vite/esbuild borra los tipos sin validarlos. Encontrado por la
-  revisión de codex y verificado. La fase 4 va a escribir mucho TS contra DTOs generados
-  (nullable), así que **conviene subir typescript antes** de portar `settings.ts` en serio.
+- **Deuda, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un `tsconfig.json`
+  con opciones de TS5, así que `tsc` no puede leer la config y vite borra los tipos sin validarlos.
+  Ya se escribieron ~1500 líneas de TS sin red. **Subir typescript antes de escribir más.**
 
-- **Deuda conocida, con dueño:** **dos bugs preexistentes** en `internal/session` +
-  `internal/app` que afectan a Azure **hoy**, encontrados por la revisión cruzada de Grok y
-  verificados en el código. Van en su propio cambio; están al final de
-  `docs/plans/grok-stt-provider.md` con `file:line`:
-  1. el presupuesto de reintentos no acota nada si la conexión llega a abrir
-     (`controller.go:278` resetea `reconnectAttempt` en cada `Started`) ⇒ bucle de gasto contra un
-     servicio que factura por hora;
-  2. la reconexión filtra la captura anterior (`controller.go:359` llama a `StartEngine` sin
-     `StopEngine`; `dictation.go:115` y `:359` sobreescriben los únicos handles).
+- **Deuda conocida, con dueño:** dos bugs preexistentes en `internal/session` que afectan a Azure
+  **hoy** — el presupuesto de reintentos no acota nada si la conexión abre (bucle de gasto contra un
+  servicio que factura por hora) y la reconexión filtra la captura anterior. Con `file:line` al final
+  de `docs/plans/grok-stt-provider.md`. Van en su propio cambio.
 
-- **Active workflow:** ninguno. Los dos cambios de la fase 4 se cerraron: el payload en `bd17cd8` y
-  los setters en `74d077a`. El registro está en `.workflow/state.md` (**gitignored**, así que un clon
-  nuevo no lo tiene).
-- **Updated:** 2026-07-28
+- **Active workflow:** ninguno. El último cerrado (los setters de Ajustes) está en
+  `.workflow/state.md` — **gitignored**, así que un clon nuevo no lo tiene.
+- **Updated:** 2026-07-29
 
 ## Handoff notes
 
-0. **La app YA se configura desde la interfaz.** El lazo completo funciona para motor, key y región:
-   `Settings.Load()` da el estado, los setters lo cambian y devuelven el payload repintado.
-   Verificado en la app empaquetada. Al añadir campos o métodos: `internal/app/bootstrap.go` y
-   `internal/app/settings_write.go`, y **regenerar bindings** con
+1. **La UI funciona y está portada FIEL al maquetado original.** `frontend/index.html` sigue siendo
+   el markup de Electron casi verbatim, y la CSS es la suya — por eso **lo que la página emite tiene
+   que coincidir con las clases que esa CSS espera**. Un primer intento inventó `.hist-item`/
+   `.hist-meta` y produjo filas sin estilo. Portado ya, con sus clases: Historial (`.hrow`, expandir,
+   copiar, estados vacíos), Conexiones (`.conn-state` con el estado COMO CLASE, que es lo que colorea
+   el punto), idiomas (chips/select según capacidad), Sistema (atajo, apariencia, modo, dispositivo) y
+   Permisos (`.prow` con estado de tres vías).
+
+   Los módulos TS están partidos por vista: `settings.ts` (shell + conexiones), `history.ts`,
+   `language.ts`, `system.ts`, `permissions.ts`. Las **reglas** viven todas en Go
+   (`internal/store/{connection,language,language_catalog,trigger}.go`,
+   `internal/app/permission_rows.go`) con tests; la página no decide nada.
+
+2. **Tres cosas que "sólo persistir" NO cubre, y que ya morderon una vez cada una.** Cualquier
+   ajuste nuevo tiene que comprobarlas:
+   - **El modo** se lee una vez al construir el motor → hay que empujarlo al controlador vivo
+     (`LiveHooks.ModeChanged`).
+   - **El atajo** vive en un proceso hijo lanzado al arrancar → hay que reiniciar el listener
+     (`LiveHooks.TriggerChanged`), o el nuevo queda guardado y el viejo sigue funcionando.
+   - **La apariencia** la aplica Wails una sola vez y no expone cómo cambiarla → cgo en
+     `internal/macos/appearance_darwin.go`.
+
+   Y los hooks se pasan en el **constructor**, no por métodos: Wails bindea todos los métodos
+   exportados de un servicio al webview.
+
+3. **Para probar la UI sin ratón** — un `<select>` dentro de un webview de Wails no se puede clicar
+   desde un script, así que hay sondas por variable de entorno, todas gateadas:
+   `LOQUI_DEBUG_NAVIGATE=<vista>`, `LOQUI_DEBUG_RECORD_CLICK=1`, `LOQUI_DEBUG_SET_PROVIDER=<motor>`,
+   `LOQUI_DEBUG_APPEARANCE=<modo>`, `LOQUI_DEBUG_HISTORY_EVENT=1`, `LOQUI_DEBUG_OVERLAY=1`,
+   `LOQUI_DEBUG_DICTATE=<segundos>`. Cada una reporta al log de Go (`UI-NAV`, `CONN`, `LANG`, `SYS`,
+   `PERMS`, `HIST-SHAPE`…), **nunca texto de transcripciones**. `./scripts/capture-overlay.sh` captura
+   la píldora a resolución nativa.
+
+4. **Un test en verde no prueba que pruebe algo.** En esta sesión **cuatro** tests propios no
+   probaban lo que su nombre decía, y los cuatro los encontró **mutar el código de producción**, no
+   la suite: uno metía el secreto en un seam que la función nunca llamaba, uno comprobaba sólo "no
+   vacío" y bendijo un default incorrecto, uno aceptaba cualquier error donde dos comprobaciones se
+   solapaban, y uno afirmaba sobre un código presente en las dos listas que debía distinguir.
+   **Verificar cada test nuevo rompiendo a propósito lo que dice cubrir.**
+
+5. **Lo que sigue inerte** (medido, no de memoria): la fila del modelo (`#modelRow`), "Probar
+   conexión" de Azure (`#test`), el `#save` de Sistema — que puede ser redundante por diseño, porque
+   aquí cada control ya persiste al cambiar —, `#engineHint`, los campos de subservicios sin portar
+   (`azureOpenAiResource`, `azureOpenAiDeployment`, `openaiModel`), los enlaces del pie
+   (`#openDonate`, `#openTutorial`), las vistas **About** y **reporte**, y los 17 elementos `wiz*`
+   del **onboarding**.
+
+6. **Leer el README antes de correr nada.** Dos trampas de entorno: `go` a secas no compila (los
+   flags de cgo del Speech SDK salen del entorno → `./scripts/go.sh`) y `wails3` no está en el PATH
+   (→ `./scripts/task.sh`). Al añadir campos o métodos a un servicio hay que **regenerar bindings**:
    `./scripts/task.sh common:generate:bindings` (la tarea `generate:bindings` a secas no existe;
    `package` ya la corre).
 
-   **Reglas que el ciclo de revisión dejó, y que valen para cada setter nuevo:**
-   - Devolver `WriteResult`, **no** un error de Go: Wails descarta el resultado de un método que
-     también devuelve error, y la página necesita el payload precisamente cuando falla.
-   - Escribir por `store.UpdateSettings`, nunca Load-then-Save.
-   - Un rechazo no cambia nada, y se valida **todo** antes de escribir **algo**.
-   - Estados ilegibles (`unreadable`) y no disponibles (`available: false`) se pintan distintos de
-     "vacío": adivinar es el bug que este proyecto ya cometió con los permisos.
-
-0b. **Para probar la escritura sin ratón:** `LOQUI_DEBUG_SET_PROVIDER=grok` pide a la página que
-   haga un `SetProvider` real por el binding. Un `<select>` dentro de un webview de Wails no se
-   puede clicar desde un script, así que sin esto la mitad de escritura sólo se comprueba a mano.
-
-1. **La app dicta pero no se configura.** El dictado está verificado de punta a punta con
-   **whisper local** (hotkey `fn` → captura → transcripción → `history.jsonl`, los varios `final`
-   unidos en **un** mensaje). Pero `frontend/index.html` son **1249 líneas del markup de Electron
-   verbatim** y `frontend/src/settings.ts` es un **stub de 35 líneas** (el original: **1828**): la
-   ventana se ve completa y **no responde a nada**. Reproducir el dictado:
-   `./scripts/task.sh package && open --env LOQUI_DEBUG_DICTATE=10 bin/loqui.app`. Para que además
-   **pegue** en el cursor falta conceder Accesibilidad.
-
-2. **La fase 4 no es traducir 1828 líneas, es rediseñar de dónde salen los datos.** El
-   `settings.ts` de Electron importaba **diez módulos puros compartidos** porque allí main y
-   renderer compartían lenguaje. Aquí esas reglas viven en Go, como única fuente de verdad. Lo que
-   ya está en Go: settings, historial, Keychain, permisos, dispositivos. Lo que **falta portar**
-   (lógica pura, va con tests, no toca DOM): **i18n**, **languageCatalog**,
-   **langCapability / validateLanguagesFor** (los slots ya están: `store.AllLanguageSlots` +
-   `store.LanguagesIn`, con default por slot; falta la **validación por capacidad**),
-   **connectionStatus**, **historyFilter**, **triggerKey**, y **modelSpec + descarga
-   del modelo de whisper** — este último es load-bearing, porque sin modelo whisper no arranca y
-   hoy no hay UI para bajarlo. La superficie que consumía la UI de Electron son **32 métodos**
-   (`grep -o "window\.loqui\.[a-zA-Z]*" ../loqui/src/settings/settings.ts | sort -u`), y las
-   vistas son cinco: `inicio`, `ajustes`, `historial`, `about`, `report`.
-
-3. **Leer el README antes de correr cualquier cosa.** Dos trampas de entorno que rompen un clon
-   nuevo y ninguna es obvia: `go` a secas no compila (los flags de cgo del Speech SDK salen del
-   entorno → `./scripts/go.sh`), y `wails3` no está en el PATH en macOS (→ `./scripts/task.sh`).
-
-4. **No portar los proveedores de Electron verbatim — leer el esquema del servicio.** El de Grok
-   tenía un bug de pérdida total del texto y los docs de xAI mienten sobre el fallo de auth
-   (devuelve 400, no 401). La lección completa, transferible a los dos proveedores que faltan,
-   está en `docs/solutions/no-portar-proveedores-stt-verbatim.md`.
-
-5. **Cuando algo se queda quieto, volcar goroutines.** `GOTRACEBACK=all` + `kill -QUIT <pid>`
-   encontró los tres cuelgues de este port. Ninguno dejó una línea de log.
-
 ## Estado del código
 
-Once paquetes de tests en verde con `-race` (`./scripts/task.sh test`), `vet` y `gofmt` limpios.
+Trece paquetes de tests en verde con `-race -count=1` (`./scripts/task.sh test`), `vet` y `gofmt`
+limpios. Cinco servicios Wails: `Settings`, `History`, `Clipboard`, `Dictation`, `Permissions`.
 
-- `main.go`, `wiring.go` — app Wails: 2 ventanas, tray, hotkey `fn`, permisos. El **store se abre
-  en `main`** y se comparte con el motor (el servicio se registra como opción de construcción, y
-  dos `Store` sobre el mismo directorio intercalarían escrituras).
-- `internal/app/bootstrap.go` — el payload de Ajustes + `SettingsService` (`Settings.Load()`).
-  Seams para Keychain / TCC / hardware, porque los tres son intesteables en su sitio.
-- `internal/app/settings_write.go` — los setters. `WriteResult` en vez de error de Go (ver nota 0),
-  validación antes de cualquier escritura, y `SaveConnection` para que región+key no se commiteen a
-  medias.
-- `logging.go` — redacta los argumentos de los bindings en el log de Wails: uno de ellos recibe una
-  API key, y activar su log de debug la imprimiría.
+- `main.go`, `wiring.go` — app Wails: 2 ventanas, tray, hotkey `fn`, permisos, y los `LiveHooks` que
+  conectan los ajustes con el motor y el listener en marcha. El **store se abre en `main`** y se
+  comparte con el motor.
+- `internal/app` — el payload de Ajustes (`bootstrap.go`), los setters (`settings_write.go`), y los
+  servicios de historial, portapapeles, dictado y permisos. Todos los setters devuelven
+  `WriteResult{payload, error}` y **no** un error de Go: Wails descarta el resultado de un método que
+  también devuelve error, y la página necesita el payload precisamente cuando falla.
+- `internal/store` — persistencia **y** las reglas portadas de los módulos puros de Electron:
+  conexiones, capacidad de idioma, catálogo, atajo. `UpdateSettings` es transaccional; nunca
+  Load-then-Save.
 - `internal/session` — el controlador de dictado (decisiones puras, suite portada de Electron).
-- `internal/stt` — contrato, **sin dependencias de red**. `stt/azure` (llega al 401 real),
-  `stt/helper` (whisper ✅, Apple ⛔ — riesgo 5 del plan), `stt/grok` (✅ **71 tests**; el ciclo de
-  vida del WebSocket vive aquí hasta que ElevenLabs justifique extraerlo a un paquete propio).
-- `internal/{audio,inject,store,history,hotkey,permissions,macos,assets,settings}` — captura,
-  paste con `NSPasteboard.changeCount`, settings + Keychain, historial, protocolo `fn`, TCC, glue
-  AppKit, validación de región/candidatos.
-- `frontend/` — `index.html` es Ajustes (markup de Electron casi verbatim: se le añadieron los
-  botones de borrar clave y una línea de estado para el selector), `overlay.html` el pill.
-  **`overlay.ts` funciona**; **`settings.ts` cablea motor, keys y región** — el resto de la página
-  sigue inerte. No decide nada: lee el payload, pinta, manda la acción y repinta.
-- `cmd/stt-probe` — dictado desde la CLI, `-provider azure|grok`, para aislar fallos sin el app.
+- `internal/stt` — contrato sin red. `azure` (llega al 401 real), `helper` (whisper ✅ y ahora
+  **reporta niveles de micrófono**, Apple ⛔), `grok` (✅ 71 tests).
+- `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — captura, paste,
+  historial + filtro, protocolo `fn`, TCC, glue AppKit, validación de región.
+- `frontend/` — `index.html` markup de Electron casi verbatim (se le añadieron botones de borrar
+  clave y una línea de estado); cinco módulos TS por vista; `overlay.html` la píldora.
+- `cmd/stt-probe` — dictado desde la CLI, para aislar fallos sin el app.
 
 ## Proveedores: qué falta
 
-- ⬜ **elevenlabs** — mismo molde que Grok (WebSocket, header `xi-api-key`, pero JSON con base64
-  en vez de frames binarios). Es el momento de **extraer el ciclo de vida del socket** de
-  `internal/stt/grok/provider.go`, con dos implementaciones reales delante y no deducido de una.
-- ⬜ **openai realtime** — **no** encaja en ese molde (mensaje de setup, otro ciclo de vida):
-  paquete aparte.
+- ⬜ **elevenlabs** — mismo molde que Grok (WebSocket, header `xi-api-key`, JSON con base64 en vez de
+  frames binarios). Momento de **extraer el ciclo de vida del socket** de `internal/stt/grok`, con dos
+  implementaciones reales delante y no deducido de una.
+- ⬜ **openai realtime** — **no** encaja en ese molde (mensaje de setup, otro ciclo de vida): paquete
+  aparte.

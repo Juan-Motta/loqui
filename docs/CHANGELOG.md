@@ -4,6 +4,30 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Fidelidad al maquetado original, y la UI que no respondía — 2026-07-29
+
+- **La navegación del sidebar no estaba cableada**, y como todos los controles de Ajustes viven dentro
+  de esa vista, la app no respondía a nada. Cableadas también las pestañas de Ajustes, el botón de
+  grabar y los enlaces del pie.
+- **Historial** portado fiel: filas `.hrow` con expandir y copiar, el chevron sólo donde el texto está
+  cortado, estados vacíos con sus dos variantes, y actividad reciente con tiempo relativo. La CSS
+  heredada espera esas clases; un primer intento inventó otras y las filas salían sin estilo.
+- **Conexiones** con el modelo real portado (`connectionStatus.ts`): cinco estados, Azure como dos
+  servicios con dos keys y dos campos requeridos, y `unsupported` por plataforma/OS/helper.
+- **Selectores de idioma** por capacidad: chips con una-locale-por-idioma-base para Azure, locales
+  completos para Apple, base + "Detección automática" para los de hint opcional.
+- **Pestaña Sistema**: atajo con captura de teclas, apariencia (que necesitó cgo porque Wails sólo la
+  aplica al construir la ventana), modo, dispositivo e idioma de interfaz.
+- **Pestaña Permisos** con estado de tres vías: lo que macOS no deja consultar es "sin verificar", no
+  "falta".
+- **Los medidores de audio no medían nada con los motores locales** — los helpers abren el micrófono
+  ellos mismos, así que Go nunca veía niveles. Ahora whisper los reporta. Y el pulso de reposo, que
+  parecía habla continua, se sustituyó por una línea plana: tres estados distinguibles y ninguno que
+  afirme audio inexistente.
+- **La píldora**: sombra recortada contra el borde de la ventana, luego un halo demasiado fuerte sobre
+  fondo claro, y el borde de medio píxel fuera.
+
+
 ## La app se configura desde la interfaz (fase 4) — 2026-07-28
 
 - Setters en el servicio de Ajustes (`SetProvider`, `SetRegion`, `SetKey`, `DeleteKey`,
