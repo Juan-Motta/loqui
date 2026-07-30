@@ -20,6 +20,15 @@
         --shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
         --ok: #1a8a3f;
         --err: #d13438;
+        /* One height for the controls that have to read as a set: the engine
+           dropdown on Inicio and Historial's whole filter row. Declared once so
+           they can't drift apart the way they just did — Historial's row had
+           settled at 40px on its own. Deliberate deviation: the original is ~40px
+           there, and this pins it to Inicio's 35px instead. */
+        --control-h: 35px;
+        /* Our own <select> arrow — see the .engine-select note on why WebKit forces
+           us to draw one. Defined here so the two themes swap it for free. */
+        --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%231d1d1f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -37,6 +46,7 @@
           --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
           --ok: #30d158;
           --err: #ff453a;
+          --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23f5f5f7' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
         }
       }
 
@@ -54,8 +64,13 @@
       #sidebar {
         display: flex; flex-direction: column;
         /* Room for the macOS traffic lights; elsewhere the window has a real
-           title bar, so that space would just be a gap. */
-        padding: 38px 10px 8px; gap: 2px;
+           title bar, so that space would just be a gap.
+           54px, not the original's 38px. MEASURED, not eyeballed: under Wails the inset lights end
+           20..33px below the window top, so 38px left the first nav pill 4px under them — visibly
+           glued to the edge. Electron's hiddenInset put them higher, which is why the same number
+           worked there; this is the same "identical CSS, different host" as .engine-select. 54 leaves
+           ~20px of air. */
+        padding: 54px 10px 8px; gap: 2px;
         -webkit-app-region: drag; /* the whole sidebar drags the window */
         border-right: 0.5px solid var(--sep);
       }
@@ -108,8 +123,19 @@
       .hero-logo span { width: 2.6px; background: #fff; border-radius: 2px; }
       .hero-name { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); }
       .hero-sub { font-size: 13px; color: var(--text-2); margin-top: 2px; }
+      /* The declarations up to `color` are the original's, verbatim — and under
+         Chromium (its Electron shell) they measure 35px. WKWebView instead draws a
+         NATIVE popup button: it discards the vertical padding, clamps to its own
+         ~20px intrinsic height, and swaps the single chevron for stacked steppers.
+         That's why identical CSS looked squashed here. Opting out of the native
+         control is what lets WebKit honour the padding, so the arrow has to become
+         ours too — and --control-h states the 35px outright rather than leaving it
+         to add up, since Historial's row now has to match this. */
       .engine-select { width: auto; max-width: 260px; background: color-mix(in srgb, var(--content-bg) 80%, transparent);
-        border: 1px solid var(--sep); border-radius: 9px; padding: 8px 11px; font-size: 12.5px; font-weight: 500; color: var(--text); }
+        border: 1px solid var(--sep); border-radius: 9px; padding: 8px 11px; font-size: 12.5px; font-weight: 500; color: var(--text);
+        appearance: none; -webkit-appearance: none; height: var(--control-h); line-height: 17px; padding-right: 30px;
+        background-image: var(--select-chevron);
+        background-repeat: no-repeat; background-position: right 10px center; background-size: 10px 6px; }
       /* All bars share one height; the waveform's shape comes from the per-bar
          --m factor applied to scaleY. That way "silence" can be a genuinely flat
          line (uniform scaleY) instead of frozen bars of differing heights. */
@@ -253,6 +279,19 @@
         border: 1px solid var(--field-border); border-radius: 8px; outline: none;
       }
       input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+      /* Every <select> in the app hits the native-popup problem described at
+         .engine-select: WebKit throws away the 7px padding above and collapses the
+         control to ~21px, which is why Ajustes' dropdowns didn't line up with the
+         35px ones on Inicio and Historial. Fixing it on the bare element covers
+         Sistema and Conexiones at once. Must stay AFTER the rule above, whose
+         `background` shorthand would otherwise wipe the arrow. The two selects with
+         their own class set the same height themselves and are unaffected. */
+      select {
+        appearance: none; -webkit-appearance: none;
+        height: var(--control-h); padding-right: 30px;
+        background-image: var(--select-chevron);
+        background-repeat: no-repeat; background-position: right 10px center; background-size: 10px 6px;
+      }
       .two { display: flex; gap: 12px; } .two > div { flex: 1; }
 
       /* ---- Provider picker (icon cards) ---- */
@@ -284,7 +323,6 @@
       button.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
       button.btn.primary:hover { filter: brightness(1.07); }
       button.btn.small { padding: 4px 10px; font-size: 12px; }
-      .actions { margin-top: 20px; display: flex; gap: 10px; align-items: center; }
 
       .status { margin-top: 12px; min-height: 18px; font-size: 12.5px; }
       .status.ok { color: var(--ok); } .status.err { color: var(--err); }
@@ -303,25 +341,43 @@
         padding: 3px 7px; border-radius: 6px; line-height: 1.2;
       }
       .hist-when { font-size: 12px; color: var(--text-3); flex: none; }
+      /* The row's middle span is emitted as `.grow`, but the original's only rule
+         for that class is `.row .grow` — which never matches inside .hist-item, so
+         the span never grew in EITHER app. Its own screenshots hid it: every entry
+         there was long enough to fill the line and push the timestamp right. With a
+         short entry the timestamp lands next to the text instead of at the edge.
+         Honour what the class name declares, so the column is straight either way. */
+      .hist-item .grow { flex: 1; min-width: 0; }
 
       /* ---- Historial: filter row + row list ---- */
       .hist-filters { display: flex; gap: 10px; align-items: center; margin: 10px 0 14px; flex: none; }
-      /* Input wrapper that hosts a leading icon; the input itself is chromeless. */
+      /* Input wrapper that hosts a leading icon; the input itself is chromeless.
+         Height comes from --control-h, not from the input's padding, so the field
+         can't drift away from the dropdown next to it. The input therefore carries
+         no vertical padding — the wrapper's align-items centres it. */
       .field-icon {
         flex: 1; min-width: 0; display: flex; align-items: center; gap: 9px;
+        height: var(--control-h);
         background: var(--field-bg); border: 1px solid var(--field-border);
         border-radius: 9px; padding: 0 12px;
       }
       .field-icon svg { flex: none; width: 15px; height: 15px; color: var(--text-3); }
       .field-icon input {
-        flex: 1; min-width: 0; border: 0; background: none; padding: 9px 0;
+        flex: 1; min-width: 0; border: 0; background: none; padding: 0;
         font: inherit; color: var(--text); outline: none;
       }
       .field-icon:focus-within { border-color: var(--accent); }
+      /* Same native-popup problem as .engine-select: WebKit was drawing a ~20px chip
+         between two much taller controls. Both the height and the search field's now
+         come from --control-h, so this row and Inicio's dropdown stay one size. */
       .range-select {
-        flex: none; width: auto; padding: 9px 11px; font-size: 12.5px; font-weight: 500;
+        flex: none; width: auto; padding: 0 11px; font-size: 12.5px; font-weight: 500;
+        height: var(--control-h);
         background: var(--field-bg); color: var(--text);
         border: 1px solid var(--field-border); border-radius: 9px;
+        appearance: none; -webkit-appearance: none; padding-right: 30px;
+        background-image: var(--select-chevron);
+        background-repeat: no-repeat; background-position: right 10px center; background-size: 10px 6px;
       }
       /* Hugs its content (so a short list isn't a big empty frame) but never grows
          past the viewport — past that it scrolls internally. */
@@ -526,9 +582,10 @@
          next to content the user is browsing, not acting on. */
       /* Overflow menu in the filters row: an icon, not a wide destructive button,
          so browsing the list isn't dominated by an action you rarely want. */
-      /* Stretch to the row so it matches the height of the search field and the
-         date select. As a plain .btn.small it was 26px next to 39px neighbours —
-         a shrunken chip floating between two tall controls. */
+      /* Stretch to the row so it matches the search field and the date select. As a
+         plain .btn.small it was a 26px chip floating between two tall controls.
+         Stretching rather than setting --control-h directly means it keeps following
+         them for free — the row's height is whatever those two are. */
       .hist-menu { position: relative; flex: none; align-self: stretch; }
       .btn.small.menu-btn {
         padding: 0; width: 38px; height: 100%; border-radius: 9px;
@@ -764,7 +821,12 @@
               </div>
               <select id="homeEngine" class="engine-select">
                 <option value="whisper" data-i18n>Whisper — local (offline)</option>
-                <option value="macos" data-i18n>macOS — on-device</option>
+                <!-- "local (offline)" like Whisper, not the original's "on-device": both run on this
+                     machine with no key and no network, and describing the same property two ways made
+                     them look like different kinds of engine. Declared deviation from the Electron
+                     markup. The Conexiones card still says "On-device · Apple Speech", which is the
+                     right level of detail there. -->
+                <option value="macos" data-i18n>macOS — local (offline)</option>
                 <option value="azure" data-i18n>Azure Speech</option>
                 <option value="openai" data-i18n>OpenAI</option>
                 <option value="grok" data-i18n>Grok (xAI)</option>
@@ -1060,9 +1122,9 @@
                 </div>
               </div>
 
-              <div class="actions">
-                <button class="btn primary" id="save" data-i18n>Guardar</button>
-              </div>
+              <!-- No save button: every control here writes on `change` (see wireSystem),
+                   so a Guardar was never wired to anything. #ajustesStatus is now the only
+                   confirmation the user gets, which is why it stays. -->
               <div class="status" id="ajustesStatus"></div>
             </div>
 
