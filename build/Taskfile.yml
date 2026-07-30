@@ -199,17 +199,30 @@ tasks:
       CGO_LDFLAGS: "-F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
 
   generate:icons:
-    summary: Generates Windows `.ico` and Mac `.icns` from an image; on macOS, `-iconcomposerinput appicon.icon -macassetdir darwin` also produces `Assets.car` from a `.icon` file (skipped on other platforms).
+    summary: Generates Windows `.ico` and Mac `.icns` from appicon.png.
+    #
+    # NO ICON COMPOSER INPUT, deliberately. The template ships
+    # `-iconcomposerinput appicon.icon -macassetdir darwin`, which also produces an Assets.car — and on
+    # macOS 26 that asset WINS over the .icns, so it is what the Dock and Finder actually draw. It
+    # composes the icon from an SVG layer with `specular` and `translucency` effects, and the result is
+    # measurably softer than the artwork: against the Electron build's icon, twice the proportion of
+    # antialiased edge pixels and ~27% less solid white in the glyph.
+    #
+    # appicon.png is byte-identical to the Electron build's resources/icon.png, so generating only the
+    # .icns reproduces that icon exactly rather than re-rasterising an approximation of it.
+    #
+    # The trade: no automatic light/dark/tinted variants from Icon Composer. The Electron build has
+    # none either, and matching it is the point. build/darwin/Assets.car must NOT exist — the packaging
+    # step copies it into Resources whenever it does (build/darwin/Taskfile.yml).
     run: once
     dir: build
     sources:
       - "appicon.png"
-      - "appicon.icon"
     generates:
       - "darwin/icons.icns"
       - "windows/icon.ico"
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
 
   dev:frontend:
     summary: Runs the frontend in development mode

@@ -11,22 +11,35 @@
 //   trayActive.png    system red, NOT a template, shown while dictating. A template
 //                     image can't be red, which is exactly why this one is separate.
 //
-// Run: npm run build:tray
+// Run: node scripts/gen-tray-icons.mjs
+//
+// It writes straight into internal/assets/icons/, which is what assets.go embeds. It used to write to
+// resources/ — the Electron layout, a directory that does not exist in this repo — so regenerating
+// produced files nothing read and the tray looked unchanged.
 
 import { deflateSync } from "node:zlib";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "resources");
+const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "internal", "assets", "icons");
 
 // Bar heights as a fraction of the glyph box, measured off resources/icon.svg.
 const BARS = [0.3, 0.66, 1.0, 0.66, 0.3];
 const SS = 8; // supersampling factor -> anti-aliased edges
 
+// How much of the canvas the bars occupy. THIS is what decides the size on screen, not the canvas
+// size — Wails forces the tray image to the full menu-bar thickness regardless of the PNG's own
+// dimensions (systemtray_darwin.m: `[image setSize:NSMakeSize(thickness, thickness)]`, ~22pt), where
+// Electron left it at the image's 16pt. Same artwork, byte for byte, rendered ~1.4× bigger.
+//
+// 0.64 of a 22pt bar puts the bars at ~14pt, which is what the Electron build shows. Raise it and the
+// glyph grows; the canvas size below has no say.
+const GLYPH_FRACTION = 0.64;
+
 /** Coverage mask (0..1 per pixel) of the 5 rounded bars inside a size×size box. */
 function renderMask(size) {
-  const pad = Math.max(1, Math.round(size * 0.06));
+  const pad = Math.max(1, Math.round((size * (1 - GLYPH_FRACTION)) / 2));
   const box = size - pad * 2;
   // 5 bars + 4 gaps; a gap is half a bar wide, matching the source artwork.
   const barW = box / (BARS.length + (BARS.length - 1) * 0.5);
@@ -118,7 +131,15 @@ function crc32(buf) {
 mkdirSync(OUT, { recursive: true });
 const RED = [255, 59, 48]; // macOS system red
 for (const [name, color] of [["trayTemplate", [0, 0, 0]], ["trayActive", RED]]) {
-  for (const [size, suffix] of [[16, ""], [32, "@2x"]]) {
+  // 44px, not the Electron build's 16px, and this is about SHARPNESS not size.
+  //
+  // Wails stretches whatever it is given to the menu-bar thickness (~22pt) — so a 16px canvas is 16px
+  // of data drawn into 44 physical pixels on a retina display, and the bars come out visibly soft next
+  // to Electron's, which ships a real @2x file. 44 = 2 × 22pt, so there is no upscale left to do.
+  //
+  // The @2x companion is written for completeness; assets.go embeds only the plain file, because Wails
+  // takes ONE blob and cannot pair 1x/2x off disk the way NSImage does.
+  for (const [size, suffix] of [[44, ""], [88, "@2x"]]) {
     const file = join(OUT, `${name}${suffix}.png`);
     writeFileSync(file, png(size, renderMask(size), color));
     console.log(`wrote ${file} (${size}x${size})`);
