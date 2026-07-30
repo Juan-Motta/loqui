@@ -25,6 +25,7 @@
 import { Events } from "@wailsio/runtime";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
+import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
 import type {
   SettingsPayload,
   WriteResult,
@@ -37,6 +38,13 @@ import {
 } from "./history.js";
 import { renderAllLanguages, setLanguageSaveHandler } from "./language.js";
 import { paintSystem, setSystemSaveHandler, wireSystem } from "./system.js";
+import { paintAbout } from "./about.js";
+import {
+  openWizard,
+  paintOnboarding,
+  setOnboardingSaveHandler,
+  wireOnboarding,
+} from "./onboarding.js";
 import {
   refreshPermissions,
   setPermissionsChangeHandler,
@@ -97,6 +105,40 @@ function wireNavigation(): void {
       showView(link.dataset.goto ?? "inicio"),
     );
   }
+  // "Invítame un café", in the sidebar footer AND in Acerca de: the same action from two places, so
+  // one handler for both. The URL is Go's — see internal/app/links_service.go.
+  //
+  // A failure has to be visible somewhere. It lands in the status line rather than the console: the
+  // webview's devtools are not open in a packaged build, so a console-only error is no error at all,
+  // and this button already spent the whole port doing nothing without anyone noticing.
+  const donate = (id: string) => {
+    $<HTMLElement>(id)?.addEventListener("click", () => {
+      void Links.OpenDonate().then(
+        () => Events.Emit("ui:donate", { from: id, ok: true }),
+        (err: unknown) => {
+          Events.Emit("ui:donate", { from: id, error: String(err) });
+          const status = $<HTMLElement>("inicioStatus");
+          if (status) {
+            status.className = "status err";
+            status.textContent = "No se pudo abrir el enlace: " + String(err);
+          }
+        },
+      );
+    });
+  };
+  donate("openDonate");
+  donate("aboutDonate");
+
+  // Dev affordance: click the REAL button. Opening a browser is invisible from here, and driving
+  // Links.OpenDonate() directly would pass with the button unwired — which is the state it was in.
+  Events.On("debug:donate", (e: { data: unknown }) => {
+    const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+    const id = String(arg ?? "openDonate");
+    const button = $<HTMLElement>(id);
+    Events.Emit("ui:donate", { probe: id, found: !!button });
+    button?.click();
+  });
+
   const report = $<HTMLElement>("openReport");
   report?.addEventListener("click", () =>
     showView(report.dataset.view ?? "report"),
@@ -298,6 +340,13 @@ function paint(p: SettingsPayload): void {
   const home = $<HTMLSelectElement>("homeEngine");
   if (home) {
     const providers = p.providers ?? [];
+    // The readiness of each engine comes from the Conexiones rows — the same tested model the Ajustes
+    // tab paints — so the picker and that list cannot disagree. They did: the picker labelled only the
+    // UNPORTED engines and showed Azure and Grok as plain options while Conexiones called them "Sin
+    // configurar", which in a picker reads as "ready to use".
+    //
+    // Declared out here because the hint below needs it too.
+    const stateById = new Map((p.connections ?? []).map((c) => [c.id, c]));
     if (providers.length > 0) {
       // Unavailable engines are LISTED but disabled. Hiding them would make the app look like it
       // supports less than it will; leaving them selectable would let the user replace a working
@@ -309,13 +358,66 @@ function paint(p: SettingsPayload): void {
       home.innerHTML = providers
         .map((prov) => {
           const label = escapeHtml(ENGINE_LABELS.get(prov.id) ?? prov.id);
-          const suffix = prov.available ? "" : " — no disponible aún";
-          const disabled = prov.available ? "" : " disabled";
+          const state = stateById.get(prov.id)?.state;
+          // Three different "cannot use this", kept distinct because the way out of each differs:
+          // not ported YET (wait for a release), cannot run on THIS machine (nothing will fix it),
+          // and not configured (add a key in Ajustes). All three are UNSELECTABLE — picking one
+          // would replace a working engine with one that cannot dictate.
+          //
+          // THE EXCEPTION: the engine already stored stays selectable-looking even when it is not
+          // usable. A <select> cannot display a value it has no option for, so removing or blanking
+          // it would make the picker show a DIFFERENT engine than the one in effect — the original
+          // keeps it for the same reason (pruneEngineOptions), e.g. settings copied from another Mac.
+          const isStored = prov.id === p.provider;
+          let suffix = "";
+          let disabled = "";
+          if (!prov.available) {
+            suffix = " — no disponible aún";
+            disabled = isStored ? "" : " disabled";
+          } else if (state === "unsupported") {
+            suffix = " — no disponible en este sistema";
+            disabled = isStored ? "" : " disabled";
+          } else if (state === "unconfigured") {
+            suffix = " — sin configurar";
+            disabled = isStored ? "" : " disabled";
+          }
           return `<option value="${prov.id}"${disabled}>${label}${suffix}</option>`;
         })
         .join("");
     }
     home.value = p.provider;
+
+    // The line under the picker, PORTED from renderEngineHint. Without it, choosing an engine that
+    // needs a key looked like it worked: the picker changed, nothing complained, and the failure
+    // surfaced at the next dictation. Derived from the ACTIVE engine's row rather than from key
+    // presence, so "cannot run here at all" stays distinct from "needs configuring" — no amount of
+    // configuring fixes the first, and saying so is the point.
+    const hint = $<HTMLElement>("engineHint");
+    if (hint) {
+      const state = stateById.get(p.provider)?.state;
+      if (state === "unsupported") {
+        hint.textContent = "No disponible en este sistema";
+        hint.className = "engine-hint warn";
+      } else if (state === "unconfigured") {
+        hint.textContent = "Este motor necesita configuración — ábrela en Ajustes";
+        hint.className = "engine-hint warn";
+      } else {
+        hint.textContent = "";
+        hint.className = "engine-hint";
+      }
+    }
+
+    // What the picker ACTUALLY offers, option by option, on EVERY repaint. A <select> inside a Wails
+    // webview cannot be opened from a script, so its contents were the one thing never checked — and
+    // that is exactly where the picker and the Conexiones list had drifted apart.
+    Events.Emit("ui:engine-options", {
+      options: Array.from(
+        document.querySelectorAll<HTMLOptionElement>("#homeEngine option"),
+      )
+        .map((o) => `${o.value}${o.disabled ? "[disabled]" : ""}=${(o.textContent ?? "").trim()}`)
+        .join(" | "),
+      hint: $<HTMLElement>("engineHint")?.textContent ?? "",
+    });
   }
 
   // The Azure region dropdown is empty in the markup: Go owns the list.
@@ -443,6 +545,7 @@ function paint(p: SettingsPayload): void {
   // form. Their shape, options and copy all come from the payload — see frontend/src/language.ts.
   renderAllLanguages(p);
   paintSystem(p);
+  paintOnboarding(p);
 }
 
 // The badge's wording is NOT decided here any more. It comes from store.ConnectionRows, which is the
@@ -628,8 +731,12 @@ wireTabs();
 wireHistory();
 wireSystem();
 wirePermissions();
+wireOnboarding();
 // Read once at load so the Permisos tab is already correct when opened, and again on every action.
 void refreshPermissions();
+// Acerca de is deliberately in this group, for the reason stated above: it is where a user goes to
+// read what went wrong, so it must not depend on the settings payload arriving.
+void paintAbout();
 // The transcripts are on disk regardless of whether the settings payload arrives, so they are read
 // on their own rather than behind it.
 void refreshHistory();
@@ -678,6 +785,7 @@ Settings.Load().then(
       // itself in isolation would leave the rest of the row describing the other service.
       setLanguageSaveHandler(paint);
       setSystemSaveHandler(paint);
+      setOnboardingSaveHandler(paint);
       // A granted microphone is what makes real device NAMES available, so the whole payload is
       // re-read after a grant rather than only the permissions list.
       setPermissionsChangeHandler(() => {
@@ -686,6 +794,10 @@ Settings.Load().then(
       paint(payload);
       wire();
       Events.Emit("ui:painted", { provider: payload.provider });
+      // The tutorial opens ITSELF on a first launch, and only then. Placed after paint() so the
+      // wizard mounts over a window that is already correct — its steps read the same payload, and a
+      // wizard drawn before the page had one would show empty engine and preference panels.
+      if (!payload.onboarded) openWizard();
     } catch (err) {
       Events.Emit("ui:bootstrap-failed", {
         error: `painting failed: ${err instanceof Error ? err.stack || err.message : String(err)}`,
@@ -708,9 +820,13 @@ Settings.Load().then(
 // Same reason as the other debug hooks — a sidebar entry inside a Wails webview cannot be clicked
 // from a shell script. This dispatches a genuine click so the handler under test is the one the
 // user's mouse reaches, not a reimplementation of it.
+// Accepts "<vista>", "<vista>:<pestaña>" or "<vista>:<pestaña>:<id>" — Ajustes' panels are tabs, and
+// the sidebar click alone leaves Sistema and Permisos hidden, so without the second half they cannot
+// be looked at at all. The third scrolls one control into view: the panel is taller than the window,
+// so the rows past the fold can't be measured on a screenshot otherwise.
 Events.On("debug:navigate", (e: { data: unknown }) => {
   const arg = Array.isArray(e.data) ? e.data[0] : e.data;
-  const want = String(arg ?? "");
+  const [want, wantTab, wantInto] = String(arg ?? "").split(":");
   const item = document.querySelector<HTMLElement>(
     `.nav-item[data-view="${want}"]`,
   );
@@ -719,14 +835,37 @@ Events.On("debug:navigate", (e: { data: unknown }) => {
     return;
   }
   item.click();
+  if (wantTab) {
+    const tab = document.querySelector<HTMLElement>(
+      `.tab[data-tab="${wantTab}"]`,
+    );
+    if (!tab) {
+      Events.Emit("ui:nav-probe", { requested: arg, error: "no such tab" });
+      return;
+    }
+    tab.click();
+  }
+  if (wantInto) {
+    document
+      .getElementById(wantInto)
+      ?.scrollIntoView({ block: "center", behavior: "instant" });
+  }
   const visible = Array.from(
     document.querySelectorAll<HTMLElement>("section.view.active"),
   ).map((v) => v.dataset.view);
+  const active = document.querySelector<HTMLElement>("section.view.active");
   Events.Emit("ui:nav-probe", {
     requested: want,
     visible,
+    // Measured after the click. A screenshot cannot tell a view scrolled away from its own header
+    // apart from a window sitting a few pixels off where you cropped — this session mistook the
+    // second for the first, and it was scrollTop that settled it.
+    activeScrollTop: active?.scrollTop ?? -1,
+    focusedNow: document.activeElement?.id || document.activeElement?.tagName || "",
     navActive:
       document.querySelector<HTMLElement>(".nav-item.active")?.dataset.view,
+    tabActive:
+      document.querySelector<HTMLElement>(".tab.active")?.dataset.tab ?? "",
     connCards: document.querySelectorAll(".conn[data-provider]").length,
   });
 });

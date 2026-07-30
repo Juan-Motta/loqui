@@ -33,3 +33,16 @@ func ProductVersionMajor() int {
 	}
 	return n
 }
+
+// ProductVersion is the full user-facing macOS version ("26.5.2"), or "" when it cannot be read.
+//
+// Same source as ProductVersionMajor, and deliberately NOT built from it: Acerca de is what someone
+// pastes into a bug report, and "26" would drop the patch level that usually decides whether a
+// framework bug applies. Empty rather than a guess, so the view can show an em dash.
+func ProductVersion() string {
+	raw, err := syscall.Sysctl("kern.osproductversion")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(raw)
+}

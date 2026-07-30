@@ -57,6 +57,36 @@ static void loqui_window_opacity(void *nsWindow, int *isOpaque, double *alpha) {
 	*alpha = (bg == nil) ? 1.0 : [bg alphaComponent];
 }
 
+// What a window and the app REALLY are at this instant.
+//
+// "It opens minimised" and "it opens behind the terminal" look identical to a user and have
+// different causes, so guessing between them from a screenshot is how time gets wasted. These are
+// the four flags that tell them apart.
+static void loqui_window_state(void *nsWindow, int *visible, int *miniaturized, int *key, int *appActive) {
+	NSWindow *win = (__bridge NSWindow *)nsWindow;
+	*appActive = [NSApp isActive] ? 1 : 0;
+	if (win == nil) { *visible = 0; *miniaturized = 0; *key = 0; return; }
+	*visible = [win isVisible] ? 1 : 0;
+	*miniaturized = [win isMiniaturized] ? 1 : 0;
+	*key = [win isKeyWindow] ? 1 : 0;
+}
+
+// Bring Loqui to the front at LAUNCH.
+//
+// Launched through LaunchServices (Finder, Dock, `open`) macOS activates the app for us. Launched as
+// a plain process — a terminal, a task runner — it does NOT: the shell that spawned it stays
+// frontmost and Loqui's window sits behind it, which reads as "it opened minimised" even though the
+// window is on screen and not miniaturised at all.
+//
+// ONLY FOR STARTUP. Activating Loqui at any other moment breaks dictation, for the reasons at the top
+// of this file: paste would land in Loqui and focusGuard would treat every paste as drifted focus.
+// The overlay must keep using ShowInactive.
+static void loqui_activate(void) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		[NSApp activateIgnoringOtherApps:YES];
+	});
+}
+
 // Cocoa's mouse location, in Cocoa coordinates (origin bottom-left of the main
 // screen). The overlay is placed on whichever display the cursor is on, because
 // that is where the user is looking and typing.
@@ -99,4 +129,21 @@ func WindowOpacity(nsWindow unsafe.Pointer) (opaque bool, backgroundAlpha float6
 	var alpha C.double
 	C.loqui_window_opacity(nsWindow, &isOpaque, &alpha)
 	return isOpaque == 1, float64(alpha)
+}
+
+// WindowState reports what the window and the app actually are right now.
+//
+// Distinguishes the two failures that look the same to a user: a MINIMISED window (miniaturized) and
+// a window that is on screen but behind whatever launched it (visible, app not active). The fix for
+// each is different, so the first job is to tell them apart.
+func WindowState(nsWindow unsafe.Pointer) (visible, miniaturized, key, appActive bool) {
+	var v, m, k, a C.int
+	C.loqui_window_state(nsWindow, &v, &m, &k, &a)
+	return v == 1, m == 1, k == 1, a == 1
+}
+
+// ActivateApp brings Loqui to the front. Call it ONCE, at startup, to make a launch from a terminal
+// behave like a launch from Finder — never during dictation, where activating Loqui breaks paste.
+func ActivateApp() {
+	C.loqui_activate()
 }

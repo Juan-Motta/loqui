@@ -196,7 +196,10 @@ document.addEventListener(
 
 // renderTriggerInto draws the shortcut control. The markup is created once and then only updated, so
 // the capture handlers are not rebound on every repaint.
-function renderTriggerInto(box: HTMLElement, p: SettingsPayload): void {
+// Exported so the tutorial's Preferencias step mounts THIS control rather than a second one: the
+// capture rules, the disabled hold radio and the note all come from the payload, and a copy would be
+// the same rules written twice.
+export function renderTriggerInto(box: HTMLElement, p: SettingsPayload): void {
   if (!box.querySelector(".trig-chip")) {
     box.innerHTML =
       '<div class="trigger-row">' +
@@ -301,10 +304,25 @@ export function paintSystem(p: SettingsPayload): void {
 }
 
 // Dev affordance: exercise one Sistema control without a mouse, same reason as the other probes.
+//
+// It clicks the REAL radio rather than calling the setter, because those are different claims: with
+// no Guardar button, persistence depends entirely on each control's own change listener, and driving
+// the binding from Go would pass even if that listener were missing. Falls back to the setter only
+// when the radio isn't there, so the probe still reports something instead of silently doing nothing.
 Events.On("debug:set-appearance", (e: { data: unknown }) => {
   const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  const value = String(arg ?? "");
+  const radio = document.querySelector<HTMLInputElement>(
+    `input[name="appearance"][value="${value}"]`,
+  );
+  if (radio) {
+    radio.click(); // fires `change`, so the listener under test is the one a mouse reaches
+    Events.Emit("ui:system-probe", { control: "appearance", value, via: "radio" });
+    return;
+  }
+  Events.Emit("ui:system-probe", { control: "appearance", value, via: "binding" });
   void run($<HTMLElement>("ajustesStatus"), "✓ apariencia aplicada", () =>
-    Settings.SetAppearance(String(arg ?? "")),
+    Settings.SetAppearance(value),
   );
 });
 

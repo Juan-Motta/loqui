@@ -150,6 +150,37 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 		u.Log("SYS", fmt.Sprintf("%v", e.Data))
 	})
 
+	// Says whether the appearance probe went through the real control or fell back to the binding —
+	// with no Guardar button in Sistema, "it saved" only means something if the control's own
+	// listener is what did it.
+	wailsApp.Event.On("ui:system-probe", func(e *application.CustomEvent) {
+		u.Log("SYS-PROBE", fmt.Sprintf("%v", e.Data))
+	})
+
+	// Reports the version label and how many rows landed — never the paths, which name the user's
+	// home directory and have no business in a log.
+	wailsApp.Event.On("ui:about", func(e *application.CustomEvent) {
+		u.Log("ABOUT", fmt.Sprintf("%v", e.Data))
+	})
+
+	// The tutorial: which step is showing and how many controls actually landed in it. Counts, not
+	// just "open": a wizard drawn with four empty panels would otherwise report success.
+	wailsApp.Event.On("ui:wizard", func(e *application.CustomEvent) {
+		u.Log("WIZARD", fmt.Sprintf("%v", e.Data))
+	})
+
+	// Every option the engine picker offers, with its label and disabled flag, plus the hint under it.
+	// The picker was claiming engines were usable that the Conexiones list called unconfigured.
+	wailsApp.Event.On("ui:engine-options", func(e *application.CustomEvent) {
+		u.Log("ENGINE-OPTS", fmt.Sprintf("%v", e.Data))
+	})
+
+	// Opening a browser is invisible from the app's side, so the outcome is logged: this button spent
+	// the whole port doing nothing and silence was indistinguishable from success.
+	wailsApp.Event.On("ui:donate", func(e *application.CustomEvent) {
+		u.Log("DONATE", fmt.Sprintf("%v", e.Data))
+	})
+
 	wailsApp.Event.On("ui:languages", func(e *application.CustomEvent) {
 		u.Log("LANG", fmt.Sprintf("%v", e.Data))
 	})
@@ -219,6 +250,22 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 		go func() {
 			time.Sleep(3 * time.Second)
 			wailsApp.Event.Emit("debug:navigate", view)
+		}()
+	}
+
+	// Dev affordance: drive the tutorial without a mouse. "open" clicks the real footer button.
+	if want := os.Getenv("LOQUI_DEBUG_WIZARD"); want != "" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			wailsApp.Event.Emit("debug:wizard", want)
+		}()
+	}
+
+	// Dev affordance: click the real "Invítame un café" button. NOTE: this really does open a browser.
+	if which := os.Getenv("LOQUI_DEBUG_DONATE"); which != "" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			wailsApp.Event.Emit("debug:donate", which)
 		}()
 	}
 

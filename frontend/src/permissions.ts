@@ -50,8 +50,22 @@ export function setPermissionsChangeHandler(fn: OnChanged): void {
   onChanged = fn;
 }
 
+// Where the rows are painted. The onboarding wizard shows the SAME rows in its own container, and
+// they must not be a second copy of this DOM: the states travel as class names the stylesheet owns,
+// and a duplicate drifts the moment either side is touched. So the container is a parameter.
+let mounts: string[] = ["perms"];
+
+/** Also paint the rows into `id` from now on — used by the tutorial's Permisos step. */
+export function addPermissionsMount(id: string): void {
+  if (!mounts.includes(id)) mounts = [...mounts, id];
+}
+
 function paint(page: PermissionsPage): void {
-  const box = $<HTMLElement>("perms");
+  for (const id of mounts) paintInto(id, page);
+}
+
+function paintInto(mountId: string, page: PermissionsPage): void {
+  const box = $<HTMLElement>(mountId);
   if (!box) return;
   const rows = page.rows ?? [];
 

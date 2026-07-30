@@ -76,7 +76,12 @@ func main() {
 		log.Fatal("cannot open the data directory: ", err)
 	}
 
-	wailsApp := application.New(application.Options{
+	// Declared before New() rather than with `:=`, because one of the services below needs to reach
+	// the app itself — the browser opener for the donation link. The closure runs when the user
+	// clicks, long after this assignment, so capturing the variable is enough; referring to it inside
+	// its own initialiser would not compile.
+	var wailsApp *application.App
+	wailsApp = application.New(application.Options{
 		Name:        "Loqui",
 		Description: "Dictado por voz que inserta el texto donde está el cursor",
 		// Wails logs every binding call's ARGUMENTS at debug level, and one of this app's bound
@@ -116,6 +121,14 @@ func main() {
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),
 			application.NewService(app.NewPermissionsService()),
+			// Read-only: Acerca de reports the build and the machine, and takes the store only to
+			// name the files it writes.
+			application.NewService(app.NewAboutService(st)),
+			// The opener is injected so internal/app stays free of Wails. The URL itself lives in the
+			// service, not the page: a named action cannot be pointed at another site.
+			application.NewService(app.NewLinksService(func(url string) error {
+				return wailsApp.Browser.OpenURL(url)
+			})),
 			// The engine does not exist yet — it needs the windows and the tray this very call
 			// creates — so the service resolves it lazily. By the time the page can call it,
 			// startDictation has run.
@@ -175,6 +188,33 @@ func main() {
 			// the Go side; only the pixels disagreed.
 			opaque, alpha := macos.WindowOpacity(wins.overlay.NativeWindow())
 			log.Printf("debug: overlay shown — opaque=%v backgroundAlpha=%.2f (want false / 0.00)", opaque, alpha)
+		}()
+	}
+
+	// Come to the front on launch.
+	//
+	// MEASURED, not assumed: launched with `open` (Finder, Dock) the window came up
+	// visible=true miniaturized=false key=true appActive=true — already correct. Launched as a plain
+	// process from a terminal it came up visible=true miniaturized=false key=false appActive=false:
+	// on screen, but behind the shell that started it, which is what "it opens minimised" actually
+	// was. LaunchServices activates an app for us; a bare exec does not.
+	//
+	// Deliberately once and only here. Activating Loqui mid-dictation would send the synthesised
+	// paste into Loqui and make focusGuard discard every transcript — see internal/macos.ActivateApp.
+	if runtime.GOOS == "darwin" {
+		macos.ActivateApp()
+	}
+
+	// Says what the window IS a few seconds in, for when this regresses: "minimised" and "behind the
+	// terminal" look identical to a user and have different fixes. Gated like the other probes.
+	if os.Getenv("LOQUI_DEBUG_WINDOW") == "1" {
+		go func() {
+			time.Sleep(3 * time.Second)
+			if w := wins.settings; w != nil {
+				visible, mini, key, active := macos.WindowState(w.NativeWindow())
+				log.Printf("WIN-STATE: settings visible=%v miniaturized=%v key=%v appActive=%v",
+					visible, mini, key, active)
+			}
 		}()
 	}
 
