@@ -21,8 +21,10 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/elevenlabs"
 	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
 	"github.com/Juan-Motta/loqui-go/internal/stt/helper"
+	"github.com/Juan-Motta/loqui-go/internal/stt/openai"
 )
 
 // idleLimit stops a session left open with no speech.
@@ -269,6 +271,12 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 	case "grok":
 		return d.buildGrokProvider()
 
+	case "elevenlabs":
+		return d.buildElevenLabsProvider()
+
+	case "openai":
+		return d.buildOpenAIProvider()
+
 	case "macos":
 		return d.buildAppleProvider()
 
@@ -305,6 +313,72 @@ func (d *Dictation) buildGrokProvider() (stt.Provider, error) {
 		// supported language either way.
 		Language: d.store.LanguagesFor("grok")[0],
 		Log:      d.ui.Log,
+	}), nil
+}
+
+// buildElevenLabsProvider streams to ElevenLabs Scribe v2 over a WebSocket.
+//
+// Same shape as Grok — cloud, metered, fed by the host's single capture pipeline — and the key is read
+// UP FRONT for the same reason: "you never configured a key" and "the Keychain did not answer" send
+// the user to completely different places, and HasKey collapses them.
+func (d *Dictation) buildElevenLabsProvider() (stt.Provider, error) {
+	getKey := d.keyReaderFor(store.SlotElevenLabs)
+	if _, err := getKey(); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoSecret):
+			return nil, fmt.Errorf("configura la API key de ElevenLabs en Ajustes")
+		case errors.Is(err, store.ErrKeychainTimeout):
+			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_ELEVENLABS_KEY para probar")
+		default:
+			return nil, fmt.Errorf("no se pudo leer la API key de ElevenLabs del Keychain: %w", err)
+		}
+	}
+	// One optional language, and the sentinel matters: this endpoint has no "auto" value, so the
+	// parameter is omitted entirely for automatic detection. Sending the literal "auto" would be read
+	// as a language name.
+	language := d.store.LanguagesFor("elevenlabs")[0]
+	if language == "auto" {
+		language = ""
+	}
+	return elevenlabs.New(elevenlabs.Config{
+		GetKey:   getKey,
+		Language: language,
+		Log:      d.ui.Log,
+	}), nil
+}
+
+// buildOpenAIProvider streams to OpenAI's realtime transcription endpoint.
+//
+// TWO THINGS SET IT APART from the other cloud providers, both handled inside the provider: the session
+// must be configured with a session.update before anything is transcribed, and its audio is 24 kHz while
+// the capture pipeline delivers 16 — so every chunk is resampled on the way out. Sending 16 kHz into a
+// 24 kHz session is accepted and transcribes a sped-up voice, which is why that conversion is not
+// optional.
+func (d *Dictation) buildOpenAIProvider() (stt.Provider, error) {
+	getKey := d.keyReaderFor(store.SlotOpenAI)
+	if _, err := getKey(); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoSecret):
+			return nil, fmt.Errorf("configura la API key de OpenAI en Ajustes")
+		case errors.Is(err, store.ErrKeychainTimeout):
+			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_OPENAI_KEY para probar")
+		default:
+			return nil, fmt.Errorf("no se pudo leer la API key de OpenAI del Keychain: %w", err)
+		}
+	}
+	// "auto" is this app's sentinel for "detect", and the API has no such value: the hint is simply
+	// omitted. Sending the literal string would be read as a language name.
+	language := d.store.LanguagesFor("openai")[0]
+	if language == "auto" {
+		language = ""
+	}
+	return openai.New(openai.Config{
+		GetKey:   getKey,
+		Language: language,
+		// The stored model, reused from the Azure OpenAI field the settings already carry. Empty falls
+		// back to the provider's default rather than failing.
+		Model: d.store.LoadSettings().AzureOpenAiDeployment,
+		Log:   d.ui.Log,
 	}), nil
 }
 

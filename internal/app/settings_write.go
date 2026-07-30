@@ -203,6 +203,24 @@ func (s *SettingsService) SetAppLanguage(language string) WriteResult {
 	return s.ok()
 }
 
+// SetOnboarded records that the tutorial was completed or skipped. Bound as Settings.SetOnboarded().
+//
+// It is a flag of its own and NOT derived from "does the app look configured": the defaults are
+// already usable (local whisper, no key, no internet), so anything inferred would either re-open the
+// wizard for a user who chose those defaults on purpose, or never open it at all.
+//
+// Nothing to validate — a bool is a bool. The write still goes through UpdateSettings so it is
+// transactional with whatever else is on disk, never Load-then-Save.
+func (s *SettingsService) SetOnboarded(done bool) WriteResult {
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Onboarded = done
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar el estado del tutorial: %v", err)
+	}
+	return s.ok()
+}
+
 // SetInputDevice stores the chosen microphone. Bound as Settings.SetInputDevice().
 //
 // NOT validated against the enumerated list, deliberately. A device id can be stored while the

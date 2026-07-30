@@ -193,3 +193,44 @@ func byID(rows []ConnectionRow) map[string]ConnectionRow {
 	}
 	return out
 }
+
+// The row carries the KEY slot for the same reason it carries LangSlot: Azure's slot depends on its
+// sub-service, so a page deriving it would store the credential under the wrong service — and the
+// wizard, which offers a key field for the engine you just chose, is a second place that would have
+// to reimplement the rule.
+func TestConnectionRowsCarryTheKeySlotAndLeaveItEmptyForLocalEngines(t *testing.T) {
+	s := DefaultSettings()
+	s.AzureService = "speech"
+	rows := ConnectionRows(s, map[KeySlot]bool{}, HostCapabilities{})
+
+	bySlot := map[string]string{}
+	for _, r := range rows {
+		bySlot[r.ID] = r.KeySlot
+	}
+
+	// A local engine needs no credential at all: an empty slot is what tells the page not to ask.
+	for _, local := range []string{"whisper", "macos"} {
+		if got := bySlot[local]; got != "" {
+			t.Errorf("%s trae keySlot %q, quería vacío — no usa clave", local, got)
+		}
+	}
+	for id, want := range map[string]string{
+		"azure":      "azure-speech",
+		"openai":     "openai",
+		"grok":       "grok",
+		"elevenlabs": "elevenlabs",
+	} {
+		if got := bySlot[id]; got != want {
+			t.Errorf("%s trae keySlot %q, quería %q", id, got, want)
+		}
+	}
+
+	// The sub-service is the whole point: with Azure on OpenAI realtime the row must edit the OTHER
+	// slot, or the key lands where dictation will never read it.
+	s.AzureService = "openai"
+	for _, r := range ConnectionRows(s, map[KeySlot]bool{}, HostCapabilities{}) {
+		if r.ID == "azure" && r.KeySlot != "azure-openai" {
+			t.Errorf("azure con subservicio openai trae keySlot %q, quería azure-openai", r.KeySlot)
+		}
+	}
+}

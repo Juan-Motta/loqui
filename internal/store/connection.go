@@ -53,6 +53,14 @@ type ConnectionRow struct {
 	// to OpenAI realtime changes which slot the row is editing, and a page reimplementing that rule
 	// would silently save a language into the other service's slot.
 	LangSlot string `json:"langSlot"`
+
+	// KeySlot is where this engine's credential lives, empty for the local engines that need none.
+	//
+	// Travels with the row for exactly the reason LangSlot does: Azure's slot depends on its
+	// sub-service, so a page working it out for itself would offer a key field that writes into the
+	// other service's slot — stored successfully, and never read at dictation time. The tutorial is a
+	// second place that asks for a key, which makes one shared answer worth more than two.
+	KeySlot string `json:"keySlot"`
 }
 
 // connections is the engines and their order. The page paints them top to bottom, so the order is
@@ -108,6 +116,17 @@ func (c HostCapabilities) platform() string {
 		return "darwin"
 	}
 	return c.Platform
+}
+
+// keySlotOrEmpty is KeySlotFor flattened for the row: "" means this engine takes no credential.
+//
+// The two-value form is right for callers that must not confuse "no key needed" with "key missing";
+// for a row that only has to decide whether to show a field, an empty string says it.
+func keySlotOrEmpty(provider, azureService string) string {
+	if slot, ok := KeySlotFor(provider, azureService); ok {
+		return string(slot)
+	}
+	return ""
 }
 
 // KeySlotFor is the slot a provider's key lives in, and whether it needs one at all.
@@ -241,6 +260,7 @@ func ConnectionRows(s Settings, keys map[KeySlot]bool, caps HostCapabilities) []
 			State:    state,
 			Label:    connectionLabels[state],
 			LangSlot: LangSlotFor(c.id, s.AzureService),
+			KeySlot:  keySlotOrEmpty(c.id, s.AzureService),
 		})
 	}
 	return out

@@ -387,11 +387,12 @@ func IsKnownProvider(provider string) bool {
 // in step with the switch in app.(*Dictation).buildProvider, which is the code that would
 // otherwise reject them at the worst possible moment.
 var availableProviders = map[string]bool{
-	"whisper": true,
-	"macos":   true,
-	"azure":   true,
-	"grok":    true,
-	// openai and elevenlabs are named engines but not ported yet.
+	"whisper":    true,
+	"macos":      true,
+	"azure":      true,
+	"grok":       true,
+	"elevenlabs": true,
+	"openai":     true,
 }
 
 // IsAvailableProvider reports whether an engine can actually dictate.

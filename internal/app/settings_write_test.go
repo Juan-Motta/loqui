@@ -284,28 +284,44 @@ func TestAnInvalidRegionIsRefusedAndChangesNothing(t *testing.T) {
 // bug: the picker lists six engines, so selecting an unported one would replace a working setup
 // with one that fails at the next dictation — far from the click that caused it. buildProvider
 // rejects it there; this rejects it here, where the user can still see why.
-func TestAnUnportedProviderIsRefusedAndKeepsTheWorkingOne(t *testing.T) {
+func TestEveryNamedProviderIsNowOfferedAndAnUnknownOneIsRefused(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, _ := testService(t, st)
 	if res := svc.SetProvider("whisper"); res.Error != "" {
 		t.Fatalf("SetProvider(whisper): %s", res.Error)
 	}
 
-	res := svc.SetProvider("elevenlabs") // named in AllProviders, not ported
-	if res.Error == "" {
-		t.Fatal("an unported provider was accepted")
+	// THIS TEST HAS BEEN REWRITTEN TWICE BY THE CODE CATCHING UP WITH IT, and both times that was the
+	// point. It first named elevenlabs as "not ported", and failed when elevenlabs was ported; then
+	// openai, and failed when openai was. There is no unported engine left to name, so what it guards
+	// now is the two halves that remain true:
+	//
+	//  1. every engine the picker LISTS is one the backend will accept — a listed engine that
+	//     SetProvider refuses is a dead option in the menu;
+	//  2. something that is not a known engine at all is still refused without touching the working one.
+	//
+	// When the next named-but-unported engine appears, the first loop is what will fail, and the fix is
+	// to exclude it here and mark it unavailable in store.availableProviders — not to delete the loop.
+	res := svc.SetProvider("whisper")
+	for _, p := range res.Payload.Providers {
+		if !p.Available {
+			t.Errorf("%s se ofrece como no disponible; si sigue sin portarse, este test debe excluirlo explícitamente", p.ID)
+			continue
+		}
+		if r := svc.SetProvider(p.ID); r.Error != "" {
+			t.Errorf("SetProvider(%s) falló pese a estar listado como disponible: %s", p.ID, r.Error)
+		}
+	}
+
+	// Back to a known-good engine before the refusal case, so what it must preserve is unambiguous.
+	if r := svc.SetProvider("whisper"); r.Error != "" {
+		t.Fatalf("SetProvider(whisper): %s", r.Error)
+	}
+	if r := svc.SetProvider("no-existe"); r.Error == "" {
+		t.Error("un motor desconocido fue aceptado")
 	}
 	if got := st.LoadSettings().Provider; got != "whisper" {
-		t.Errorf("Provider = %q — the working engine was replaced by an unavailable one", got)
-	}
-	// And the payload says so, so the picker can grey it out rather than just refusing on click.
-	for _, p := range res.Payload.Providers {
-		if p.ID == "elevenlabs" && p.Available {
-			t.Error("elevenlabs is reported as available")
-		}
-		if p.ID == "whisper" && !p.Available {
-			t.Error("whisper is reported as unavailable")
-		}
+		t.Errorf("Provider = %q — un motor desconocido reemplazó el que funcionaba", got)
 	}
 }
 
@@ -751,5 +767,54 @@ func TestOnlyAzureSpeechUsesTheRegion(t *testing.T) {
 		if store.UsesAzureRegion(slot) {
 			t.Errorf("%s must not use the Azure Speech region", slot)
 		}
+	}
+}
+
+// The tutorial's flag, which decides whether the wizard opens by itself at launch.
+func TestSettingOnboardedPersistsAndComesBackInThePayload(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _ := testService(t, st)
+
+	if st.LoadSettings().Onboarded {
+		t.Fatal("Onboarded debería empezar en false, o el wizard nunca se abriría solo")
+	}
+
+	res := svc.SetOnboarded(true)
+	if res.Error != "" {
+		t.Fatalf("SetOnboarded: %s", res.Error)
+	}
+	if !res.Payload.Onboarded {
+		t.Error("el payload devuelto dice Onboarded=false tras marcarlo")
+	}
+	// Persisted, not merely reflected back: the flag's whole job is to survive the next launch.
+	if !st.LoadSettings().Onboarded {
+		t.Error("Onboarded no quedó en disco")
+	}
+}
+
+// Reopening the tutorial from the footer must NOT clear the flag — that would make the wizard
+// auto-open on every launch afterwards, which is the one failure the user cannot escape by using the
+// app normally. So false has to be storable (nothing else could ever reset it) while the reopen path
+// is required to leave it alone.
+func TestSettingOnboardedFalseIsStorableAndIndependentOfOtherSettings(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	settings := st.LoadSettings()
+	settings.Onboarded = true
+	settings.Provider = "whisper"
+	if err := st.SaveSettings(settings); err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	svc, _ := testService(t, st)
+
+	res := svc.SetOnboarded(false)
+	if res.Error != "" {
+		t.Fatalf("SetOnboarded(false): %s", res.Error)
+	}
+	if st.LoadSettings().Onboarded {
+		t.Error("no se pudo volver a false")
+	}
+	// And it touched nothing else: a flag write that resets the engine would silently undo setup.
+	if got := st.LoadSettings().Provider; got != "whisper" {
+		t.Errorf("Provider = %q tras escribir el flag, quería whisper intacto", got)
 	}
 }
