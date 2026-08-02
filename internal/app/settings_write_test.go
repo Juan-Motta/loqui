@@ -73,6 +73,15 @@ func testService(t *testing.T, st *store.Store) (*SettingsService, *testVault) {
 				return PermissionsState{Microphone: permissions.Granted}
 			},
 			devices: func() ([]audio.InputDevice, error) { return nil, nil },
+			// Pinned rather than read from the machine: without this the connection states in the
+			// payload depend on the macOS version and the helpers present on whoever runs the suite.
+			caps: func() store.HostCapabilities { return store.HostCapabilities{} },
+		},
+		getSecret: func(slot store.KeySlot) (string, error) {
+			if secret, ok := vault.get(slot); ok {
+				return secret, nil
+			}
+			return "", store.ErrNoSecret
 		},
 		setSecret: func(slot store.KeySlot, secret string) error {
 			vault.set(slot, secret)
@@ -564,7 +573,10 @@ func TestARegionOnlySaveIsAllowedOnAnEnvBackedSlot(t *testing.T) {
 // entered — and it would have been reported by whoever hit it, not by the code.
 func TestARegionOnlyFailureDoesNotClaimTheKeyWasSaved(t *testing.T) {
 	st := store.NewAt(t.TempDir())
-	svc, _ := testService(t, st)
+	svc, vault := testService(t, st)
+	// A stored key is part of the arrangement, not scenery: without one the save is refused for the
+	// missing credential and never reaches the disk write this case is about.
+	vault.set(store.SlotAzureSpeech, "la-guardada")
 	// A directory where the settings file should be makes the atomic rename fail.
 	if err := os.MkdirAll(st.SettingsPath(), 0o700); err != nil {
 		t.Fatalf("arranging the disk failure: %v", err)
@@ -573,6 +585,10 @@ func TestARegionOnlyFailureDoesNotClaimTheKeyWasSaved(t *testing.T) {
 	res := svc.SaveConnection("azure-speech", "uksouth", "")
 	if res.Error == "" {
 		t.Fatal("the disk failure was not reported")
+	}
+	if !strings.Contains(res.Error, "región") {
+		t.Errorf("error = %q — that is not the region write failing, so this case is not covering it",
+			res.Error)
 	}
 	if strings.Contains(res.Error, "clave se guardó") {
 		t.Errorf("error = %q — no key was written, so it must not say one was saved", res.Error)

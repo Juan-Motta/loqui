@@ -331,7 +331,25 @@ function escapeHtml(s: string): string {
 
 // paint renders the view from one payload. Called on load and after every write, so there is
 // exactly one path from state to pixels and nothing is ever updated in place.
-function paint(p: SettingsPayload): void {
+// paintedRevision is the newest snapshot this page has drawn.
+//
+// Several producers hand paint() a whole-window snapshot and they do not queue against each other:
+// the Conexiones queue, Sistema, idiomas, onboarding, and the reload after a permission grant. The
+// order they arrive in is therefore not the order they were taken in, and the last to land would win
+// — putting a superseded state back on screen. Go stamps each payload as it STARTS being built
+// (SettingsPayload.Revision), which makes "this one is older" a fact rather than a guess.
+let paintedRevision = 0;
+
+// Returns whether the snapshot was applied. Callers use it to keep their hands off anything this
+// function owns when it declines: if a newer payload is already on screen, that one is right.
+function paint(p: SettingsPayload): boolean {
+  // A snapshot that began before the one already drawn describes a world that has moved on.
+  if (p.revision > 0 && p.revision < paintedRevision) {
+    Events.Emit("ui:stale-payload", { got: p.revision, painted: paintedRevision });
+    return false;
+  }
+  if (p.revision > paintedRevision) paintedRevision = p.revision;
+
   const statusBySlot = new Map((p.keys ?? []).map((k) => [k.slot, k]));
 
   // The engine picker. Options come from Go rather than the hardcoded markup list, so an engine
@@ -509,11 +527,21 @@ function paint(p: SettingsPayload): void {
     const slot = KEY_SLOT_BY_PROVIDER[provider];
     const key = slot ? statusBySlot.get(slot) : undefined;
 
-    // "Usar este motor" is HIDDEN — not disabled — on the engine already in use and on one that
-    // cannot run here, matching the original. A disabled button still occupies the row and invites
-    // the question of why it is dead; an absent one does not.
+    // "Usar este motor", by state, and the three outcomes are deliberately different:
+    //
+    //  · active / unsupported → HIDDEN, as the original does. A button that could never do anything
+    //    here just occupies the row and invites the question of why it is dead.
+    //  · unconfigured → VISIBLE BUT DISABLED. Selecting an engine that cannot dictate is how a
+    //    working setup gets replaced by one that fails at the next dictation; shown-and-dead says
+    //    "this is the button, once you finish configuring" in a way an absent one cannot.
+    //  · connected / available → enabled. `available` is load-bearing: it is the state of Whisper and
+    //    macOS, which take no credential at all — treating "no key" as "not configured" would make
+    //    both local engines unselectable.
     for (const use of card.querySelectorAll<HTMLButtonElement>(".conn-use")) {
       use.style.display = active || !available ? "none" : "";
+      const ready = state === "connected" || state === "available";
+      use.disabled = !ready;
+      use.title = ready ? "" : "Configura este motor antes de poder usarlo";
     }
 
     // The key field stays EMPTY even when a key is stored: the payload carries presence, never
@@ -546,6 +574,23 @@ function paint(p: SettingsPayload): void {
   renderAllLanguages(p);
   paintSystem(p);
   paintOnboarding(p);
+  return true;
+}
+
+// paintOwns reports whether paint() sets this control's enabled state.
+//
+// The three buttons inside a card are painted from the payload, so releasing them by hand after a
+// write is not merely redundant: when the payload is DECLINED as stale, the hand-release would put
+// back a button that the newer snapshot had disabled — handing the user a "Borrar clave" for a key
+// that is already gone. Controls paint() does not own (the engine picker, "Probar conexión") have to
+// be released by whoever disabled them.
+function paintOwns(control: HTMLButtonElement | HTMLSelectElement | null): boolean {
+  return (
+    control !== null &&
+    (control.classList.contains("conn-save") ||
+      control.classList.contains("conn-delete") ||
+      control.classList.contains("conn-use"))
+  );
 }
 
 // The badge's wording is NOT decided here any more. It comes from store.ConnectionRows, which is the
@@ -563,7 +608,13 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
         ? "(definida por variable de entorno — no se puede borrar desde aquí)"
         : "(guardada — escribe una nueva para reemplazarla)";
     case "absent":
-      return "(no configurada)";
+      // Absent AND from the environment is a state of its own: the variable is in force, so it is
+      // what dictation reads, and it holds nothing usable. "No configurada" would send the user to
+      // paste a key that the variable would go on overriding — and that the backend refuses to save
+      // for exactly that reason.
+      return fromEnv
+        ? "(la variable de entorno está definida pero vacía — quítala del entorno para usar una clave guardada)"
+        : "(no configurada)";
     case "unreadable":
       return "(el Keychain no respondió — la app no está firmada con una identidad estable)";
     default:
@@ -572,6 +623,64 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
 }
 
 // ---- acting ----------------------------------------------------------------------
+
+// ---- who gets to speak, and what it looks like -------------------------------------
+
+// cardEpochs arbitrates the STATUS LINE of one card.
+//
+// The four actions of a card share one `.status`, and the connection test does NOT go through the
+// write queue — it changes nothing, and making a fifteen-second network call block a Guardar would be
+// worse than the problem. So a slow test can finish after a newer action and describe a world that is
+// two steps old. Each action takes the card's epoch when it starts and only writes the message if
+// nobody has started another one since.
+//
+// It arbitrates the MESSAGE ONLY. Payloads are ordered by their own revision inside paint(): dropping
+// a write's payload here would leave the badge, the key label and the delete button describing the
+// state before the write that just succeeded.
+const cardEpochs = new WeakMap<HTMLElement, number>();
+
+function beginAction(card: HTMLElement | null): number {
+  if (!card) return 0;
+  const next = (cardEpochs.get(card) ?? 0) + 1;
+  cardEpochs.set(card, next);
+  // A new action supersedes whatever the last one complained about, so the red border goes with it.
+  for (const field of card.querySelectorAll<HTMLElement>(".invalid")) {
+    field.classList.remove("invalid");
+  }
+  return next;
+}
+
+function isCurrent(card: HTMLElement | null, epoch: number): boolean {
+  return card === null || (cardEpochs.get(card) ?? 0) === epoch;
+}
+
+// say writes the one line the user actually reads.
+//
+// Success is STATED, never implied by silence: an empty status line is indistinguishable from a click
+// that never arrived, and for "Borrar clave" that would mean a credential vanishing without a word.
+// The busy text names the activity for the same reason — a bare ellipsis is on screen for as long as
+// the round trip takes and reads as a flicker.
+function say(status: HTMLElement | null, kind: "ok" | "err" | "busy", text: string): void {
+  if (!status) return;
+  status.className = kind === "busy" ? "status" : "status " + kind;
+  status.textContent = kind === "ok" ? "✓ " + text : kind === "err" ? "✗ " + text : text;
+}
+
+// markInvalid puts the border on the input Go named. The page is told WHICH field, never asked to
+// work it out from the message — that would be the same validation rule written twice.
+function markInvalid(card: HTMLElement | null, provider: string, field: string): void {
+  if (!card || field === "") return;
+  const id =
+    field === "key" ? KEY_INPUT_BY_PROVIDER[provider] : field === "region" ? "region" : "";
+  const input = id ? $<HTMLElement>(id) : null;
+  if (!input) return;
+  input.classList.add("invalid");
+  // Cleared as soon as the user acts on the complaint. A border that survives the correction is
+  // worse than none: it goes on accusing someone who already did what was asked.
+  const clear = () => input.classList.remove("invalid");
+  input.addEventListener("input", clear, { once: true });
+  input.addEventListener("change", clear, { once: true });
+}
 
 // writes is a one-at-a-time queue for every settings action.
 //
@@ -608,8 +717,13 @@ async function run(
   status: HTMLElement | null,
   trigger: HTMLButtonElement | HTMLSelectElement | null,
   action: () => Promise<WriteResult>,
+  opts: { card?: HTMLElement | null; provider?: string; busy?: string } = {},
 ): Promise<void> {
-  if (status) status.textContent = "…";
+  const card = opts.card ?? null;
+  const epoch = beginAction(card);
+  // A named activity rather than "…". The ellipsis was on screen for as long as the round trip took
+  // — often a few hundred milliseconds — and then vanished, so the user reported never seeing it.
+  say(status, "busy", opts.busy ?? "Guardando…");
   const wasDisabled = trigger?.disabled ?? false;
   if (trigger) trigger.disabled = true;
   // The ENTIRE sequence goes in the queue — the call, the recovery load and the repaint. Wrapping
@@ -618,30 +732,44 @@ async function run(
   await serialize(async () => {
     try {
       const res = await action();
-      // Busy state released BEFORE painting, so paint() decides the final enabled state. The other
-      // order silently undid it: paint() disables the now-active "Usar este motor" and the delete
-      // button of a key that is gone, and re-enabling afterwards handed both back to the user.
-      if (trigger) trigger.disabled = false;
-      paint(res.payload);
-      if (status) status.textContent = res.error;
+      // ALWAYS handed over, whatever the epoch says: this payload is the authority on the badge, the
+      // key label and the buttons. paint() itself declines it if a newer snapshot already landed.
+      const applied = paint(res.payload);
+      // The busy state is released only for controls paint() does not own. For the card's own
+      // buttons the payload decides — the one just applied, or the newer one that superseded it.
+      if (trigger && !paintOwns(trigger)) trigger.disabled = false;
+      if (!applied) Events.Emit("ui:stale-write", { action: label });
+      if (isCurrent(card, epoch)) {
+        if (res.error === "") {
+          say(status, "ok", res.notice);
+        } else {
+          say(status, "err", res.error);
+          markInvalid(card, opts.provider ?? "", res.field);
+        }
+      }
       Events.Emit("ui:action", {
         action: label,
         ok: res.error === "",
         error: res.error,
+        notice: res.notice,
+        field: res.field,
       });
     } catch (err) {
       // A thrown error here is a TRANSPORT failure, not a rejected write: the binding itself did not
       // complete, so there is no payload and the page's picture is now unknown. Re-read it.
       const msg = String(err instanceof Error ? err.message : err);
-      if (status) status.textContent = msg;
+      if (isCurrent(card, epoch)) say(status, "err", msg);
       Events.Emit("ui:action", { action: label, ok: false, error: msg });
       try {
         // The payload is awaited BEFORE the control is released. Releasing first would leave it
         // actionable for the whole round trip at the one moment the page's state is explicitly
         // unknown — long enough to start a second write on top of the one that just failed.
         const payload = await Settings.Load();
-        if (trigger) trigger.disabled = false;
+        // Same arbitration as the success path: paint decides, and the card's own buttons are only
+        // ever released by it. This recovery can take a while, so a newer snapshot may well have
+        // landed meanwhile — releasing by hand would hand back a button that snapshot had disabled.
         paint(payload);
+        if (trigger && !paintOwns(trigger)) trigger.disabled = false;
       } catch {
         // The backend is unreachable, so there is no authoritative state to paint from. Restore the
         // control to what it was rather than enabling it: guessing "enabled" would offer an action
@@ -652,13 +780,75 @@ async function run(
   });
 }
 
+// probe runs a connection test.
+//
+// Deliberately NOT run(): it is a read, so there is no write to serialise and nothing to roll the
+// page back to. What it shares with run() is everything the user can see — the busy line, the epoch
+// that decides who speaks, and repainting from whatever payload comes back.
+async function probe(
+  card: HTMLElement,
+  status: HTMLElement | null,
+  trigger: HTMLButtonElement,
+  provider: string,
+  slot: string,
+  region: string,
+  secret: string,
+): Promise<void> {
+  const epoch = beginAction(card);
+  say(status, "busy", "Probando la conexión…");
+  trigger.disabled = true;
+  try {
+    // Read-after-write: anything already queued has to land first, or an empty key field would be
+    // tested against the credential the user has just replaced.
+    await writes;
+    const res = await Settings.TestConnection(slot, region, secret);
+    // Not painted from the payload — no state disables it, by design — so it releases itself.
+    trigger.disabled = false;
+    // The probe reads the Keychain, so its payload can be the first place a write that timed out and
+    // landed late becomes visible. paint() drops it if a newer snapshot got there first.
+    // A probe writes nothing, so its repaint must leave the form exactly as it found it. paint() fills
+    // the region select from what is STORED — right after a save, wrong here: an unsaved choice would
+    // be swapped back silently and the next Guardar would store the key against a region that was
+    // never the one tested.
+    //
+    // The value is read LIVE, immediately before the repaint, and not the one captured at the click:
+    // a save that landed while the network was busy has already painted its own region, and putting
+    // back the older selection would leave the form disagreeing with the store. The empty value is
+    // restored too — clearing the selector is a choice like any other.
+    const select = $<HTMLSelectElement>("region");
+    const onScreen = select?.value;
+    const applied = paint(res.payload);
+    if (applied && select && onScreen !== undefined && select.value !== onScreen) {
+      select.value = onScreen;
+    }
+    if (isCurrent(card, epoch)) {
+      if (res.ok) {
+        say(status, "ok", res.message);
+      } else {
+        say(status, "err", res.error);
+        markInvalid(card, provider, res.field);
+      }
+    }
+    Events.Emit("ui:probe", { provider, ok: res.ok, error: res.error, field: res.field });
+  } catch (err) {
+    const msg = String(err instanceof Error ? err.message : err);
+    trigger.disabled = false;
+    if (isCurrent(card, epoch)) say(status, "err", msg);
+    Events.Emit("ui:probe", { provider, ok: false, error: msg });
+  }
+}
+
 function wire(): void {
   const engineStatus = $<HTMLElement>("engineStatus");
   const home = $<HTMLSelectElement>("homeEngine");
   home?.addEventListener("change", (e) => {
     const value = (e.target as HTMLSelectElement).value;
-    void run(`setProvider(${value})`, engineStatus, home, () =>
-      Settings.SetProvider(value),
+    void run(
+      `setProvider(${value})`,
+      engineStatus,
+      home,
+      () => Settings.SetProvider(value),
+      { busy: "Cambiando de motor…" },
     );
   });
 
@@ -677,10 +867,30 @@ function wire(): void {
         if (form) form.hidden = !form.hidden;
       });
 
+    // "Probar conexión". It writes NOTHING, so it stays out of the write queue: a fifteen-second
+    // network call in there would hold up a Guardar behind it. What it does do is WAIT for whatever
+    // is already queued — otherwise a test fired right after a save would read the previous
+    // credential from the Keychain and report that the new one fails.
+    const test = card.querySelector<HTMLButtonElement>(".conn-test");
+    test?.addEventListener("click", () => {
+      if (!slot) return;
+      // Captured at the click, before the wait. Read afterwards, they would be whatever the form
+      // happens to hold when the queue drains rather than what the user pressed with.
+      const input = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
+      const secret = input?.value ?? "";
+      const regionValue =
+        provider === "azure" ? ($<HTMLSelectElement>("region")?.value ?? "") : "";
+      void probe(card, status, test, provider, slot, regionValue, secret);
+    });
+
     const use = card.querySelector<HTMLButtonElement>(".conn-use");
     use?.addEventListener("click", () => {
-      void run(`setProvider(${provider})`, status, use, () =>
-        Settings.SetProvider(provider),
+      void run(
+        `setProvider(${provider})`,
+        status,
+        use,
+        () => Settings.SetProvider(provider),
+        { card, provider, busy: "Cambiando de motor…" },
       );
     });
 
@@ -702,16 +912,24 @@ function wire(): void {
       // half of it: the region lands, the key write fails, and the user is left with a provider
       // that looks configured and cannot connect. SaveConnection validates both before writing
       // either.
-      void run(`saveConnection(${provider})`, status, save, () =>
-        Settings.SaveConnection(slot, regionValue, secret),
+      void run(
+        `saveConnection(${provider})`,
+        status,
+        save,
+        () => Settings.SaveConnection(slot, regionValue, secret),
+        { card, provider, busy: "Guardando…" },
       );
     });
 
     const del = card.querySelector<HTMLButtonElement>(".conn-delete");
     del?.addEventListener("click", () => {
       if (!slot) return;
-      void run(`deleteKey(${provider})`, status, del, () =>
-        Settings.DeleteKey(slot),
+      void run(
+        `deleteKey(${provider})`,
+        status,
+        del,
+        () => Settings.DeleteKey(slot),
+        { card, provider, busy: "Borrando la clave…" },
       );
     });
   }
@@ -893,6 +1111,114 @@ Events.On("debug:record-click", () => {
       hint: $<HTMLElement>("ctaHint")?.textContent,
     });
   }, 1500);
+});
+
+// Dev affordance: drive the four buttons of a connection card, on command from Go.
+//
+// Same reason as the other debug hooks — a button inside a Wails webview cannot be clicked from a
+// shell script, so without this the only way to check any of this is by hand. It dispatches REAL
+// clicks, so what runs is the handler the user's mouse reaches.
+//
+// The grammar is "<provider>:<action>[:<argument>]", and several steps joined by "+" run WITHOUT
+// waiting for each other — which is the only way to reproduce the overlapping-actions cases from
+// outside.
+//
+// It never accepts a key from the environment. "badkey" types a fixed, obviously invalid sentinel:
+// passing a real credential through an environment variable would put it in the process environment
+// and in every log that captures it.
+const DEBUG_BAD_KEY = "loqui-debug-clave-invalida";
+
+function debugConnStep(step: string): string {
+  const [provider, action, arg] = step.split(":");
+  const card = document.querySelector<HTMLElement>(`.conn[data-provider="${provider}"]`);
+  if (!card) return `no such card: ${provider}`;
+  // The form is folded away until "Configurar" is pressed, and a click on a hidden button does
+  // nothing at all — silently, which would read as the feature being broken.
+  const form = card.querySelector<HTMLElement>(".conn-form");
+  if (form?.hidden) card.querySelector<HTMLButtonElement>(".conn-toggle")?.click();
+
+  const key = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
+  const region = $<HTMLSelectElement>("region");
+  switch (action) {
+    case "test":
+      if (arg === "badkey" && key) key.value = DEBUG_BAD_KEY;
+      if (arg === "nokey" && key) key.value = "";
+      card.querySelector<HTMLButtonElement>(".conn-test")?.click();
+      return `test(${arg ?? "asis"})`;
+    case "save-region":
+      if (region && arg) region.value = arg;
+      card.querySelector<HTMLButtonElement>(".conn-save")?.click();
+      return `save-region(${arg ?? ""})`;
+    case "set-region":
+      // Chosen but NOT saved, which is the state a probe has to leave untouched: paint() fills this
+      // select from what is stored, so restoring it is the only thing keeping an unsaved choice
+      // alive across a test.
+      if (region && arg) region.value = arg;
+      return `set-region(${arg ?? ""})`;
+    case "clear-region":
+      if (region) region.value = "";
+      return "clear-region";
+    case "save":
+      if (arg === "nokey" && key) key.value = "";
+      card.querySelector<HTMLButtonElement>(".conn-save")?.click();
+      return "save";
+    case "use":
+      card.querySelector<HTMLButtonElement>(".conn-use")?.click();
+      return "use";
+    case "delete":
+      card.querySelector<HTMLButtonElement>(".conn-delete")?.click();
+      return "delete";
+    default:
+      return `no such action: ${action}`;
+  }
+}
+
+// reportCard is what a card looks like right now: the state a human would read off the screen.
+function reportCard(provider: string): Record<string, unknown> {
+  const card = document.querySelector<HTMLElement>(`.conn[data-provider="${provider}"]`);
+  if (!card) return { provider, error: "no such card" };
+  const button = (sel: string) => {
+    const b = card.querySelector<HTMLButtonElement>(sel);
+    if (!b) return "absent";
+    return `${b.style.display === "none" ? "hidden" : "shown"}/${b.disabled ? "disabled" : "enabled"}`;
+  };
+  const status = card.querySelector<HTMLElement>(".status");
+  return {
+    provider,
+    badge: card.querySelector<HTMLElement>(".conn-state")?.textContent ?? "",
+    badgeClass: card.querySelector<HTMLElement>(".conn-state")?.className ?? "",
+    status: status?.textContent ?? "",
+    statusClass: status?.className ?? "",
+    keyState: card.querySelector<HTMLElement>(".key-state")?.textContent ?? "",
+    region: $<HTMLSelectElement>("region")?.value ?? "",
+    test: button(".conn-test"),
+    use: button(".conn-use"),
+    delete: button(".conn-delete"),
+    save: button(".conn-save"),
+    invalid: Array.from(card.querySelectorAll<HTMLElement>(".invalid"))
+      .map((el) => el.id)
+      .join(","),
+  };
+}
+
+Events.On("debug:conn-click", (e: { data: unknown }) => {
+  const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  const steps = String(arg ?? "").split("+");
+  const provider = String(steps[0] ?? "").split(":")[0];
+  // Only the first step names the card; the rest inherit it. Every chain acts on one card — that is
+  // what makes the steps overlap in the first place — and repeating the provider in each one reads
+  // as though they might not.
+  const done = steps.map((step) => {
+    const named = document.querySelector(`.conn[data-provider="${step.split(":")[0]}"]`) !== null;
+    return debugConnStep(named ? step : `${provider}:${step}`);
+  });
+  Events.Emit("ui:conn-probe", { ran: done.join(" | "), card: reportCard(provider) });
+});
+
+// Report a card's state without touching it, for the before/after of a use case.
+Events.On("debug:conn-report", (e: { data: unknown }) => {
+  const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  Events.Emit("ui:conn-report", { card: reportCard(String(arg ?? "azure")) });
 });
 
 Events.On("debug:exercise-write", (e: { data: unknown }) => {

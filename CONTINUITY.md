@@ -8,7 +8,17 @@
   configura y se usa. El usuario la probó y dice que "se ve bien todo"; quedan detalles menores de
   UI que él pulirá.
 
-- **Next step:** **portar la fila del modelo de whisper**, lo único que falta del encargo de
+- **Next step:** **portar "Probar conexión" a OpenAI, Grok y ElevenLabs** — pedido por el usuario el
+  2026-08-01 y declarado fuera del cambio anterior. Los tres son WebSocket con handshakes distintos
+  (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
+  `wss://api.elevenlabs.io/v1/speech-to-text/realtime`), así que no comparten prueba con el
+  intercambio de token HTTP de Azure: cada uno necesita la suya, reusando el dial de su paquete. El
+  molde está en `internal/app/settings_probe.go` (allowlist `slotsWithProbe`, preflight antes de la
+  red, tres resultados distintos de la lectura de credencial) y el card ya tiene el botón cableado.
+  **Falta también verificar el camino verde de Azure**: `✓ Conexión correcta` no se ha ejecutado
+  nunca porque no hay clave válida en la máquina — la borró el propio bug (ver abajo).
+
+- **Después:** **portar la fila del modelo de whisper**, lo único que falta del encargo de
   fidelidad (el trabajo de la sesión anterior ya está mergeado en `main`, hasta `14a3241`). Empezar
      por el test rojo de `modelSpec` en Go: portar `../loqui/src/shared/modelSpec.ts` a
      `internal/store/model.go` (nombre del archivo, tamaño esperado, URL de descarga) con tests, y
@@ -28,6 +38,11 @@
   3. **Keys de nube.** La de Azure está marcada como expuesta; de xAI no hay ninguna. Sin ellas no
      se verifica transcripción real por esas rutas.
 
+- **El bug de anoche borró la clave de Azure del usuario.** "Borrar clave" funcionaba y no decía
+  nada, así que la credencial desapareció del Keychain sin aviso. Ya está arreglado (el card habla
+  ahora), pero **el slot `azure-speech` está vacío**: cualquier verificación del camino verde necesita
+  que el usuario pegue una clave nueva.
+
 - **Deuda, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un `tsconfig.json`
   con opciones de TS5, así que `tsc` no puede leer la config y vite borra los tipos sin validarlos.
   Ya se escribieron ~1500 líneas de TS sin red. **Subir typescript antes de escribir más.**
@@ -39,7 +54,7 @@
 
 - **Active workflow:** ninguno. El último cerrado (los setters de Ajustes) está en
   `.workflow/state.md` — **gitignored**, así que un clon nuevo no lo tiene.
-- **Updated:** 2026-07-29
+- **Updated:** 2026-08-01
 
 ## Handoff notes
 
@@ -83,8 +98,8 @@
    solapaban, y uno afirmaba sobre un código presente en las dos listas que debía distinguir.
    **Verificar cada test nuevo rompiendo a propósito lo que dice cubrir.**
 
-5. **Lo que sigue inerte** (medido, no de memoria): la fila del modelo (`#modelRow`), "Probar
-   conexión" de Azure (`#test`), el `#save` de Sistema — que puede ser redundante por diseño, porque
+5. **Lo que sigue inerte** (medido, no de memoria): la fila del modelo (`#modelRow`), el `#save` de
+   Sistema — que puede ser redundante por diseño, porque
    aquí cada control ya persiste al cambiar —, `#engineHint`, los campos de subservicios sin portar
    (`azureOpenAiResource`, `azureOpenAiDeployment`, `openaiModel`), los enlaces del pie
    (`#openDonate`, `#openTutorial`), las vistas **About** y **reporte**, y los 17 elementos `wiz*`

@@ -323,6 +323,20 @@
       button.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
       button.btn.primary:hover { filter: brightness(1.07); }
       button.btn.small { padding: 4px 10px; font-size: 12px; }
+      /* A dead button has to LOOK dead: button.btn sets its own colours and hover, so a disabled one
+         is otherwise pixel-identical to a live one and reads as a button that ignored the click. Two
+         pseudo-classes outrank button.btn:hover, which is what keeps the hover from answering. */
+      button.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+      button.btn:disabled:hover { background: var(--card-bg); filter: none; }
+      button.btn.primary:disabled:hover { background: var(--accent); }
+
+      /* The field the backend named as the one to fix. Applied from WriteResult.Field /
+         ProbeResult.Field — the page never decides which input is at fault. */
+      .conn-form input.invalid, .conn-form select.invalid { border-color: var(--err); }
+      .conn-form input.invalid:focus, .conn-form select.invalid:focus {
+        border-color: var(--err);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent);
+      }
 
       .status { margin-top: 12px; min-height: 18px; font-size: 12.5px; }
       .status.ok { color: var(--ok); } .status.err { color: var(--err); }
@@ -528,8 +542,14 @@
       .lang-status.ok { color: var(--ok); }
       .lang-status.err { color: var(--err); }
 
-      .conn-actions { display: flex; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 16px; }
-      .conn-actions .status { margin: 0; flex: 1; }
+      .conn-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; align-items: center; margin-top: 16px; }
+      /* The message gets a ROW OF ITS OWN, above the buttons. Sharing the row with them left it a
+         ~60px column that wrapped one or two words per line — a sentence nobody reads. It comes
+         first in the markup, so a full-basis item pushes the buttons onto the next line. */
+      .conn-actions .status { flex: 0 0 100%; margin: 0 0 2px; text-align: left; }
+      /* No message, no row: min-height would otherwise reserve a blank line and float the buttons
+         down for no reason. */
+      .conn-actions .status:empty { display: none; }
 
       /* ---- Ajustes > Sistema: grouped label/control rows ---- */
       .group {
@@ -976,7 +996,7 @@
 
                     <div class="conn-actions">
                       <span class="status" id="azureStatus"></span>
-                      <button class="btn" id="test" data-i18n>Probar conexión</button>
+                      <button class="btn conn-test" id="test" data-i18n>Probar conexión</button>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
                       <button class="btn conn-delete" data-i18n>Borrar clave</button>
                       <button class="btn primary conn-save" data-i18n>Guardar</button>

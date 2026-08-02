@@ -171,6 +171,47 @@ func TestTokenRejectsAnInvalidRegionBeforeRequesting(t *testing.T) {
 	}
 }
 
+// The five reasons a test can fail are the caller's whole vocabulary for wording it, so they are
+// asserted exactly. Getting one wrong is not cosmetic: reporting a 500 as a network failure tells
+// someone to check their internet while Azure is the thing that is broken.
+func TestConnectionClassifiesEveryOutcome(t *testing.T) {
+	cases := []struct {
+		name   string
+		region string
+		key    string
+		doer   Doer
+		wantOK bool
+		want   ConnFailure
+	}{
+		{"accepted", "eastus", "good", &fakeDoer{status: 200, body: "tok"}, true, ""},
+		{"no key", "eastus", "  ", &fakeDoer{status: 200}, false, ConnNoKey},
+		{"unusable region", "east/us", "good", &fakeDoer{status: 200}, false, ConnBadRegion},
+		{"rejected", "eastus", "bad", &fakeDoer{status: 401}, false, ConnBadCredentials},
+		{"forbidden", "eastus", "bad", &fakeDoer{status: 403}, false, ConnBadCredentials},
+		{"azure broken", "eastus", "good", &fakeDoer{status: 500}, false, ConnService},
+		{"unreachable", "eastus", "good", &errDoer{err: errors.New("dial tcp: no such host")}, false, ConnNetwork},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := TestConnection(context.Background(), c.region, c.key, c.doer)
+			if got.OK != c.wantOK {
+				t.Fatalf("OK = %v, want %v (error %q)", got.OK, c.wantOK, got.Error)
+			}
+			if got.Kind != c.want {
+				t.Errorf("Kind = %q, want %q", got.Kind, c.want)
+			}
+			if c.wantOK && got.Kind != "" {
+				t.Errorf("a success carries Kind %q — nothing failed", got.Kind)
+			}
+		})
+	}
+}
+
+// errDoer fails the transport itself: the request never reaches Azure.
+type errDoer struct{ err error }
+
+func (d *errDoer) Do(*http.Request) (*http.Response, error) { return nil, d.err }
+
 func TestTestConnectionOK(t *testing.T) {
 	got := TestConnection(context.Background(), "eastus", "good", &fakeDoer{status: 200, body: "tok"})
 	if !got.OK {

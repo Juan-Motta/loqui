@@ -117,6 +117,10 @@ func main() {
 						}
 					}
 				},
+				// The settings service logs which configuration a connection test used — the region and
+				// where the key came from, never the credential. Passed as a function because the ui that
+				// owns the log format is built later, in wiring.
+				Log: logLine,
 			})),
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),

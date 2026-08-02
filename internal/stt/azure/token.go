@@ -11,6 +11,7 @@ package azure
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -124,7 +125,7 @@ func (s *TokenService) Token(ctx context.Context, force bool) (string, error) {
 		return "", fmt.Errorf("%w (%d)", ErrBadCredentials, res.StatusCode)
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		return "", fmt.Errorf("issueToken HTTP %d", res.StatusCode)
+		return "", &StatusError{Status: res.StatusCode}
 	}
 
 	body, err := readAll(res)
@@ -140,14 +141,49 @@ func (s *TokenService) Token(ctx context.Context, force bool) (string, error) {
 type ConnResult struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error,omitempty"`
+	// Kind classifies a failure so the caller can word it for a human without parsing Error.
+	//
+	// The classification belongs here because this is where the information exists: once the failure
+	// has been flattened into a string, "the credential was rejected" and "the machine has no DNS"
+	// are indistinguishable, and a caller guessing from the text would show a Go transport error to
+	// someone who only needs to be told their internet is down.
+	Kind ConnFailure `json:"kind,omitempty"`
 }
+
+// StatusError is Azure answering the token request with something that is not a token.
+//
+// A type rather than a formatted string because the caller has to TELL IT APART from never reaching
+// Azure at all: one is Azure's problem or the request's, the other is the network, and they send the
+// user to different places.
+type StatusError struct{ Status int }
+
+func (e *StatusError) Error() string { return fmt.Sprintf("issueToken HTTP %d", e.Status) }
+
+// ConnFailure is why a connection test did not succeed.
+type ConnFailure string
+
+const (
+	// ConnNoKey is an empty credential — nothing was even attempted.
+	ConnNoKey ConnFailure = "no-key"
+	// ConnBadRegion is a region that cannot be turned into an endpoint.
+	ConnBadRegion ConnFailure = "bad-region"
+	// ConnBadCredentials is Azure rejecting the key: 401 or 403.
+	ConnBadCredentials ConnFailure = "bad-credentials"
+	// ConnService is Azure answering with something else — a 5xx, or a status it should not return.
+	ConnService ConnFailure = "service"
+	// ConnNetwork is not reaching Azure at all: DNS, TLS, a refused connection, a deadline.
+	ConnNetwork ConnFailure = "network"
+)
 
 // TestConnection exchanges a key for a token: HTTP 200 means the credentials and the
 // region are both right. It returns the failure as a message instead of an error
 // because every outcome here is a normal answer to the user's question, not a fault.
 func TestConnection(ctx context.Context, region, key string, client Doer) ConnResult {
 	if strings.TrimSpace(key) == "" {
-		return ConnResult{Error: "Falta la clave (subscription key)"}
+		return ConnResult{Error: "Falta la clave (subscription key)", Kind: ConnNoKey}
+	}
+	if _, err := TokenURL(region); err != nil {
+		return ConnResult{Error: err.Error(), Kind: ConnBadRegion}
 	}
 	svc := NewTokenService(TokenOptions{
 		Region: region,
@@ -157,9 +193,17 @@ func TestConnection(ctx context.Context, region, key string, client Doer) ConnRe
 	if _, err := svc.Token(ctx, true); err != nil {
 		switch {
 		case errorIs(err, ErrBadCredentials):
-			return ConnResult{Error: "Clave o región inválida (401/403)"}
+			return ConnResult{Error: "Clave o región inválida (401/403)", Kind: ConnBadCredentials}
+		case errors.As(err, new(*StatusError)):
+			// Azure answered, just not with a token. Its own status is the useful part.
+			//
+			// Matched on the TYPE, never on the message: a wrapper adding context upstream would slip
+			// past a prefix check, and a 500 would then be reported as "your internet is down".
+			return ConnResult{Error: err.Error(), Kind: ConnService}
 		default:
-			return ConnResult{Error: err.Error()}
+			// Never reached Azure: DNS, TLS, a refused connection, a cancelled context. The text is
+			// Go's and is not for a user — the caller words it and keeps this for the log.
+			return ConnResult{Error: err.Error(), Kind: ConnNetwork}
 		}
 	}
 	return ConnResult{OK: true}

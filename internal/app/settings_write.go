@@ -37,17 +37,38 @@ type WriteResult struct {
 	Payload SettingsPayload `json:"payload"`
 	// Error is empty on success. It is a message for the user, already in Spanish.
 	Error string `json:"error"`
+	// Notice is what to say when the write SUCCEEDED, and it is empty on failure.
+	//
+	// It exists because an empty status line is indistinguishable from a click that never arrived:
+	// the page paints Error, so a completed save said nothing at all. It is decided here rather than
+	// in the page because these messages depend on facts only this side has — which of the two values
+	// was actually written, and whether the engine just chosen can dictate.
+	Notice string `json:"notice"`
+	// Field names the input the user has to fix — "key", "region", or empty when the failure is not
+	// about a form value. The page paints the invalid border from it and works nothing out for
+	// itself; deducing "this message is about the key" by reading the text would put one validation
+	// rule in two languages.
+	Field string `json:"field"`
 }
 
-// ok wraps a successful write.
-func (s *SettingsService) ok() WriteResult {
-	return WriteResult{Payload: s.bootstrap.Payload()}
+// ok wraps a successful write, with what to tell the user about it.
+func (s *SettingsService) ok(notice string) WriteResult {
+	return WriteResult{Payload: s.bootstrap.Payload(), Notice: notice}
 }
 
 // failed wraps a rejected or failed write. The payload is recomputed either way, so the page
 // repaints from what is actually stored rather than from what it hoped it had stored.
 func (s *SettingsService) failed(format string, args ...any) WriteResult {
 	return WriteResult{Payload: s.bootstrap.Payload(), Error: fmt.Sprintf(format, args...)}
+}
+
+// invalid is failed for the case where the user can fix it in a specific input.
+func (s *SettingsService) invalid(field string, format string, args ...any) WriteResult {
+	return WriteResult{
+		Payload: s.bootstrap.Payload(),
+		Error:   fmt.Sprintf(format, args...),
+		Field:   field,
+	}
 }
 
 // SetProvider switches the active engine. Bound as Settings.SetProvider().
@@ -69,7 +90,68 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 	if err != nil {
 		return s.failed("no se pudo guardar el motor: %v", err)
 	}
-	return s.ok()
+	// The payload is computed once and the notice read OUT of it, rather than recomputing the
+	// readiness rule here: store.ConnectionRows already owns it, and a second copy would be free to
+	// disagree with the badge the user is looking at.
+	p := s.bootstrap.Payload()
+	return WriteResult{Payload: p, Notice: providerNotice(p, provider)}
+}
+
+// providerNotice says whether the engine just chosen can actually dictate.
+//
+// Storing an engine SUCCEEDS even when it cannot work — the picker greys those out, but this binding
+// is reachable from anything running script in that window, and "unsupported" additionally depends on
+// the machine rather than on what is ported. So "saved" is not the same claim as "ready", and this is
+// the sentence that keeps them apart.
+func providerNotice(p SettingsPayload, provider string) string {
+	for _, row := range p.Connections {
+		if row.ID != provider {
+			continue
+		}
+		switch row.State {
+		case store.ConnActive:
+			return "Motor activo: " + row.Name
+		case store.ConnUnsupported:
+			return "Motor guardado, pero no puede funcionar en este sistema"
+		case store.ConnUnconfigured:
+			// A Keychain that did not answer is NOT missing configuration: the key may be sitting
+			// right there. presenceMap collapses the two — deliberately, for the badge — so the
+			// distinction has to be recovered from the key state before telling someone to go and
+			// complete a configuration they may have completed already.
+			key := keyStateIn(p, row.KeySlot)
+			switch {
+			case key.Status == store.KeyUnreadable:
+				return "Motor seleccionado, pero el Keychain no respondió — no se puede confirmar si su clave está disponible"
+			case key.FromEnv && key.Status == store.KeyAbsent:
+				// In force and holding nothing usable — the only case where the form cannot help,
+				// because whatever is typed there stays overridden. An env variable holding a REAL
+				// key also lands here whenever some other field is missing (Azure without a region),
+				// and telling that user to delete it would break a working credential.
+				return "Motor seleccionado, pero su variable de entorno está definida y vacía — quítala del entorno para poder usar una clave guardada"
+			}
+			return "Motor seleccionado, pero le falta configuración — no podrá dictar hasta que la completes"
+		}
+		return "Motor guardado: " + row.Name
+	}
+	return "Motor guardado"
+}
+
+// keyStateIn is what a payload knows about one slot, zero when the slot is not listed — which is the
+// case for the engines that take no credential.
+//
+// The whole KeyState rather than just the status, because "nothing usable" and "nothing usable AND
+// an environment variable is overriding everything" need different sentences: the second cannot be
+// fixed in the form at all.
+func keyStateIn(p SettingsPayload, slot string) KeyState {
+	if slot == "" {
+		return KeyState{}
+	}
+	for _, k := range p.Keys {
+		if k.Slot == slot {
+			return k
+		}
+	}
+	return KeyState{}
 }
 
 // SetRegion stores the Azure Speech region, normalised. Bound as Settings.SetRegion().
@@ -88,7 +170,7 @@ func (s *SettingsService) SetRegion(region string) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar la región: %v", err)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetTrigger stores the activation shortcut. Bound as Settings.SetTrigger().
@@ -127,7 +209,7 @@ func (s *SettingsService) SetTrigger(trigger string) WriteResult {
 			return s.failed("el atajo se guardó, pero no se pudo registrar: %v", err)
 		}
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetMode switches between hold and toggle. Bound as Settings.SetMode().
@@ -152,7 +234,7 @@ func (s *SettingsService) SetMode(mode string) WriteResult {
 		// reason is the trigger they have, not a failure.
 		return s.failed("%s no admite mantener: se guardó en modo Alternar", store.FormatTrigger(s.store().LoadSettings().TriggerKey))
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // applyMode pushes the mode into the RUNNING controller.
@@ -184,7 +266,7 @@ func (s *SettingsService) SetAppearance(appearance string) WriteResult {
 	if s.onAppearanceChanged != nil {
 		s.onAppearanceChanged(appearance)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetAppLanguage stores the interface language. Bound as Settings.SetAppLanguage().
@@ -200,7 +282,7 @@ func (s *SettingsService) SetAppLanguage(language string) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar el idioma de la interfaz: %v", err)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetOnboarded records that the tutorial was completed or skipped. Bound as Settings.SetOnboarded().
@@ -218,7 +300,7 @@ func (s *SettingsService) SetOnboarded(done bool) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar el estado del tutorial: %v", err)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetInputDevice stores the chosen microphone. Bound as Settings.SetInputDevice().
@@ -236,7 +318,7 @@ func (s *SettingsService) SetInputDevice(id string) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar el dispositivo: %v", err)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetLanguages stores one slot's dictation languages. Bound as Settings.SetLanguages().
@@ -267,7 +349,7 @@ func (s *SettingsService) SetLanguages(slot string, values []string) WriteResult
 	}); err != nil {
 		return s.failed("no se pudo guardar el idioma: %v", err)
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // SetKey stores one provider's credential in the Keychain. Bound as Settings.SetKey().
@@ -278,7 +360,8 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 	if !ok {
 		return s.failed("ranura de clave desconocida: %q", slot)
 	}
-	if strings.TrimSpace(secret) == "" {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
 		return s.failed("la clave está vacía — para borrarla usa el botón de eliminar")
 	}
 	if !store.IsAvailableKeySlot(keySlot) {
@@ -292,7 +375,7 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 	if err := s.secretWriter()(keySlot, secret); err != nil {
 		return s.failed("%s", keychainMessage(err))
 	}
-	return s.ok()
+	return s.ok("")
 }
 
 // DeleteKey removes one provider's credential. Bound as Settings.DeleteKey().
@@ -313,7 +396,10 @@ func (s *SettingsService) DeleteKey(slot string) WriteResult {
 	if err := s.secretDeleter()(keySlot); err != nil {
 		return s.failed("%s", keychainMessage(err))
 	}
-	return s.ok()
+	// A POSTCONDITION, not an account of what happened: store.DeleteKey treats an absent item as
+	// success, and this method never learns whether there was one. "Clave borrada" would be false
+	// exactly when the user pressed the button on an empty slot.
+	return s.ok("La clave ya no está guardada")
 }
 
 // SaveConnection stores a provider's region and key together, as ONE operation.
@@ -348,7 +434,11 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 	if !store.IsAvailableKeySlot(keySlot) {
 		return s.failed("este servicio todavía no está disponible en esta versión")
 	}
-	writeKey := strings.TrimSpace(secret) != ""
+	// Trimmed HERE, so what gets stored is what was validated — and what "Probar conexión" tested.
+	// A pasted credential arrives with a newline more often than not; testing the trimmed value and
+	// storing the padded one would hand out a green tick for a key that then fails at dictation.
+	secret = strings.TrimSpace(secret)
+	writeKey := secret != ""
 
 	regionID := ""
 	if strings.TrimSpace(region) != "" {
@@ -364,7 +454,20 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 		regionID = id
 	}
 
+	// A save with no credential ANYWHERE is refused, and the message points at the input that has to
+	// change. Without this the form accepted a region on its own and left a card that reads as
+	// configured while dictation has nothing to authenticate with.
+	//
+	// Checked only when the user did not type one: a typed key is the credential, and looking up
+	// what is stored would cost the Keychain's three seconds without being able to change the answer.
+	if !writeKey {
+		if res, ok := s.requireStoredKey(keySlot); !ok {
+			return res
+		}
+	}
 	if regionID == "" && !writeKey {
+		// Reached only when a credential IS already stored: nothing was offered, so nothing is
+		// missing — there is simply nothing to do.
 		return s.failed("no hay nada que guardar")
 	}
 	// A region-only save stays allowed for an env-backed slot: the region is not the credential.
@@ -398,7 +501,52 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 			return s.failed("no se pudo guardar la región: %v", err)
 		}
 	}
-	return s.ok()
+	return s.ok(saveNotice(writeKey, regionID != ""))
+}
+
+// requireStoredKey answers "is there a credential for this slot already", with the same precedence
+// the rest of the app reads by.
+//
+// THE THREE OUTCOMES STAY APART, for the same reason they do in the probe: only "there is nothing
+// stored" is something the user fixes in the form, so only that one marks the field. Reporting a
+// Keychain that did not answer as a missing key would send someone to re-paste a credential that is
+// already there — and on this build that is the common failure, not the rare one.
+func (s *SettingsService) requireStoredKey(slot store.KeySlot) (WriteResult, bool) {
+	if name, _, set := envCredential(slot); set {
+		if !envCredentialUsable(slot) {
+			// In force and unusable. Saying "the key is required" would send the user to paste one
+			// into a form whose value the environment would go on overriding.
+			return s.failed("la variable de entorno %s está definida pero vacía — mientras lo esté, "+
+				"es la clave que se usa, y no puede autenticar nada", name), false
+		}
+		// The environment IS the credential in force. Consulting the Keychain could not change that.
+		return WriteResult{}, true
+	}
+	_, err := s.secretReader()(slot)
+	switch {
+	case err == nil:
+		return WriteResult{}, true
+	case errors.Is(err, store.ErrNoSecret):
+		return s.invalid("key", "la clave es obligatoria: pégala antes de guardar"), false
+	case errors.Is(err, store.ErrKeychainTimeout):
+		return s.failed("el Keychain no respondió, así que no se pudo comprobar si ya hay una clave " +
+			"guardada — firma la app con una identidad estable e inténtalo de nuevo"), false
+	default:
+		return s.failed("no se pudo comprobar la clave guardada: %v", err), false
+	}
+}
+
+// saveNotice names what was actually committed. Announcing a key that was never written would be a
+// lie about the one operation the user cannot see the result of.
+func saveNotice(wroteKey, wroteRegion bool) string {
+	switch {
+	case wroteKey && wroteRegion:
+		return "Clave y región guardadas"
+	case wroteKey:
+		return "Clave guardada"
+	default:
+		return "Región guardada"
+	}
 }
 
 // envOverrideFor reports the LOQUI_*_KEY variable currently supplying a slot's credential, or "".
@@ -409,10 +557,37 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 // invisible until the variable is removed, at which point a credential the user has forgotten about
 // silently becomes live.
 func envOverrideFor(slot store.KeySlot) string {
-	if name := envKeyOverride(slot); name != "" && os.Getenv(name) != "" {
+	name, _, set := envCredential(slot)
+	if set {
 		return name
 	}
 	return ""
+}
+
+// envCredential is the ONE answer to "what is the environment supplying for this slot".
+//
+// Three outcomes, and the middle one is the reason this exists: a variable that is SET BUT BLANK is
+// in force — keyReaderFor hands it to dictation ahead of the Keychain — and cannot authenticate
+// anything. Every path has to agree on that. They did not: the probe called it unusable while the
+// save path took it as proof a credential existed and the payload reported the slot as configured,
+// so a card could read "Conectado" while dictation received whitespace.
+//
+// name is the variable that governs the slot (empty for a slot with no hatch), value what it holds,
+// and set whether it is in force at all.
+func envCredential(slot store.KeySlot) (name string, value string, set bool) {
+	name = envKeyOverride(slot)
+	if name == "" {
+		return "", "", false
+	}
+	value = os.Getenv(name)
+	return name, value, value != ""
+}
+
+// envCredentialUsable reports whether the environment is supplying something that could actually
+// authenticate. A blank variable is in force AND unusable, which is a state of its own.
+func envCredentialUsable(slot store.KeySlot) bool {
+	_, value, set := envCredential(slot)
+	return set && strings.TrimSpace(value) != ""
 }
 
 // keychainMessage turns a Keychain failure into something the user can act on.

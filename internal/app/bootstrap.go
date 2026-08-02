@@ -13,15 +13,17 @@
 package app
 
 import (
-	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/Juan-Motta/loqui-go/internal/audio"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
+	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
 )
 
 // KeyState is what the UI may know about one provider's credential: whether there is one,
@@ -117,6 +119,18 @@ type SettingsPayload struct {
 	LanguageControls []LanguageControl `json:"languageControls"`
 	// Trigger is the state of the activation-shortcut control.
 	Trigger TriggerControl `json:"trigger"`
+	// Revision orders snapshots so a page painting from several producers can drop the stale ones.
+	//
+	// It is needed because paint() repaints the WHOLE window from one payload, and payloads arrive
+	// from paths that do not queue against each other: the Conexiones queue, Sistema, idiomas,
+	// onboarding and the permissions refresh. Without an order, a slow snapshot lands last and puts
+	// back a state that has already been superseded.
+	//
+	// WHAT IT GUARANTEES, precisely: a snapshot that STARTED earlier never overwrites one that
+	// started later — the counter is taken at the beginning of Payload(). It is not a total order over
+	// the data: Payload reads the settings file, the Keychain and the devices at different instants,
+	// so a snapshot that started earlier can still hold a fresher value for one field.
+	Revision uint64 `json:"revision"`
 }
 
 // TriggerControl is everything the shortcut control needs to draw itself.
@@ -209,6 +223,14 @@ type Bootstrap struct {
 	perms func() PermissionsState
 	// devices enumerates microphones. Defaults to audio.ListInputDevices.
 	devices func() ([]audio.InputDevice, error)
+	// caps reports what this machine can run. Nil means ask the machine — see hostCaps, which
+	// exists because Bootstrap is also built as a literal, and a nil call there would panic.
+	caps func() store.HostCapabilities
+
+	// revision stamps every snapshot. Atomic because Wails dispatches each bound call on its own
+	// goroutine, so two payloads can be under construction at once — which is the situation the
+	// stamp exists to sort out.
+	revision atomic.Uint64
 }
 
 // NewBootstrap wires the real machine.
@@ -255,6 +277,11 @@ func livePermissions() PermissionsState {
 // keys and the permissions have nothing to do with the microphone list — and returning an
 // error would leave the user with no way to reach the settings that could fix the problem.
 func (b *Bootstrap) Payload() SettingsPayload {
+	// Stamped FIRST, before anything is read. Taken at the end it would order snapshots by when they
+	// finished, and the whole point is the opposite: a snapshot that started earlier must lose to one
+	// that started later, however long each took to assemble.
+	revision := b.revision.Add(1)
+
 	// Named cfg, not settings: the internal/settings package is imported here.
 	cfg := b.store.LoadSettings()
 
@@ -283,6 +310,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		LanguageBySlot:        languages(cfg),
 		InputDeviceID:         cfg.InputDeviceID,
 
+		Revision:     revision,
 		Keys:         keys,
 		Permissions:  b.perms(),
 		InputDevices: devices,
@@ -293,7 +321,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		// Computed from the SAME key states the payload reports, not from a second read: two reads
 		// could disagree, and a row saying "Sin configurar" beside a field saying "clave guardada" is
 		// the kind of contradiction that makes a user distrust the whole screen.
-		Connections:      store.ConnectionRows(cfg, presenceMap(keys), b.hostCapabilities()),
+		Connections:      store.ConnectionRows(cfg, presenceMap(keys), b.hostCaps()),
 		ProviderHint:     store.ProviderHint(cfg.Provider),
 		LanguageControls: languageControls(cfg),
 		Trigger:          triggerControl(cfg),
@@ -317,6 +345,19 @@ func presenceMap(states []KeyState) map[store.KeySlot]bool {
 // Every field is optional by design: an unknown condition must not disqualify an engine. So a
 // helper that cannot be found is reported as a definite false, while a version that cannot be read
 // stays zero and the model ignores it.
+// hostCaps is what the model should use: the injected capabilities when a caller supplied them,
+// the real machine otherwise.
+//
+// The nil check is not defensive habit. Bootstrap is constructed as a literal in the test helpers,
+// so a bare b.caps() would panic there — and a seam that only works when someone remembered to
+// fill it in is a trap for the next person who adds a field.
+func (b *Bootstrap) hostCaps() store.HostCapabilities {
+	if b.caps != nil {
+		return b.caps()
+	}
+	return b.hostCapabilities()
+}
+
 func (b *Bootstrap) hostCapabilities() store.HostCapabilities {
 	return store.HostCapabilities{
 		Platform: runtime.GOOS,
@@ -336,10 +377,21 @@ func (b *Bootstrap) hostCapabilities() store.HostCapabilities {
 type SettingsService struct {
 	bootstrap *Bootstrap
 
-	// setSecret / deleteSecret override the Keychain writes. Only the tests set them — see
-	// secretWriter for why the real ones cannot run in a unit test.
+	// setSecret / deleteSecret / getSecret override the Keychain. Only the tests set them — see
+	// secretWriter and secretReader for why the real ones cannot run in a unit test.
 	setSecret    func(store.KeySlot, string) error
 	deleteSecret func(store.KeySlot) error
+	getSecret    func(store.KeySlot) (string, error)
+
+	// probeClient / probeTimeout override the network for "probar conexión". A unit test must not
+	// depend on Azure being reachable, nor wait fifteen seconds to check that a deadline works.
+	probeClient  azure.Doer
+	probeTimeout time.Duration
+
+	// log records diagnostic lines, nil when nothing wired one. It exists so a probe can report
+	// which configuration it used: a button inside a Wails webview cannot be driven from a script,
+	// so without this there is no way to verify that from outside. NEVER called with a secret.
+	log func(tag, msg string)
 
 	// onModeChanged pushes a new mode into the running controller. Persisting alone is not enough:
 	// the engine reads the mode once, at construction.
@@ -366,6 +418,10 @@ type LiveHooks struct {
 	TriggerChanged func(trigger string) error
 	// AppearanceChanged applies the light/dark preference to the open windows.
 	AppearanceChanged func(appearance string)
+	// Log records a diagnostic line. Passed in rather than reached for because this package must
+	// not decide how the app writes its log — and because a test wants it silent. NEVER called
+	// with a secret or with transcript text.
+	Log func(tag, msg string)
 }
 
 func NewSettingsService(st *store.Store, hooks LiveHooks) *SettingsService {
@@ -374,6 +430,7 @@ func NewSettingsService(st *store.Store, hooks LiveHooks) *SettingsService {
 		onModeChanged:       hooks.ModeChanged,
 		onTriggerChanged:    hooks.TriggerChanged,
 		onAppearanceChanged: hooks.AppearanceChanged,
+		log:                 hooks.Log,
 	}
 }
 
@@ -406,9 +463,17 @@ func (b *Bootstrap) keyStates() []KeyState {
 
 	for i, slot := range store.AllKeySlots {
 		out[i] = KeyState{Slot: string(slot), Available: store.IsAvailableKeySlot(slot)}
-		if name := envKeyOverride(slot); name != "" && os.Getenv(name) != "" {
-			out[i].Status = store.KeyPresent
+		if _, _, set := envCredential(slot); set {
+			// In force, so the Keychain is not consulted: whatever is under it is not what dictation
+			// would read. Whether it can AUTHENTICATE is a second question — a variable holding
+			// whitespace overrides everything and works for nothing, so reporting it as present would
+			// put "Conectado" on a card whose engine cannot dictate.
 			out[i].FromEnv = true
+			if envCredentialUsable(slot) {
+				out[i].Status = store.KeyPresent
+			} else {
+				out[i].Status = store.KeyAbsent
+			}
 			continue
 		}
 		// Each goroutine owns its own element, so no lock is needed: the slice is sized up

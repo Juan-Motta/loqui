@@ -36,6 +36,9 @@ func testBootstrap(t *testing.T, st *store.Store) *Bootstrap {
 			}
 		},
 		devices: func() ([]audio.InputDevice, error) { return nil, nil },
+		// Pinned rather than read from the machine: the connection states otherwise depend on the
+		// macOS version and the helpers present on whoever runs the suite.
+		caps: func() store.HostCapabilities { return store.HostCapabilities{} },
 	}
 }
 

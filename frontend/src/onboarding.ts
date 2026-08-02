@@ -27,8 +27,12 @@ let payload: SettingsPayload | null = null;
 
 // What the page does after a write inside the wizard: the caller owns repainting the rest of the
 // window, because a change made here (engine, appearance, shortcut) must show up in Ajustes too.
-type OnSaved = (p: SettingsPayload) => void;
-let onSaved: OnSaved = () => {};
+//
+// It answers whether the snapshot was APPLIED. The page drops payloads older than the one already
+// drawn, and the wizard has to drop the same ones: keeping a rejected snapshot here would leave the
+// window correct and the wizard showing the engine and preferences from before it.
+type OnSaved = (p: SettingsPayload) => boolean;
+let onSaved: OnSaved = () => true;
 export function setOnboardingSaveHandler(fn: OnSaved): void {
   onSaved = fn;
 }
@@ -36,9 +40,12 @@ export function setOnboardingSaveHandler(fn: OnSaved): void {
 async function run(action: () => Promise<WriteResult>): Promise<void> {
   try {
     const res = await action();
-    payload = res.payload;
-    onSaved(res.payload);
-    render();
+    // Stored and drawn only if the page accepted it. A snapshot it declined is older than what is
+    // already on screen, and the wizard reads from the same state.
+    if (onSaved(res.payload)) {
+      payload = res.payload;
+      render();
+    }
   } catch {
     /* the control simply stays as it was; the payload is the source of truth */
   }
@@ -152,8 +159,11 @@ function renderConfig(p: SettingsPayload): void {
     label.textContent = "Clave de API";
     const input = document.createElement("input");
     input.type = "password";
+    // "present" is the value store.KeyStatus carries. The vocabulary belongs to Go: a word invented
+    // here would compare equal to nothing, and the placeholder would tell someone who already has a
+    // key stored to paste one.
     input.placeholder =
-      slot.status === "configured" ? "Ya configurada — escribe para reemplazarla" : "Pega tu clave";
+      slot.status === "present" ? "Ya configurada — escribe para reemplazarla" : "Pega tu clave";
     input.autocomplete = "off";
     // On change, not on every keystroke: a keystroke-by-keystroke write would store dozens of
     // truncated prefixes in the Keychain.
@@ -252,8 +262,7 @@ export function openWizard(): void {
 async function closeWizard(): Promise<void> {
   try {
     const res = await Settings.SetOnboarded(true);
-    payload = res.payload;
-    onSaved(res.payload);
+    if (onSaved(res.payload)) payload = res.payload;
   } catch {
     /* non-fatal, see above */
   }

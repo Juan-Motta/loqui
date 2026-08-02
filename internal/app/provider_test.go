@@ -72,12 +72,22 @@ func TestBuildGrokProviderWithTheEnvKey(t *testing.T) {
 	}
 }
 
-// An engine that is not ported yet must say so rather than silently substituting another one:
+// An engine this build cannot construct must say so rather than silently substituting another one:
 // dictating into the wrong service is worse than not dictating.
+//
+// The provider has to be one buildProvider genuinely does not know. Naming a PORTED engine here
+// reaches its own branch and fails for a different reason — no key — so the test passes while the
+// branch it claims to cover is never executed. That is what this case used to do with "elevenlabs",
+// which has been ported since. Hence the assertion on the message: reaching the right branch is the
+// thing being tested.
 func TestUnportedProviderIsReported(t *testing.T) {
-	d := testDictation(t, "elevenlabs")
+	d := testDictation(t, "un-motor-que-no-existe")
 
-	if _, err := d.buildProvider(); err == nil {
+	_, err := d.buildProvider()
+	if err == nil {
 		t.Fatal("an unported provider was accepted")
+	}
+	if !strings.Contains(err.Error(), "no está portado") {
+		t.Errorf("error = %q — that is not the unported branch, so this case is not covering it", err)
 	}
 }

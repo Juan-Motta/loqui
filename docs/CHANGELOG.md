@@ -4,6 +4,31 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Las acciones del card de conexión: decir lo que pasa — 2026-08-01
+
+- **"Probar conexión" existe por fin.** `azure.TestConnection` llevaba desde el port escrita y
+  testeada sin que nadie la llamara: ahora hay método bindeado (`Settings.TestConnection`) y handler.
+  Valida región y clave antes de salir a la red, distingue los tres resultados de una lectura de
+  Keychain, y solo acepta slots que de verdad tienen prueba — `IsAvailableKeySlot` es true para Grok,
+  y usarla habría mandado una clave de Grok al endpoint de Azure.
+- **Un éxito se dice.** Los setters devuelven `Notice` además de `Error`, y la página pinta
+  `✓`/`✗` con las clases que la CSS ya tenía. Antes el `…` se sustituía por una cadena vacía, así que
+  un guardado correcto y un clic perdido se veían igual — y **"Borrar clave" destruyó una credencial
+  en silencio** durante la validación. El aviso de borrado es una postcondición ("La clave ya no está
+  guardada"), porque borrar un slot vacío también es éxito.
+- **Un botón apagado se ve apagado** (`button.btn:disabled`), y la validación señala el input que
+  falta con borde rojo, desde el campo `Field` que decide Go. El mensaje ocupa su propia línea encima
+  de los botones: al lado quedaba en una columna de 60 px partiendo palabras.
+- **"Usar este motor" solo se habilita con la conexión guardada**, y "Borrar clave" solo con una
+  clave que exista. Los motores locales (`available`) siguen habilitados: no llevan credencial.
+- **Los repintados se ordenan.** `SettingsPayload.Revision` los sella al empezar a construirse, y la
+  página descarta el que llegue con revisión menor: varios productores repintan la ventana entera sin
+  encolarse entre sí, así que el último en llegar no es el más nuevo.
+- **Arreglado de paso, encontrado por este trabajo:** el tutorial comparaba el estado de la clave con
+  `"configured"`, valor que no existe, así que a quien ya tenía clave se le decía "Pega tu clave"; y
+  `TestUnportedProviderIsReported` usaba ElevenLabs, que ya está portado, pasando por la razón
+  equivocada. Ver `docs/solutions/el-exito-silencioso-es-un-bug.md`.
+
 ## Fidelidad al maquetado original, y la UI que no respondía — 2026-07-29
 
 - **La navegación del sidebar no estaba cableada**, y como todos los controles de Ajustes viven dentro

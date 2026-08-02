@@ -60,7 +60,14 @@ func (u *ui) HistoryChanged() {
 
 // Log writes a diagnostic line. Transcript text is NEVER passed here — the log is what
 // gets attached to a bug report.
-func (u *ui) Log(tag, msg string) {
+func (u *ui) Log(tag, msg string) { logLine(tag, msg) }
+
+// logLine is the one place the diagnostic format lives.
+//
+// Extracted because the settings service also needs to log — it reports which configuration a
+// connection test used — and it is constructed in main before this ui exists, so it takes the
+// function rather than the object. Two copies of the format would drift.
+func logLine(tag, msg string) {
 	log.Printf("%-14s %s", tag, msg)
 }
 
@@ -128,6 +135,22 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	})
 	wailsApp.Event.On("ui:painted", func(e *application.CustomEvent) {
 		u.Log("UI-PAINT", fmt.Sprintf("view rendered: %v", e.Data))
+	})
+	// The connection test and the card probes. Same rule as UI-ACTION: the outcome and the state of
+	// the card, never a credential.
+	wailsApp.Event.On("ui:probe", func(e *application.CustomEvent) {
+		u.Log("UI-PROBE", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:conn-probe", func(e *application.CustomEvent) {
+		u.Log("CONN-CLICK", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:conn-report", func(e *application.CustomEvent) {
+		u.Log("CONN-CARD", fmt.Sprintf("%v", e.Data))
+	})
+	// A payload that arrived out of order and was dropped. Silent by design in the page — but if it
+	// ever starts happening often, that is worth seeing rather than guessing at.
+	wailsApp.Event.On("ui:stale-payload", func(e *application.CustomEvent) {
+		u.Log("UI-STALE", fmt.Sprintf("%v", e.Data))
 	})
 	// Which view the user is on. Logged because navigation is the one thing whose absence made
 	// everything else look broken: every control this port wired lives inside a view that could not
@@ -243,6 +266,30 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 			time.Sleep(4 * time.Second)
 			wailsApp.Event.Emit("debug:set-appearance", a)
 		}()
+	}
+
+	// Dev affordance: drive the buttons of a connection card and report what the card looks like.
+	//
+	// Fired on ui:painted rather than after a fixed sleep, unlike the older hooks above. The page only
+	// wires its handlers once Settings.Load() has resolved, and that call reads the Keychain — which
+	// on an ad-hoc-signed build can take the whole of the three seconds those hooks wait. A command
+	// that arrives before the wiring is lost in silence, and the run then looks like a broken feature
+	// rather than a mistimed probe.
+	if steps := os.Getenv("LOQUI_DEBUG_CONN_CLICK"); steps != "" {
+		wailsApp.Event.On("ui:painted", func(*application.CustomEvent) {
+			u.Log("DEBUG", "asking the UI to run "+steps)
+			wailsApp.Event.Emit("debug:conn-click", steps)
+		})
+	}
+	if provider := os.Getenv("LOQUI_DEBUG_CONN_REPORT"); provider != "" {
+		wailsApp.Event.On("ui:painted", func(*application.CustomEvent) {
+			// Delayed on purpose, unlike the click hook: this reports what the card SETTLED on, and
+			// reading it in the same tick as the click would only ever capture the busy state.
+			go func() {
+				time.Sleep(6 * time.Second)
+				wailsApp.Event.Emit("debug:conn-report", provider)
+			}()
+		})
 	}
 
 	// Dev affordance: ask the page to click a sidebar item and report what became visible.
