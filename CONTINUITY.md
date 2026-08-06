@@ -19,7 +19,7 @@
   nunca porque no hay clave válida en la máquina — la borró el propio bug (ver abajo).
 
 - **Después:** **portar la fila del modelo de whisper**, lo único que falta del encargo de
-  fidelidad (el trabajo de la sesión anterior ya está mergeado en `main`, hasta `14a3241`). Empezar
+  fidelidad (el trabajo de la sesión anterior ya está mergeado en `main`, hasta `a83b2f5`). Empezar
      por el test rojo de `modelSpec` en Go: portar `../loqui/src/shared/modelSpec.ts` a
      `internal/store/model.go` (nombre del archivo, tamaño esperado, URL de descarga) con tests, y
      sólo después el servicio de descarga con progreso y el DOM de `renderModelInto` en `#modelRow`.
