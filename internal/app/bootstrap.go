@@ -31,16 +31,16 @@ import (
 type KeyState struct {
 	Slot string `json:"slot"`
 	// Status is the EFFECTIVE answer to "would dictation find a credential here right now",
-	// so it accounts for the env-var escape hatch as well as the Keychain.
+	// so it accounts for the env-var escape hatch as well as the stored credentials.
 	//
-	// Three states rather than a bool, deliberately. "Nothing stored" and "the Keychain did
-	// not answer" are different facts: the first means type your key in, the second means the
-	// signing identity is broken and typing it in will not help. Collapsing them — which is
+	// Three states rather than a bool, deliberately. "Nothing stored" and "the keys could
+	// not be read" are different facts: the first means type your key in, the second means the
+	// credentials file is damaged and typing a key in will not say what was lost. Collapsing them — which is
 	// what store.HasKey does — makes the user retype a credential that is already there.
 	Status store.KeyStatus `json:"status"`
-	// FromEnv marks a key supplied by LOQUI_*_KEY rather than the Keychain. The UI needs it
-	// for two reasons: it cannot offer to delete something that is not in the Keychain, and
-	// the user has to understand why the slot reads as configured while the field is blank.
+	// FromEnv marks a key supplied by LOQUI_*_KEY rather than the stored credentials. The UI needs
+	// it for two reasons: it cannot offer to delete something it did not store, and the user has to
+	// understand why the slot reads as configured while the field is blank.
 	FromEnv bool `json:"fromEnv"`
 	// Available is whether a credential here would ever be READ. Not derivable from provider
 	// availability: "azure" is available, but only through its Speech subservice — azure-openai is
@@ -128,7 +128,7 @@ type SettingsPayload struct {
 	//
 	// WHAT IT GUARANTEES, precisely: a snapshot that STARTED earlier never overwrites one that
 	// started later — the counter is taken at the beginning of Payload(). It is not a total order over
-	// the data: Payload reads the settings file, the Keychain and the devices at different instants,
+	// the data: Payload reads the settings file, the credentials and the devices at different instants,
 	// so a snapshot that started earlier can still hold a fresher value for one field.
 	Revision uint64 `json:"revision"`
 }
@@ -209,7 +209,7 @@ func languageControls(cfg store.Settings) []LanguageControl {
 }
 
 // Bootstrap computes the payload. Every dependency that touches the machine is a field
-// rather than a direct call, because all three are untestable in place: the Keychain does not
+// rather than a direct call, because all three are untestable in place: the credentials do not
 // answer on an ad-hoc-signed build, TCC state varies per developer, and enumerating devices
 // needs real hardware.
 type Bootstrap struct {
@@ -237,7 +237,7 @@ type Bootstrap struct {
 func NewBootstrap(st *store.Store) *Bootstrap {
 	return &Bootstrap{
 		store:     st,
-		keyStatus: store.KeyStatusFor,
+		keyStatus: st.KeyStatusFor,
 		perms:     livePermissions,
 		devices:   audio.ListInputDevices,
 	}
@@ -329,7 +329,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 }
 
 // presenceMap reduces the key states to what the connection model needs: which slots hold a usable
-// credential. "Unreadable" counts as absent HERE, and only here — the Keychain could not be
+// credential. "Unreadable" counts as absent HERE, and only here — the credentials could not be
 // consulted, so the honest thing for a readiness badge is not to claim readiness. The key field
 // itself still shows the three-way state, which is where that distinction matters.
 func presenceMap(states []KeyState) map[store.KeySlot]bool {
@@ -377,7 +377,7 @@ func (b *Bootstrap) hostCapabilities() store.HostCapabilities {
 type SettingsService struct {
 	bootstrap *Bootstrap
 
-	// setSecret / deleteSecret / getSecret override the Keychain. Only the tests set them — see
+	// setSecret / deleteSecret / getSecret override the credential store. Only the tests set them — see
 	// secretWriter and secretReader for why the real ones cannot run in a unit test.
 	setSecret    func(store.KeySlot, string) error
 	deleteSecret func(store.KeySlot) error
@@ -396,9 +396,9 @@ type SettingsService struct {
 	// "nothing is happening" while both are half done. And no counter closes the gap between the last
 	// comparison and the write itself. A lock held across decide-and-commit closes both.
 	//
-	// Setters can block for the Keychain's ten seconds while holding this. That is the intended cost:
-	// they already serialise per slot inside the store, and the alternative is a launch check that
-	// silently reverts a configuration the user finished half a second ago.
+	// Setters hold this across their whole body, including the credential write. That is cheap now that
+	// the store is a file — it used to mean up to ten seconds of Keychain — and the alternative is a
+	// launch check that silently reverts a configuration the user finished half a second ago.
 	readinessMu sync.Mutex
 	// readiness counts completed readiness changes. Guarded by readinessMu, so a plain integer says
 	// what an atomic one could not: the count can only move while somebody holds the lock.
@@ -468,14 +468,14 @@ func (s *SettingsService) Load() SettingsPayload { return s.bootstrap.Payload() 
 // and a missing entry would read as "this provider has no key field".
 //
 // The env override is checked FIRST, mirroring keyReaderFor exactly — including the fact that
-// it outranks an unreadable Keychain, which is the whole reason the hatch exists. If the two
-// ever disagreed the UI would contradict what dictation actually does. A slot answered by the
+// it outranks credentials that cannot be read, which is the whole reason the hatch exists. If the
+// two ever disagreed the UI would contradict what dictation actually does. A slot answered by the
 // environment is never looked up at all, which also means it costs nothing.
 //
-// The remaining slots are read CONCURRENTLY, and that is a requirement rather than an
-// optimisation. Each read is bounded by store's three-second timeout, and on an ad-hoc-signed
-// build the Keychain does not answer, so five sequential reads would cost fifteen seconds —
-// spent with the Ajustes page blank, since this is what it paints from. Fanned out, the worst
+// The remaining slots are read CONCURRENTLY. This was a REQUIREMENT under the Keychain backend —
+// five sequential reads each hitting a three-second timeout meant fifteen seconds with the Ajustes
+// page blank — and is now merely harmless: the reads share one mutex over one file, so they
+// serialise anyway and finish in microseconds. Kept because the fan-out costs nothing and the
 // case is one timeout instead of five.
 func (b *Bootstrap) keyStates() []KeyState {
 	out := make([]KeyState, len(store.AllKeySlots))
@@ -484,7 +484,7 @@ func (b *Bootstrap) keyStates() []KeyState {
 	for i, slot := range store.AllKeySlots {
 		out[i] = KeyState{Slot: string(slot), Available: store.IsAvailableKeySlot(slot)}
 		if _, _, set := envCredential(slot); set {
-			// In force, so the Keychain is not consulted: whatever is under it is not what dictation
+			// In force, so the stored credentials are not consulted: whatever is in them is not what dictation
 			// would read. Whether it can AUTHENTICATE is a second question — a variable holding
 			// whitespace overrides everything and works for nothing, so reporting it as present would
 			// put "Conectado" on a card whose engine cannot dictate.

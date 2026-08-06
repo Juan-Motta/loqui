@@ -131,10 +131,10 @@ func TestTheProviderNoticeSaysWhetherTheEngineCanActuallyWork(t *testing.T) {
 			says:     "configuración",
 		},
 		{
-			// The Keychain not answering is NOT missing configuration: the key may be right there.
+			// Unreadable credentials are NOT missing configuration: the key may be right there.
 			// Telling this user to "complete the configuration" sends them to retype a credential
 			// they already have, which is the exact confusion KeyStatusFor's three states exist for.
-			name:     "the Keychain did not answer",
+			name:     "the stored credentials could not be read",
 			provider: "azure",
 			arrange: func(svc *SettingsService, v *testVault) {
 				svc.bootstrap.keyStatus = func(store.KeySlot) store.KeyStatus { return store.KeyUnreadable }
@@ -145,7 +145,7 @@ func TestTheProviderNoticeSaysWhetherTheEngineCanActuallyWork(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			says: "Keychain",
+			says: "no se pudieron leer",
 		},
 		{
 			// Reachable through the binding: SetProvider only checks IsAvailableProvider, which is a
@@ -242,7 +242,7 @@ func TestARegionOnlySaveStaysLegitimateWhenTheKeyAlreadyExists(t *testing.T) {
 // signing the app, the other by typing. Sending the second message to the first user makes them
 // retype a credential that is probably already stored.
 func TestAnUnreadableKeychainIsNotReportedAsAMissingKey(t *testing.T) {
-	for _, readErr := range []error{store.ErrKeychainTimeout, errors.New("keychain exploded")} {
+	for _, readErr := range []error{store.ErrSecretsUnreadable, errors.New("keychain exploded")} {
 		st := store.NewAt(t.TempDir())
 		svc, _ := testService(t, st)
 		svc.getSecret = func(store.KeySlot) (string, error) { return "", readErr }

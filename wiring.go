@@ -127,7 +127,7 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	})
 
 	// Every settings write reports its outcome here. The webview's own console needs devtools
-	// open to exist, and a failed Keychain write is the one thing on that page most likely to
+	// open to exist, and a failed credential write is the one thing on that page most likely to
 	// go wrong on an unsigned build — it must not be invisible from the terminal.
 	//
 	// The UI sends the ACTION name, never the value: a key must not reach the log.
@@ -271,18 +271,18 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 
 	// The engine in use is checked once the page is up, and the page is told if it had to change.
 	//
-	// AFTER ui:painted, not before the windows exist, for two reasons. The check reads the Keychain,
-	// which on this build can take its full three seconds — in front of the first paint that is three
-	// seconds of nothing. And the outcome has somewhere to go: the page repaints from the payload and
-	// shows the sentence, so the user learns their engine moved instead of finding out at the next
-	// dictation.
+	// AFTER ui:painted, not before the windows exist. The reason used to be cost — the check read the
+	// Keychain, which on this build took its full three seconds, and in front of the first paint that
+	// is three seconds of nothing. Reading a file costs nothing, so what keeps the order now is the
+	// other half: the outcome has somewhere to go. The page repaints from the payload and shows the
+	// sentence, so the user learns their engine moved instead of finding out at the next dictation.
 	// ONCE PER LAUNCH, and that is a limitation rather than a design. ui:painted is emitted from the
 	// page's bootstrap (frontend/src/settings.ts), not from paint(), and the Settings window is created
 	// once — closing it only hides it (newSettingsWindow) — so the webview never reloads and this fires
 	// exactly once. Reopening Ajustes does not look again.
 	//
 	// What carries the weight instead is the retry inside EnsureUsableEngine: a check can legitimately
-	// reach no conclusion (the user was mid-save, or a Keychain call was abandoned and may yet land),
+	// reach no conclusion (the user was mid-save while the payload was being built),
 	// and with only one run there is no later paint to fall back on. Deleting the key of the engine in
 	// use is the other moment it gets re-decided, inside DeleteKey itself.
 	//
@@ -324,7 +324,7 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// Dev affordance: drive the buttons of a connection card and report what the card looks like.
 	//
 	// Fired on ui:painted rather than after a fixed sleep, unlike the older hooks above. The page only
-	// wires its handlers once Settings.Load() has resolved, and that call reads the Keychain — which
+	// wires its handlers once Settings.Load() has resolved, and that call used to read the Keychain — which
 	// on an ad-hoc-signed build can take the whole of the three seconds those hooks wait. A command
 	// that arrives before the wiring is lost in silence, and the run then looks like a broken feature
 	// rather than a mistimed probe.

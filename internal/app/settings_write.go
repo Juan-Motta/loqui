@@ -129,14 +129,14 @@ func providerNotice(p SettingsPayload, provider string) string {
 		case store.ConnUnsupported:
 			return "Motor guardado, pero no puede funcionar en este sistema"
 		case store.ConnUnconfigured:
-			// A Keychain that did not answer is NOT missing configuration: the key may be sitting
+			// Credentials that could not be read are NOT missing configuration: the key may be sitting
 			// right there. presenceMap collapses the two — deliberately, for the badge — so the
 			// distinction has to be recovered from the key state before telling someone to go and
 			// complete a configuration they may have completed already.
 			key := keyStateIn(p, row.KeySlot)
 			switch {
 			case key.Status == store.KeyUnreadable:
-				return "Motor seleccionado, pero el Keychain no respondió — no se puede confirmar si su clave está disponible"
+				return "Motor seleccionado, pero no se pudieron leer las claves guardadas — no se puede confirmar si la suya está disponible"
 			case key.FromEnv && key.Status == store.KeyAbsent:
 				// In force and holding nothing usable — the only case where the form cannot help,
 				// because whatever is typed there stays overridden. An env variable holding a REAL
@@ -369,7 +369,7 @@ func (s *SettingsService) SetLanguages(slot string, values []string) WriteResult
 	return s.ok("")
 }
 
-// SetKey stores one provider's credential in the Keychain. Bound as Settings.SetKey().
+// SetKey stores one provider's credential. Bound as Settings.SetKey().
 //
 // The secret is never logged and never echoed back: the payload carries presence only.
 func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
@@ -391,10 +391,10 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 			"guardar aquí no cambiaría la clave que se usa", name)
 	}
 	if err := s.secretWriter()(keySlot, secret); err != nil {
-		if errors.Is(err, store.ErrKeychainTimeout) {
-			s.readinessChanged() // may yet land; see DeleteKey
-		}
-		return s.failed("%s", keychainMessage(err))
+		// NOT counted, and that is a change from the Keychain backend: a failed write to the credentials
+		// FILE wrote nothing. The old cgo call could be abandoned mid-flight and land seconds later, so
+		// a failure had to count as a possible change; a rename either happened or it did not.
+		return s.failed("%s", secretsMessage(err))
 	}
 	s.readinessChanged()
 	return s.ok("")
@@ -406,7 +406,7 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 // but that is not the enforcement: this binding is reachable from anything in the webview, and the
 // item it would delete is one the user cannot currently see — the override is what dictation is
 // using, so the slot would still read as configured afterwards and the deletion would look like it
-// did nothing. Whatever is in the Keychain underneath is not what the user is looking at.
+// did nothing. Whatever is stored underneath is not what the user is looking at.
 func (s *SettingsService) DeleteKey(slot string) WriteResult {
 	defer s.beginReadinessChange()()
 	keySlot, ok := knownKeySlot(slot)
@@ -417,13 +417,10 @@ func (s *SettingsService) DeleteKey(slot string) WriteResult {
 		return s.failed("esta clave viene de la variable de entorno %s — quítala del entorno en vez de borrarla aquí", name)
 	}
 	if err := s.secretDeleter()(keySlot); err != nil {
-		// A TIMEOUT IS NOT A REJECTION. The cgo call was abandoned, not cancelled, so the deletion may
-		// still land — which means readiness may still change. Counting it keeps the launch check from
-		// concluding "all healthy" from a snapshot taken just before a credential vanished.
-		if errors.Is(err, store.ErrKeychainTimeout) {
-			s.readinessChanged()
-		}
-		return s.failed("%s", keychainMessage(err))
+		// A FAILED DELETE DELETED NOTHING, so readiness has not changed. The Keychain backend needed the
+		// opposite rule — an abandoned cgo call could complete later and take the credential with it —
+		// and losing that clause is one of the things the file backend buys.
+		return s.failed("%s", secretsMessage(err))
 	}
 	s.readinessChanged()
 	// A POSTCONDITION, not an account of what happened: store.DeleteKey treats an absent item as
@@ -454,15 +451,15 @@ func (s *SettingsService) DeleteKey(slot string) WriteResult {
 // Bound as Settings.SaveConnection().
 //
 // It exists because doing it from the page as SetRegion-then-SetKey commits half of it whenever the
-// second call fails: the region lands, the Keychain write does not, and the user is left with a
+// second call fails: the region lands, the credential write does not, and the user is left with a
 // provider that looks configured and cannot connect. Everything is validated BEFORE anything is
 // written, so a REJECTED save changes nothing at all.
 //
 // NOT FULLY ATOMIC, and worth being precise about rather than claiming otherwise: the credential
-// lives in the Keychain and the region in a JSON file, and there is no transaction spanning both.
-// What the commit order buys is that the LIKELY failure is the harmless one. The Keychain write is
+// lives in one file and the region in another, and there is no transaction spanning both.
+// What the commit order buys is that the LIKELY failure is the harmless one. The credential write is
 // the part that actually fails on these builds — it hangs when the signature is not recognised — so
-// it goes FIRST: if it fails, nothing has changed anywhere. The remaining window is a Keychain
+// it goes FIRST: if it fails, nothing has changed anywhere. The remaining window is a credential
 // write that succeeds followed by a failing disk write, which means a new key against the old
 // region. That needs the settings file to be unwritable, which is a different class of broken.
 //
@@ -508,7 +505,7 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 	// configured while dictation has nothing to authenticate with.
 	//
 	// Checked only when the user did not type one: a typed key is the credential, and looking up
-	// what is stored would cost the Keychain's three seconds without being able to change the answer.
+	// what is stored could not change the answer, so it is not worth the read.
 	if !writeKey {
 		if res, ok := s.requireStoredKey(keySlot); !ok {
 			return res
@@ -528,16 +525,13 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 		}
 	}
 
-	// ---- then commit, Keychain first ----
-	// The order matters: the Keychain is the half that actually fails here, so doing it first means
-	// its failure leaves EVERYTHING untouched. Region-first would persist a region the user's key
+	// ---- then commit, the credential first ----
+	// The order matters: the credential write is the half that can fail on its own, so doing it first
+	// means its failure leaves EVERYTHING untouched. Region-first would persist a region the user's key
 	// was never saved against.
 	if writeKey {
 		if err := s.secretWriter()(keySlot, secret); err != nil {
-			if errors.Is(err, store.ErrKeychainTimeout) {
-				s.readinessChanged() // may yet land; see DeleteKey
-			}
-			return s.failed("%s", keychainMessage(err))
+			return s.failed("%s", secretsMessage(err))
 		}
 		// Counted here, not at the end: the region write below can fail, and the credential has
 		// already landed by then.
@@ -565,7 +559,7 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 //
 // THE THREE OUTCOMES STAY APART, for the same reason they do in the probe: only "there is nothing
 // stored" is something the user fixes in the form, so only that one marks the field. Reporting a
-// Keychain that did not answer as a missing key would send someone to re-paste a credential that is
+// unreadable store as a missing key would send someone to re-paste a credential that is
 // already there — and on this build that is the common failure, not the rare one.
 func (s *SettingsService) requireStoredKey(slot store.KeySlot) (WriteResult, bool) {
 	if name, _, set := envCredential(slot); set {
@@ -575,7 +569,7 @@ func (s *SettingsService) requireStoredKey(slot store.KeySlot) (WriteResult, boo
 			return s.failed("la variable de entorno %s está definida pero vacía — mientras lo esté, "+
 				"es la clave que se usa, y no puede autenticar nada", name), false
 		}
-		// The environment IS the credential in force. Consulting the Keychain could not change that.
+		// The environment IS the credential in force. Consulting the store could not change that.
 		return WriteResult{}, true
 	}
 	_, err := s.secretReader()(slot)
@@ -584,9 +578,9 @@ func (s *SettingsService) requireStoredKey(slot store.KeySlot) (WriteResult, boo
 		return WriteResult{}, true
 	case errors.Is(err, store.ErrNoSecret):
 		return s.invalid("key", "la clave es obligatoria: pégala antes de guardar"), false
-	case errors.Is(err, store.ErrKeychainTimeout):
-		return s.failed("el Keychain no respondió, así que no se pudo comprobar si ya hay una clave " +
-			"guardada — firma la app con una identidad estable e inténtalo de nuevo"), false
+	case errors.Is(err, store.ErrSecretsUnreadable):
+		return s.failed("no se pudieron leer las claves guardadas, así que no se pudo comprobar si ya " +
+			"hay una — revisa el archivo de claves o bórralo para empezar de cero"), false
 	default:
 		return s.failed("no se pudo comprobar la clave guardada: %v", err), false
 	}
@@ -608,7 +602,7 @@ func saveNotice(wroteKey, wroteRegion bool) string {
 // beginReadinessChange takes the readiness lock for a whole setter; the returned function releases it.
 //
 // Deferred at the TOP of every setter that can make an engine usable or unusable, so validation, the
-// Keychain and the disk are covered together. Anything narrower leaves the window this exists to
+// credential and the settings are covered together. Anything narrower leaves the window this exists to
 // close: a change that has begun but not finished must not read as "nothing is happening".
 //
 // IT DOES NOT COUNT ANYTHING. The count is bumped where something actually landed — see
@@ -634,7 +628,7 @@ func (s *SettingsService) readinessNow() uint64 {
 // envOverrideFor reports the LOQUI_*_KEY variable currently supplying a slot's credential, or "".
 //
 // Every path that WRITES a secret has to consult it. An override is what dictation actually uses, so
-// storing something in the Keychain underneath would report success and change nothing the user can
+// storing something underneath would report success and change nothing the user can
 // observe — the slot goes on reading as configured from the variable, and the item just written is
 // invisible until the variable is removed, at which point a credential the user has forgotten about
 // silently becomes live.
@@ -649,7 +643,7 @@ func envOverrideFor(slot store.KeySlot) string {
 // envCredential is the ONE answer to "what is the environment supplying for this slot".
 //
 // Three outcomes, and the middle one is the reason this exists: a variable that is SET BUT BLANK is
-// in force — keyReaderFor hands it to dictation ahead of the Keychain — and cannot authenticate
+// in force — keyReaderFor hands it to dictation ahead of the store — and cannot authenticate
 // anything. Every path has to agree on that. They did not: the probe called it unusable while the
 // save path took it as proof a credential existed and the payload reported the slot as configured,
 // so a card could read "Conectado" while dictation received whitespace.
@@ -672,22 +666,22 @@ func envCredentialUsable(slot store.KeySlot) bool {
 	return set && strings.TrimSpace(value) != ""
 }
 
-// keychainMessage turns a Keychain failure into something the user can act on.
+// secretsMessage turns a credential-store failure into something the user can act on.
 //
-// The timeout gets its own wording because it is not a rejected write: the call was abandoned and
-// may yet land, so the honest thing to say is "not confirmed", not "not saved". Telling someone
-// their key was not saved when it might have been sends them to retype it, and on these builds the
-// retype is just as likely to hang.
-func keychainMessage(err error) string {
-	if errors.Is(err, store.ErrKeychainTimeout) {
-		return "el Keychain no respondió — la operación no está confirmada. " +
-			"Es el síntoma de una firma de desarrollo inestable; vuelve a abrir Ajustes para ver el estado real."
+// NO MORE "unconfirmed". Under the Keychain backend a timeout meant the call had been abandoned and
+// might still land, so the only honest wording was "not confirmed" and the advice was to reopen
+// Ajustes and look. The file backend has no such state: the write either completed or it did not, so
+// the message can say what happened and point at the file to inspect.
+func secretsMessage(err error) string {
+	if errors.Is(err, store.ErrSecretsUnreadable) {
+		return "no se pudieron leer las claves guardadas, así que no se cambió nada — " +
+			"revisa el archivo de claves (Acerca de muestra la carpeta) o bórralo para empezar de cero"
 	}
-	return fmt.Sprintf("no se pudo acceder al Keychain: %v", err)
+	return fmt.Sprintf("no se pudo guardar la clave: %v", err)
 }
 
 // knownKeySlot rejects anything that is not one of the declared credential slots, so a typo
-// cannot create a Keychain item nothing will ever read.
+// cannot store a credential under a name nothing will ever read.
 func knownKeySlot(slot string) (store.KeySlot, bool) {
 	for _, known := range store.AllKeySlots {
 		if string(known) == slot {
@@ -700,19 +694,18 @@ func knownKeySlot(slot string) (store.KeySlot, bool) {
 // store is the shared Store. Reached through the bootstrap so there is exactly one instance.
 func (s *SettingsService) store() *store.Store { return s.bootstrap.store }
 
-// secretWriter is store.SetKey unless a test replaced it. The real one talks to the login
-// Keychain, which a unit test must never write to — and which does not answer on an
-// ad-hoc-signed build.
+// secretWriter is the store's SetKey unless a test replaced it. The real one writes the real data
+// directory, which a unit test must never touch — it would overwrite the developer's own credentials.
 func (s *SettingsService) secretWriter() func(store.KeySlot, string) error {
 	if s.setSecret != nil {
 		return s.setSecret
 	}
-	return store.SetKey
+	return s.store().SetKey
 }
 
 func (s *SettingsService) secretDeleter() func(store.KeySlot) error {
 	if s.deleteSecret != nil {
 		return s.deleteSecret
 	}
-	return store.DeleteKey
+	return s.store().DeleteKey
 }

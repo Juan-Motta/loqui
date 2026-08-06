@@ -148,7 +148,7 @@ engine needs configuration" warning disappears, and under the card, in green, si
 
 The two cases that must NOT move anything are pinned by Go tests, not by E2E, because provoking them
 in the real app requires a Keychain that does not answer and a Whisper with no model:
-`TestAnUnreadableKeychainNeverChangesTheEngine` and
+`TestUnreadableCredentialsNeverChangeTheEngine` and
 `TestNoFallbackWhenTheDefaultEngineCannotRunEither`.
 
 ## Hero alignment: PASS (measured in pixels)

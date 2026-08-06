@@ -70,11 +70,10 @@ func TestAnUnsupportedEngineAlsoFallsBack(t *testing.T) {
 	}
 }
 
-// THE CASE THAT MUST NOT MOVE ANYTHING. An unreadable Keychain means the app could not CHECK the
-// credential, not that there is none — and on an ad-hoc-signed build that is the common failure, not
-// the rare one. Switching engines on it would take a working Azure setup away from the user because
-// a lookup timed out.
-func TestAnUnreadableKeychainNeverChangesTheEngine(t *testing.T) {
+// THE CASE THAT MUST NOT MOVE ANYTHING. Unreadable credentials mean the app could not CHECK the
+// key, not that there is none: a corrupt or truncated secrets.json says nothing about what was in it.
+// Switching engines on that would take a working Azure setup away over a damaged file.
+func TestUnreadableCredentialsNeverChangeTheEngine(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, _ := testService(t, st)
 	svc.bootstrap.keyStatus = func(store.KeySlot) store.KeyStatus { return store.KeyUnreadable }
@@ -94,7 +93,7 @@ func TestAnUnreadableKeychainNeverChangesTheEngine(t *testing.T) {
 	if res.Notice == "" {
 		t.Error("the app could not verify the engine and said nothing about it")
 	}
-	if !strings.Contains(res.Notice, "Keychain") {
+	if !strings.Contains(res.Notice, "no se pudieron leer") {
 		t.Errorf("notice = %q — it must say the check failed, not that the engine is misconfigured",
 			res.Notice)
 	}
@@ -565,31 +564,51 @@ func TestARefusedSaveDoesNotCountAsAChange(t *testing.T) {
 	}
 }
 
-// A Keychain operation that TIMED OUT was abandoned, not cancelled: it may still land. Treating it as
-// "nothing happened" lets the launch check trust a snapshot taken moments before a credential
-// disappears — and its one run per session would already be spent.
-func TestAnAbandonedKeychainOperationCountsAsAPossibleChange(t *testing.T) {
+// A FAILED credential operation changed nothing, so it must not count as a change.
+//
+// This is the INVERSE of what the Keychain backend needed, and the flip is the point. There, a
+// timeout meant the cgo call had been abandoned and could still land seconds later, so a failure had
+// to be counted as a possible change or the launch check would trust a snapshot taken moments before
+// a credential vanished. The file backend has no abandoned call: a failed read never got as far as
+// writing, and a rename either happened or it did not. Counting a failure now would spend the
+// check's retries on nothing.
+func TestAFailedCredentialOperationIsNotCountedAsAChange(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, _ := testService(t, st)
-	svc.deleteSecret = func(store.KeySlot) error { return store.ErrKeychainTimeout }
 
+	for _, c := range []struct {
+		name string
+		err  error
+	}{
+		{"the credentials could not be read", store.ErrSecretsUnreadable},
+		{"the delete was rejected outright", errors.New("el disco está lleno")},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			svc.deleteSecret = func(store.KeySlot) error { return c.err }
+			before := svc.readinessNow()
+
+			if res := svc.DeleteKey("azure-speech"); res.Error == "" {
+				t.Fatal("the failure was not reported")
+			}
+			if got := svc.readinessNow(); got != before {
+				t.Errorf("readiness %d → %d — a failure that changed nothing announced itself as a change",
+					before, got)
+			}
+		})
+	}
+
+	// And one that LANDS does count, or the guard would never fire at all and this test would pass
+	// against a service that had stopped counting altogether.
+	svc.deleteSecret = nil
+	if err := st.SetKey(store.SlotAzureSpeech, "la-guardada"); err != nil {
+		t.Fatal(err)
+	}
 	before := svc.readinessNow()
-	if res := svc.DeleteKey("azure-speech"); res.Error == "" {
-		t.Fatal("the timeout was not reported")
+	if res := svc.DeleteKey("azure-speech"); res.Error != "" {
+		t.Fatalf("delete: %s", res.Error)
 	}
 	if got := svc.readinessNow(); got == before {
-		t.Error("an abandoned deletion counted as nothing — a decision taken now could be describing " +
-			"a credential that is about to vanish")
-	}
-
-	// A REJECTED operation is different: nothing landed and nothing will.
-	svc.deleteSecret = func(store.KeySlot) error { return errors.New("keychain rechazó la operación") }
-	before = svc.readinessNow()
-	if res := svc.DeleteKey("azure-speech"); res.Error == "" {
-		t.Fatal("the rejection was not reported")
-	}
-	if got := svc.readinessNow(); got != before {
-		t.Errorf("readiness %d → %d — a rejection announced itself as a change", before, got)
+		t.Error("a delete that landed did not count")
 	}
 }
 

@@ -74,7 +74,7 @@ Development affordances (documented where they are read, not only here):
 ```bash
 LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # shows the pill after 2s
 LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dictates 6s without a keypress
-LOQUI_AZURE_KEY=...                                          # bypasses the Keychain (see below)
+LOQUI_AZURE_KEY=...                                          # bypasses the stored keys (see below)
 LOQUI_GROK_KEY=...                                           # same, for xAI
 ```
 
@@ -111,9 +111,33 @@ sha256.
 - **Input Monitoring** — for the `fn` key, granted to the `globe-listener` helper.
 
 **With ad-hoc signing these have to be re-granted on every rebuild**, because macOS ties
-permissions to the signature and it changes each time. Worse: the Keychain read **hangs**
-(hence the timeout in `GetKey` and the `LOQUI_*_KEY` escape hatches). Signing dev builds
-with a stable identity is the project's next step, not a convenience.
+permissions to the signature and it changes each time. Signing dev builds with a stable
+identity would end that, and it remains the honest fix.
+
+It used to be worse: the Keychain read **hung** on these builds, so the app could not read
+its own API key. That is why the credentials no longer live in the Keychain — see below.
+
+## Where the API keys live
+
+`~/Library/Application Support/LoquiGo/secrets.json`, mode `0600`, **in the clear**.
+
+This is a deliberate trade for a personal build, not an oversight. The keys used to live in the
+login Keychain, which encrypted them with the account password — but on an ad-hoc-signed build
+`SecItemCopyMatching` never returns (macOS wants to authorise the access and cannot show the
+prompt), so the app could not read its own credential and could not dictate. A three-second
+timeout made that diagnosable, not fixed.
+
+What you give up, stated plainly: anything running as your user can read the file, and so can a
+backup or a lost laptop. **Turning FileVault on** restores encryption at rest and costs one
+toggle; without it the keys sit in cleartext on the disk. These credentials bill by the hour, so
+a leak is somebody else's invoice.
+
+The escape hatches still win over the file, so `LOQUI_AZURE_KEY=... ` is the way to run without
+storing anything at all.
+
+To go back to OS-level protection, the route is a stable signing identity rather than a different
+file format: that fixes the hang at its source and stops macOS revoking Accessibility and Input
+Monitoring on every rebuild too.
 
 ## Structure
 
@@ -123,7 +147,7 @@ internal/session/       the dictation controller (pure decisions, with tests)
 internal/stt/           provider contract + azure/
 internal/audio/         capture (malgo/CoreAudio) + PCM/level
 internal/inject/        paste with NSPasteboard.changeCount + focus guard
-internal/store/         settings JSON + Keychain
+internal/store/         settings JSON + credentials file
 internal/hotkey/        fn-key protocol + listener
 helpers/                the 3 native helpers (Swift/C++), ported unchanged
 frontend/               index.html = Settings, overlay.html = the pill

@@ -166,7 +166,7 @@ function renderConfig(p: SettingsPayload): void {
       slot.status === "present" ? "Ya configurada — escribe para reemplazarla" : "Pega tu clave";
     input.autocomplete = "off";
     // On change, not on every keystroke: a keystroke-by-keystroke write would store dozens of
-    // truncated prefixes in the Keychain.
+    // truncated prefixes in the stored credentials.
     input.onchange = () => {
       const value = input.value.trim();
       if (value === "") return;
@@ -257,7 +257,7 @@ export function openWizard(): void {
 
 // Marks the tutorial done so it stops opening by itself.
 //
-// The UI closes even if the write fails. Otherwise a Keychain or disk problem would trap the user
+// The UI closes even if the write fails. Otherwise a disk problem would trap the user
 // inside the wizard with no way out — the one failure they could not work around.
 async function closeWizard(): Promise<void> {
   try {

@@ -1000,7 +1000,7 @@
                     </div>
 
                     <label id="keyLabel">Clave API <span id="keyState" class="muted key-state"></span></label>
-                    <input id="key" type="password" placeholder="pega tu clave (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <input id="key" type="password" placeholder="pega tu clave (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
 
                     <div class="conn-actions">
                       <span class="status" id="azureStatus"></span>
@@ -1020,7 +1020,7 @@
                     <button class="btn small conn-toggle" data-i18n>Configurar</button>
                   </div>
                   <div class="conn-form" hidden>
-                    <p class="none" data-i18n>Transcripción en tiempo real por WebSocket. Tu API key se guarda cifrada en el keychain.</p>
+                    <p class="none" data-i18n>Transcripción en tiempo real por WebSocket. Tu API key se guarda en tu equipo, sin cifrar — ver Acerca de.</p>
                     <label data-i18n>Modelo</label>
                     <select id="openaiModel">
                       <option value="gpt-realtime-whisper" data-i18n>gpt-realtime-whisper — streaming realtime (recomendado)</option>
@@ -1028,7 +1028,7 @@
                       <option value="gpt-4o-mini-transcribe" data-i18n>gpt-4o-mini-transcribe — más rápido/barato</option>
                     </select>
                     <label>API key <span id="openaiKeyState" class="muted key-state"></span></label>
-                    <input id="openaiApiKey" type="password" placeholder="sk-… (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <input id="openaiApiKey" type="password" placeholder="sk-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
@@ -1048,7 +1048,7 @@
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Transcripción en streaming. La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
                     <label>API key <span id="grokKeyState" class="muted key-state"></span></label>
-                    <input id="grokApiKey" type="password" placeholder="xai-… (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <input id="grokApiKey" type="password" placeholder="xai-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
@@ -1068,7 +1068,7 @@
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Scribe v2 Realtime (streaming). La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
                     <label>API key <span id="elevenKeyState" class="muted key-state"></span></label>
-                    <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se cifra al guardar)" data-i18n-attr="placeholder" />
+                    <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-use" data-i18n>Usar este motor</button>
@@ -1262,7 +1262,7 @@
 
           <div class="sec-title" data-i18n>PRIVACIDAD</div>
           <div class="group">
-            <p class="about-note" data-i18n>El historial se guarda solo en tu equipo y las claves API se cifran en el llavero del sistema. Nada se envía a ningún servidor salvo al proveedor de transcripción que elijas, y los motores locales no usan internet.</p>
+            <p class="about-note" data-i18n>El historial y las claves API se guardan solo en tu equipo, en la carpeta de datos de arriba. Las claves se guardan SIN CIFRAR, legibles por tu usuario: es una build personal y se eligió la simplicidad sobre el llavero del sistema. Nada se envía a ningún servidor salvo al proveedor de transcripción que elijas, y los motores locales no usan internet.</p>
           </div>
 
           <div class="sec-title" data-i18n>APOYA EL PROYECTO</div>

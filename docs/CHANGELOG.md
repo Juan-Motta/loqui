@@ -4,6 +4,28 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## API keys move out of the Keychain and into a file — 2026-08-06
+
+- **The app can read its own credential again.** On an ad-hoc-signed build — every development build
+  of this project — `SecItemCopyMatching` never returns: macOS wants to authorise the access and
+  cannot show the prompt. So the key was there and unreadable, every launch paid a three-second
+  timeout, and the engine check could not tell "no key" from "I could not look". The credentials now
+  live in `secrets.json` in the data directory, mode `0600`, written atomically.
+- **The trade, in the app's own words.** They are stored **in the clear**. The About view says so now
+  instead of promising they are "encrypted in the system keychain", which stopped being true with this
+  change — a false privacy claim is worse than an uncomfortable true one. Turning FileVault on
+  restores encryption at rest.
+- **A declared residual is closed, not moved.** The Keychain's timeout was indeterminate: the cgo call
+  was abandoned, not cancelled, so a failed write could land seconds later and leave the new key
+  paired with the old region. Every credential path had to treat a failure as a possible change. A
+  rename either happened or it did not, so that accounting is gone and the messages no longer have to
+  say "unconfirmed".
+- **What did NOT change:** the three states of a credential (present / absent / unreadable). A file can
+  be corrupt or unreadable after a restore, and collapsing that into "you have no key" is what sends
+  someone to paste a credential they already have.
+- **What this does not fix:** Accessibility and Input Monitoring are still revoked on every rebuild.
+  That is the same root cause — the signature — and only signing fixes it.
+
 ## The engine that cannot dictate no longer stays selected — 2026-08-02
 
 - **At launch, the app moves to the default engine (Whisper) if the active one cannot dictate**, and

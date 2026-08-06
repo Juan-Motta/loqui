@@ -167,8 +167,8 @@ func main() {
 }
 
 // buildProbeProvider wires one engine from environment variables. Deliberately NOT reading the
-// app's settings or Keychain: the point of this tool is to isolate the capture -> service ->
-// transcript chain from everything the app layers on top, including a Keychain that does not
+// app's settings or stored credentials: the point of this tool is to isolate the capture -> service ->
+// transcript chain from everything the app layers on top, including a credential store that does not
 // answer on an ad-hoc-signed build.
 func buildProbeProvider(name, langs string) (stt.Provider, string) {
 	switch name {

@@ -568,8 +568,8 @@ function paint(p: SettingsPayload): boolean {
     const label = card.querySelector<HTMLElement>(".key-state");
     if (label) label.textContent = keyStateLabel(key?.status, key?.fromEnv);
 
-    // Deleting is only meaningful for a key that is actually in the Keychain. An env-supplied one
-    // has nothing to delete, and deleting the Keychain item behind it would remove something the
+    // Deleting is only meaningful for a key this app actually stored. An env-supplied one
+    // has nothing to delete, and deleting the stored item behind it would remove something the
     // user cannot see while the slot still reads as configured.
     const save = card.querySelector<HTMLButtonElement>(".conn-save");
     if (save) save.disabled = !available;
@@ -613,7 +613,7 @@ function paintOwns(control: HTMLButtonElement | HTMLSelectElement | null): boole
 // configure" and "cannot run here" into the same sentence.
 //
 // The three-way key state still gets its own wording, below, because that distinction lives in the
-// FIELD rather than the badge: "the Keychain did not answer" sends the user somewhere completely
+// FIELD rather than the badge: "your keys could not be read" sends the user somewhere completely
 // different from "you never set a key", and telling them to retype a stored credential is worse
 // than saying nothing.
 function keyStateLabel(status?: string, fromEnv?: boolean): string {
@@ -631,7 +631,7 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
         ? "(la variable de entorno está definida pero vacía — quítala del entorno para usar una clave guardada)"
         : "(no configurada)";
     case "unreadable":
-      return "(el Keychain no respondió — la app no está firmada con una identidad estable)";
+      return "(no se pudieron leer las claves guardadas — revisa el archivo de claves)";
     default:
       return "";
   }
@@ -724,7 +724,7 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
 // would leave the page with nothing authoritative to repaint from — showing the choice that was
 // just refused. Repainting on failure is what snaps the picker back to the engine really in use.
 //
-// While a write is in flight the triggering control is disabled: two overlapping Keychain
+// While a write is in flight the triggering control is disabled: two overlapping credential
 // operations on one slot are exactly what the store's per-slot gate has to serialise, and a
 // double-clicked Guardar is the easiest way to cause it.
 async function run(
@@ -819,8 +819,8 @@ async function probe(
     const res = await Settings.TestConnection(slot, region, secret);
     // Not painted from the payload — no state disables it, by design — so it releases itself.
     trigger.disabled = false;
-    // The probe reads the Keychain, so its payload can be the first place a write that timed out and
-    // landed late becomes visible. paint() drops it if a newer snapshot got there first.
+    // The probe re-reads the stored credentials, so its payload is the next chance to correct a card
+    // that had gone stale. paint() drops it if a newer snapshot got there first.
     // A probe writes nothing, so its repaint must leave the form exactly as it found it. paint() fills
     // the region select from what is STORED — right after a save, wrong here: an unsaved choice would
     // be swapped back silently and the next Guardar would store the key against a region that was
@@ -885,7 +885,7 @@ function wire(): void {
     // "Probar conexión". It writes NOTHING, so it stays out of the write queue: a fifteen-second
     // network call in there would hold up a Guardar behind it. What it does do is WAIT for whatever
     // is already queued — otherwise a test fired right after a save would read the previous
-    // credential from the Keychain and report that the new one fails.
+    // stored credential and report that the new one fails.
     const test = card.querySelector<HTMLButtonElement>(".conn-test");
     test?.addEventListener("click", () => {
       if (!slot) return;
@@ -914,7 +914,7 @@ function wire(): void {
       if (!slot) return;
       const input = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
       // Snapshot the secret and clear the field IMMEDIATELY. Waiting for the round trip to finish
-      // leaves it sitting in the DOM for as long as the Keychain takes — up to ten seconds on a
+      // leaves it sitting in the DOM for as long as the write takes — which used to be ten seconds on a
       // build where it does not answer — and left it there for ever when the write failed.
       const secret = input?.value ?? "";
       if (input) input.value = "";
@@ -1072,7 +1072,7 @@ Events.On("engine:blocked", engineNews("err"));
 // It exists for the same reason LOQUI_DEBUG_DICTATE does — the real trigger cannot be scripted.
 // Clicking a <select> inside a Wails webview from a shell script is not something that works, so
 // without this the write half of the loop could only be checked by hand. This runs the SAME path
-// the picker does, so what it proves is the real one: binding → service → Keychain/disk → repaint.
+// the picker does, so what it proves is the real one: binding → service → disk → repaint.
 // Dev affordance: click a real sidebar item and report which view ended up visible.
 //
 // Same reason as the other debug hooks — a sidebar entry inside a Wails webview cannot be clicked

@@ -190,9 +190,9 @@ func IsAvailableOn(provider string, caps HostCapabilities) bool {
 
 // HasNonSecretConfig reports whether everything an engine needs BESIDES its credential is in place.
 //
-// Exported because "the Keychain did not answer" only justifies leaving an engine alone when the key
+// Exported because "the keys could not be read" only justifies leaving an engine alone when the key
 // is the ONLY thing unconfirmed. Azure without a region cannot dictate whatever its key turns out to
-// be, so an unreadable Keychain must not shield that case.
+// be, so unreadable credentials must not shield that case.
 func HasNonSecretConfig(provider string, s Settings) bool { return hasRequiredConfig(provider, s) }
 
 // hasRequiredConfig is everything an engine needs BESIDES its key. Azure is the only one with extra

@@ -31,17 +31,21 @@
      would set it up later. When the time comes: the module path says
      `github.com/Juan-Motta/loqui-go` but `gh` is authenticated as `Juan-Andres-LM`, and creating
      the repo would publish the code → an owner and public/private have to be chosen.
-  2. **Ad-hoc signing.** Implicated in three symptoms: the Keychain does not answer (hence the
-     `LOQUI_*_KEY` escape hatches), permissions are revoked on every rebuild, and probably Apple's
-     engine. Fixing it would also make the declared Keychain residual disappear. Pending decision:
-     a fixed self-signed identity vs a Developer ID.
+  2. **Ad-hoc signing.** Down from three symptoms to two: permissions are revoked on every rebuild,
+     and probably Apple's engine. The third — the Keychain not answering — was routed around rather
+     than fixed: the credentials now live in a cleartext file (`store/secrets.go`), a trade the owner
+     accepted for a personal build. Signing is still the only thing that fixes the rest, and the only
+     thing that would let the keys go back to being encrypted at rest. Pending decision: a fixed
+     self-signed identity vs a Developer ID.
   3. **Cloud keys.** The Azure one is marked as exposed; there is no xAI one at all. Without them,
      real transcription through those routes cannot be verified.
 
-- **Last night's bug deleted the user's Azure key.** "Delete key" worked and said nothing, so the
-  credential vanished from the Keychain without a word. It is fixed now (the card speaks), but **the
-  `azure-speech` slot is empty**: any verification of the green path needs the user to paste a new
-  key.
+- **The Azure key is in the Keychain, which the app no longer reads.** The bug that deleted it is
+  fixed (the card speaks), and the user pasted a new key on 2026-08-03 — but the credentials moved to
+  a file on 2026-08-06, and migrating the old item needs an interactive Keychain prompt that only the
+  user can approve. Until they do (`security find-generic-password -s com.jualopezmo.loquigo -a
+  azure-speech -w`) or paste it again in the app, **the `azure-speech` slot is empty** and the green
+  path — `✓ Conexión correcta` — still has never been executed.
 
 - **Debt, unowned: the frontend does not type-check.** `typescript@^4.9.3` against a `tsconfig.json`
   with TS5 options, so `tsc` cannot read the config and vite strips the types without validating

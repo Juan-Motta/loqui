@@ -5,10 +5,11 @@
 // and why a failed probe must leave the stored configuration exactly as it was.
 //
 // It still returns a payload. Not because it changed anything, but because it is the next thing in
-// the app that READS the Keychain, and on a build where writes time out and land afterwards the
-// page can be painted from a snapshot that says there is no key when there is one. Answering "your
-// key works" while the card beside it says "Sin configurar" is a worse bug than the silence this
-// whole change is fixing.
+// the app that READS the credentials, so it is the next chance to correct a card that is out of date.
+// Answering "your key works" while the card beside it says "Sin configurar" is a worse bug than the
+// silence this whole change is fixing. (Under the Keychain backend there was a sharper reason: a write
+// could time out and land afterwards, so the page could be painted from a snapshot that said there was
+// no key when there was one. The file backend cannot do that — see store/secrets.go.)
 package app
 
 import (
@@ -48,8 +49,8 @@ type ProbeResult struct {
 // probeHTTPTimeout bounds the exchange with Azure.
 //
 // It covers ONLY the HTTP call: resolving the region and the key happens before the context is
-// created, and the Keychain read carries its own three-second limit inside store.GetKey. A budget
-// that started earlier would hand the network whatever seconds the Keychain had left over.
+// created. A budget that started earlier would hand the network whatever was left over from reading
+// the credential — which used to be up to three seconds of Keychain timeout, and is now a file read.
 const probeHTTPTimeout = 15 * time.Second
 
 // slotsWithProbe is the credentials this app knows how to TEST, which is a different list from the
@@ -67,7 +68,7 @@ var slotsWithProbe = map[store.KeySlot]bool{
 //
 // EVERYTHING THAT CAN FAIL WITHOUT THE NETWORK FAILS FIRST, in this order: the slot, then the
 // region, then the key. The order is load-bearing rather than tidy — a region that cannot work does
-// not justify paying the Keychain's three seconds to discover the key, and neither justifies a
+// not justify reading the credential to discover the key, and neither justifies a
 // request to a URL built from a region Azure would reject.
 func (s *SettingsService) TestConnection(slot string, region string, secret string) ProbeResult {
 	keySlot, ok := knownKeySlot(slot)
@@ -142,15 +143,14 @@ func (s *SettingsService) resolveRegion(region string) (string, ProbeResult, boo
 // resolveKey finds the credential to test, and says where it came from.
 //
 // THE TYPED FIELD WINS, and it is checked before anything else is consulted: trying a key BEFORE
-// saving it is the reason this button is worth pressing, and looking up a stored credential the
-// caller is not asking about would cost the Keychain's three seconds for nothing. With the field
-// empty the precedence is dictation's own (keyReaderFor): the environment override, then the
-// Keychain — so an empty field tests exactly what the microphone would use.
+// saving it is the reason this button is worth pressing. With the field empty the precedence is
+// dictation's own (keyReaderFor): the environment override, then the stored credentials — so an empty
+// field tests exactly what the microphone would use.
 //
-// THE THREE OUTCOMES OF A KEYCHAIN READ STAY APART. "Nothing stored" is fixed by typing a key;
-// "the Keychain did not answer" is fixed by signing the app, and telling that user to type their
-// key again wastes their time on a credential that is probably already there. The field marker
-// follows the same split: only the first is something an input can fix.
+// THE THREE OUTCOMES OF THE READ STAY APART. "Nothing stored" is fixed by typing a key; "your keys
+// could not be read" is fixed at the file, and telling that user to type their key again wastes their
+// time on a credential that is probably already there. The field marker follows the same split: only
+// the first is something an input can fix.
 func (s *SettingsService) resolveKey(slot store.KeySlot, typed string) (string, string, ProbeResult, bool) {
 	if secret := strings.TrimSpace(typed); secret != "" {
 		return secret, "typed", ProbeResult{}, true
@@ -158,7 +158,7 @@ func (s *SettingsService) resolveKey(slot store.KeySlot, typed string) (string, 
 	if name, value, set := envCredential(slot); set {
 		if !envCredentialUsable(slot) {
 			// In force and unusable at once. Naming the variable is the only way the user finds out:
-			// a good key may be sitting in the Keychain underneath, and nothing will read it while
+			// a good key may be sitting in the store underneath, and nothing will read it while
 			// this is defined.
 			return "", "", s.probeFailed("", "la variable de entorno %s está definida pero vacía — "+
 				"mientras lo esté, es la clave que se usa, y no puede autenticar nada", name), false
@@ -169,15 +169,15 @@ func (s *SettingsService) resolveKey(slot store.KeySlot, typed string) (string, 
 	key, err := s.secretReader()(slot)
 	switch {
 	case err == nil:
-		return key, "keychain", ProbeResult{}, true
+		return key, "stored", ProbeResult{}, true
 	case errors.Is(err, store.ErrNoSecret):
 		return "", "", s.probeFailed("key", "falta la clave: escríbela o guárdala antes de probar"), false
-	case errors.Is(err, store.ErrKeychainTimeout):
-		// Deliberately NOT keychainMessage: that text describes a WRITE whose outcome is unconfirmed
-		// and may still land, and tells the user to reopen Ajustes to see what happened. A read has
-		// nothing pending to land.
-		return "", "", s.probeFailed("", "el Keychain no respondió, así que no se pudo leer la clave "+
-			"guardada — firma la app con una identidad estable, o pasa la clave en %s para probar",
+	case errors.Is(err, store.ErrSecretsUnreadable):
+		// Deliberately NOT secretsMessage: that text is about a WRITE that changed nothing. Here nothing
+		// was going to be written in the first place — the read is what failed, and the only useful
+		// instruction is where the file is.
+		return "", "", s.probeFailed("", "no se pudieron leer las claves guardadas, así que no se pudo "+
+			"leer la de este motor — revisa el archivo de claves, o pasa la clave en %s para probar",
 			envKeyOverride(slot)), false
 	default:
 		return "", "", s.probeFailed("", "no se pudo leer la clave guardada: %v", err), false
@@ -213,14 +213,14 @@ func (s *SettingsService) httpTimeout() time.Duration {
 	return probeHTTPTimeout
 }
 
-// secretReader is store.GetKey unless a test replaced it. The real one talks to the login Keychain,
-// which a unit test must never read: the answer would depend on whether the developer running it
-// happens to have a key stored, and it would pay the Keychain timeout on an ad-hoc-signed build.
+// secretReader is the store's GetKey unless a test replaced it. The real one reads the real data
+// directory, which a unit test must never touch: the answer would depend on whether the developer
+// running it happens to have a key saved.
 func (s *SettingsService) secretReader() func(store.KeySlot) (string, error) {
 	if s.getSecret != nil {
 		return s.getSecret
 	}
-	return store.GetKey
+	return s.store().GetKey
 }
 
 // logLine records a diagnostic line, or nothing when no logger was wired.

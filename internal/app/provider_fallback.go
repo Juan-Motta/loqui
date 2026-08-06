@@ -11,26 +11,28 @@
 //
 // TWO THINGS IT MUST NEVER DO, and they are half the design:
 //
-//   - Move the user off an engine because the app could not CHECK it. On a build whose signature the
-//     Keychain does not recognise, a lookup that times out is the common case — treating "I could not
-//     read your key" as "you have no key" would take a working configuration away over a timeout.
+//   - Move the user off an engine because the app could not CHECK it. A credentials file that is
+//     corrupt, truncated or unreadable after a restore says nothing about whether the key is there —
+//     treating "I could not read your keys" as "you have no key" would take a working configuration
+//     away over a damaged file. (Under the Keychain backend this was the COMMON case, not the rare
+//     one, which is why the branch exists at all.)
 //   - Move onto an engine that cannot dictate either. Whisper needs a model file the connection model
 //     knows nothing about, so its row can read "Disponible" while it transcribes nothing.
 //
-// A RESIDUAL THIS DOES NOT CLOSE, stated rather than left to be discovered: a Keychain call that
-// times out is ABANDONED, not cancelled, so it can land seconds later. If it lands while the window
-// stays open and nothing else repaints, the app can sit on an engine whose credential has just
-// vanished until the next paint or the next launch. Closing it properly means the store reporting
-// when an abandoned call finally completes — a change to every credential path, not a clause in this
-// one — and it only bites while the Keychain hangs, which is the ad-hoc-signing blocker the project
-// is committed to fixing at the root. The same reasoning, and the same residual, is already pinned by
-// TestALateLandingKeychainWriteIsAKnownResidual.
+// A RESIDUAL THAT USED TO LIVE HERE IS GONE, and it is worth recording why rather than leaving the
+// next reader to wonder what the retry logic is defending against. While the credentials lived in the
+// Keychain, a call that timed out was ABANDONED rather than cancelled — the cgo call could not be
+// stopped — so it could land seconds later and leave the app on an engine whose credential had just
+// vanished. Every decision here had to treat a failed credential operation as a possible change.
+// The credentials are now a file (store/secrets.go): a failed read never reached the write, and a
+// rename either happened or it did not, so there is no late arrival to defend against.
 //
-// What IS done about it here: an abandoned call counts as a possible change, so a decision taken after
-// it does not trust a stale snapshot, and the launch check retries rather than concluding from one. It
-// is NOT re-run periodically — the trigger fires once per launch (see the ui:painted hook in
-// wiring.go), so between launches the only thing that re-decides is deleting the key of the engine in
-// use. Widening that is a separate change; pretending it is already wide would be worse than the gap.
+// WHAT REMAINS is the ordinary kind of staleness, and the retry still earns its place: the payload
+// this decides from takes several reads to build, and a user clicking in Ajustes can finish a save
+// inside that window. The check is NOT re-run periodically — the trigger fires once per launch (see
+// the ui:painted hook in wiring.go), so between launches the only thing that re-decides is deleting
+// the key of the engine in use. Widening that is a separate change; pretending it is already wide
+// would be worse than the gap.
 package app
 
 import (
@@ -66,8 +68,8 @@ func (s *SettingsService) EnsureUsableEngine() EngineCheck {
 	// session: giving up because the user happened to be saving something would leave the app on an
 	// unusable engine for the rest of the run, which is the very thing this exists to prevent.
 	//
-	// Three attempts because each one costs a Keychain read and the interference it guards against is
-	// a person clicking, not a loop: two users' worth of coincidence is already generous.
+	// Three attempts because each one rebuilds the whole payload and the interference it guards against
+	// is a person clicking, not a loop: two users' worth of coincidence is already generous.
 	const attempts = 3
 	var last EngineCheck
 	for i := 0; i < attempts; i++ {
@@ -166,12 +168,12 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 	// gone, in which case there is nothing left to doubt.
 	proven := ev.deletedSlot != "" && string(ev.deletedSlot) == active.KeySlot
 	// And it only shields the engine when the KEY is the one thing in doubt. Azure without a region
-	// cannot dictate whatever its key turns out to be, so an unreadable Keychain must not be allowed to
+	// cannot dictate whatever its key turns out to be, so unreadable credentials must not be allowed to
 	// hide a requirement that is already, definitely, missing.
 	onlyTheKeyIsUnknown := store.HasNonSecretConfig(active.ID, s.store().LoadSettings())
 	if !proven && onlyTheKeyIsUnknown && keyStateIn(p, active.KeySlot).Status == store.KeyUnreadable {
-		return s.confirmNotice(ev, fmt.Sprintf("No se pudo comprobar la clave de %s: el Keychain no "+
-			"respondió, así que el motor no se ha cambiado", active.Name)), nil
+		return s.confirmNotice(ev, fmt.Sprintf("No se pudo comprobar la clave de %s: no se pudieron leer "+
+			"las claves guardadas, así que el motor no se ha cambiado", active.Name)), nil
 	}
 
 	return s.moveToDefault(p, ev, fmt.Sprintf("%s no está listo para dictar", active.Name))
@@ -193,9 +195,9 @@ func (s *SettingsService) moveToDefault(p SettingsPayload, ev repairEvidence, be
 			"Configura un motor en Ajustes", because, fallback.Name, problem)), nil
 	}
 
-	// CONDITIONAL. The payload this decision rests on was computed before a Keychain read that can
-	// take three seconds, and the user is in front of a live window the whole time: if they picked an
-	// engine while this was thinking, that choice is newer than this decision and wins.
+	// CONDITIONAL. The payload this decision rests on takes several reads to build, and the user is in
+	// front of a live window the whole time: if they picked an engine while this was thinking, that
+	// choice is newer than this decision and wins.
 	// The lock spans the last comparison AND the write. Checking and then writing leaves a gap a
 	// setter can start in, which is the whole failure this decision is trying not to be.
 	if ev.sampled {
@@ -229,7 +231,7 @@ func (s *SettingsService) moveToDefault(p SettingsPayload, ev repairEvidence, be
 	// running more than once, this is the line that has to change.
 	//
 	// Taken while the lock is still held — deferred above, released only when this function returns —
-	// so nothing can slip between the write and the snapshot that reports it. It costs a Keychain read
+	// so nothing can slip between the write and the snapshot that reports it. It costs a credential read
 	// with the lock held, which is the price of a message that cannot contradict its own screen.
 	after := s.bootstrap.Payload()
 	return engineRepair{

@@ -82,7 +82,7 @@ type Dictation struct {
 	// empty — and they send you to completely different places.
 	peakLevel float64
 
-	// getSecret overrides the Keychain read. Only the tests set it — see secretReader.
+	// getSecret overrides the credential read. Only the tests set it — see secretReader.
 	getSecret func(store.KeySlot) (string, error)
 }
 
@@ -246,17 +246,17 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 		}
 		getKey := d.keyReaderFor(store.SlotAzureSpeech)
 		// Read the key up front rather than asking HasKey, so the three outcomes stay
-		// distinguishable. "No configuraste la clave" and "el Keychain no contesta" are
+		// distinguishable. "No configuraste la clave" and "no pude leer tus claves" are
 		// completely different problems, and reporting the first for the second sends the
 		// user to re-enter a key that is already there.
 		if _, err := getKey(); err != nil {
 			switch {
 			case errors.Is(err, store.ErrNoSecret):
 				return nil, fmt.Errorf("configura la clave de Azure Speech en Ajustes")
-			case errors.Is(err, store.ErrKeychainTimeout):
-				return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_AZURE_KEY para probar")
+			case errors.Is(err, store.ErrSecretsUnreadable):
+				return nil, fmt.Errorf("no se pudieron leer las claves guardadas — revisa %s, o pasa la clave en LOQUI_AZURE_KEY para probar", d.store.SecretsPath())
 			default:
-				return nil, fmt.Errorf("no se pudo leer la clave del Keychain: %w", err)
+				return nil, fmt.Errorf("no se pudo leer la clave guardada: %w", err)
 			}
 		}
 		tokens := azure.NewTokenService(azure.TokenOptions{
@@ -293,17 +293,17 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 //
 // The key is read UP FRONT rather than asking HasKey, so the three outcomes stay
 // distinguishable — the same reasoning as Azure above. "You never configured a key" and "the
-// Keychain did not answer" send the user to completely different places.
+// keys could not be read" send the user to completely different places.
 func (d *Dictation) buildGrokProvider() (stt.Provider, error) {
 	getKey := d.keyReaderFor(store.SlotGrok)
 	if _, err := getKey(); err != nil {
 		switch {
 		case errors.Is(err, store.ErrNoSecret):
 			return nil, fmt.Errorf("configura la API key de xAI en Ajustes")
-		case errors.Is(err, store.ErrKeychainTimeout):
-			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_GROK_KEY para probar")
+		case errors.Is(err, store.ErrSecretsUnreadable):
+			return nil, fmt.Errorf("no se pudieron leer las claves guardadas — revisa %s, o pasa la clave en LOQUI_GROK_KEY para probar", d.store.SecretsPath())
 		default:
-			return nil, fmt.Errorf("no se pudo leer la API key de xAI del Keychain: %w", err)
+			return nil, fmt.Errorf("no se pudo leer la API key de xAI guardada: %w", err)
 		}
 	}
 	return grok.New(grok.Config{
@@ -319,7 +319,7 @@ func (d *Dictation) buildGrokProvider() (stt.Provider, error) {
 // buildElevenLabsProvider streams to ElevenLabs Scribe v2 over a WebSocket.
 //
 // Same shape as Grok — cloud, metered, fed by the host's single capture pipeline — and the key is read
-// UP FRONT for the same reason: "you never configured a key" and "the Keychain did not answer" send
+// UP FRONT for the same reason: "you never configured a key" and "your keys could not be read" send
 // the user to completely different places, and HasKey collapses them.
 func (d *Dictation) buildElevenLabsProvider() (stt.Provider, error) {
 	getKey := d.keyReaderFor(store.SlotElevenLabs)
@@ -327,10 +327,10 @@ func (d *Dictation) buildElevenLabsProvider() (stt.Provider, error) {
 		switch {
 		case errors.Is(err, store.ErrNoSecret):
 			return nil, fmt.Errorf("configura la API key de ElevenLabs en Ajustes")
-		case errors.Is(err, store.ErrKeychainTimeout):
-			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_ELEVENLABS_KEY para probar")
+		case errors.Is(err, store.ErrSecretsUnreadable):
+			return nil, fmt.Errorf("no se pudieron leer las claves guardadas — revisa %s, o pasa la clave en LOQUI_ELEVENLABS_KEY para probar", d.store.SecretsPath())
 		default:
-			return nil, fmt.Errorf("no se pudo leer la API key de ElevenLabs del Keychain: %w", err)
+			return nil, fmt.Errorf("no se pudo leer la API key de ElevenLabs guardada: %w", err)
 		}
 	}
 	// One optional language, and the sentinel matters: this endpoint has no "auto" value, so the
@@ -360,10 +360,10 @@ func (d *Dictation) buildOpenAIProvider() (stt.Provider, error) {
 		switch {
 		case errors.Is(err, store.ErrNoSecret):
 			return nil, fmt.Errorf("configura la API key de OpenAI en Ajustes")
-		case errors.Is(err, store.ErrKeychainTimeout):
-			return nil, fmt.Errorf("el Keychain no respondió — firma la app con una identidad estable, o pasa la clave en LOQUI_OPENAI_KEY para probar")
+		case errors.Is(err, store.ErrSecretsUnreadable):
+			return nil, fmt.Errorf("no se pudieron leer las claves guardadas — revisa %s, o pasa la clave en LOQUI_OPENAI_KEY para probar", d.store.SecretsPath())
 		default:
-			return nil, fmt.Errorf("no se pudo leer la API key de OpenAI del Keychain: %w", err)
+			return nil, fmt.Errorf("no se pudo leer la API key de OpenAI guardada: %w", err)
 		}
 	}
 	// "auto" is this app's sentinel for "detect", and the API has no such value: the hint is simply
@@ -587,19 +587,19 @@ func (d *Dictation) Shutdown() {
 var _ session.IO = (*Dictation)(nil)
 
 // envKeyOverride names the variable that lets a development build supply one provider's API
-// key without the Keychain.
+// key without storing it at all.
 //
 // WHY IT EXISTS. On an ad-hoc-signed build — which is every local build, since the
 // signature changes each time — SecItemCopyMatching never returns: macOS wants to ask
 // permission and cannot show the prompt. That makes the entire app untestable for a reason
 // that has nothing to do with the code under test.
 //
-// So this is an escape hatch, not a feature: it is checked BEFORE the Keychain, keyed off
+// So this is an escape hatch, not a feature: it is checked BEFORE the stored credentials, keyed off
 // an environment variable a packaged app will never have set, and every use is logged so it
 // can never be mistaken for the real path. The real fix is a stable signing identity.
 //
 // PER SLOT, deliberately. This used to be a single Azure-only constant, so a key for any
-// other provider was silently ignored and the read fell through to the Keychain that does
+// other provider was silently ignored and the read fell through to the Keychain that did
 // not answer — which made every new provider untestable for an unrelated reason. One
 // variable per slot also means one provider's credential can never satisfy another's
 // read: dictating into the wrong service is worse than not dictating.
@@ -624,22 +624,21 @@ func envKeyOverride(slot store.KeySlot) string {
 func (d *Dictation) keyReaderFor(slot store.KeySlot) func() (string, error) {
 	if name := envKeyOverride(slot); name != "" {
 		if v := os.Getenv(name); v != "" {
-			d.ui.Log("DEV", name+" is set — using it instead of the Keychain")
+			d.ui.Log("DEV", name+" is set — using it instead of the stored credentials")
 			return func() (string, error) { return v, nil }
 		}
 	}
 	return func() (string, error) { return d.secretReader()(slot) }
 }
 
-// secretReader is store.GetKey unless a test replaced it.
+// secretReader is the store's GetKey unless a test replaced it.
 //
-// The seam exists because the real one talks to the LOGIN KEYCHAIN: a test for "what happens
-// with no key configured" would otherwise depend on whether the developer running it happens to
-// have a real key stored, and would pay the Keychain timeout on an ad-hoc-signed build. Neither
-// belongs in a unit test.
+// The seam still earns its place now that the credentials are a file rather than the Keychain: the
+// real one reads the REAL data directory, so a test for "what happens with no key configured" would
+// otherwise depend on whether the developer running it happens to have one saved.
 func (d *Dictation) secretReader() func(store.KeySlot) (string, error) {
 	if d.getSecret != nil {
 		return d.getSecret
 	}
-	return store.GetKey
+	return d.store.GetKey
 }

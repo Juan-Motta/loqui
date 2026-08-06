@@ -151,9 +151,9 @@ func TestProbingAnUnknownSlotIsRejected(t *testing.T) {
 	}
 }
 
-// "No key" and "the Keychain did not answer" send the user to two different places, so the probe
+// "No key" and "your keys could not be read" send the user to two different places, so the probe
 // must not collapse them — the same distinction KeyStatusFor exists for.
-func TestProbeTellsAnEmptySlotApartFromAKeychainThatDidNotAnswer(t *testing.T) {
+func TestProbeTellsAnEmptySlotApartFromUnreadableCredentials(t *testing.T) {
 	cases := []struct {
 		name     string
 		readErr  error
@@ -163,9 +163,9 @@ func TestProbeTellsAnEmptySlotApartFromAKeychainThatDidNotAnswer(t *testing.T) {
 		// failure onto the timeout wording would pass: each case would still "mention" its word.
 		notSays string
 	}{
-		{"empty slot", store.ErrNoSecret, true, "falta la clave", "no respondió"},
-		{"keychain timed out", store.ErrKeychainTimeout, false, "no respondió", "falta la clave"},
-		{"keychain broke", errors.New("keychain exploded"), false, "no se pudo leer", "no respondió"},
+		{"empty slot", store.ErrNoSecret, true, "falta la clave", "archivo de claves"},
+		{"credentials unreadable", store.ErrSecretsUnreadable, false, "archivo de claves", "falta la clave"},
+		{"read broke some other way", errors.New("disk on fire"), false, "no se pudo leer la clave guardada", "archivo de claves"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -223,22 +223,22 @@ func TestDeletingAKeyClearsTheSlot(t *testing.T) {
 	}
 }
 
-// A Keychain write that fails must surface as an error AND leave the payload honest — the slot
-// must not be painted as configured. On an ad-hoc-signed build this is a real outcome, not a
-// hypothetical: the write can time out exactly as the read does.
-func TestAFailedKeychainWriteIsReportedAndNotPaintedAsConfigured(t *testing.T) {
+// A failed credential write must surface as an error AND leave the payload honest — the slot must
+// not be painted as configured.
+func TestAFailedCredentialWriteIsReportedAndNotPaintedAsConfigured(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, vault := testService(t, st)
-	svc.setSecret = func(store.KeySlot, string) error { return store.ErrKeychainTimeout }
+	svc.setSecret = func(store.KeySlot, string) error { return store.ErrSecretsUnreadable }
 
 	res := svc.SetKey("grok", "xai-abc123")
 	if res.Error == "" {
-		t.Fatal("a failed Keychain write was reported as success")
+		t.Fatal("a failed credential write was reported as success")
 	}
-	// The message must say the write is NOT CONFIRMED rather than "not saved": the abandoned call
-	// may still land, and telling the user it failed sends them to retype a key that may be there.
-	if !strings.Contains(res.Error, "no está confirmada") {
-		t.Errorf("error = %q, want it to say the operation is unconfirmed", res.Error)
+	// The message says NOTHING CHANGED, which under the file backend is the truth and under the old
+	// Keychain one would have been a lie: there, the abandoned call could still land, so the only
+	// honest wording was "unconfirmed". A rename either happened or it did not.
+	if !strings.Contains(res.Error, "no se cambió nada") {
+		t.Errorf("error = %q, want it to say nothing was changed", res.Error)
 	}
 	p := res.Payload
 	if _, ok := vault.get(store.SlotGrok); ok {
@@ -463,16 +463,17 @@ func TestAvailabilityAgreesWithWhatBuildProviderAccepts(t *testing.T) {
 	}
 }
 
-// A DETERMINISTIC Keychain failure must leave the region alone.
+// A failed credential write must leave the region alone.
 //
-// Note what this does and does not prove: the stub fails outright, so it covers the rejected-write
-// path only. The indeterminate path — a timeout whose write lands later — is a different case, and
-// TestALateLandingKeychainWriteIsAKnownResidual covers it.
+// There is no longer an "indeterminate" counterpart to this case, and that is the whole gain of the
+// file backend: the Keychain's timeout could be abandoned and land later, so a rejected write and an
+// unconfirmed one were different cases needing different tests. A write to the credentials file
+// either renamed or it did not.
 //
-// The Keychain is the half that actually fails on these builds, so it is committed first: if it
-// fails, nothing has changed anywhere. Region-first would persist a region the user's key was never
-// saved against, and then report the whole save as failed — leaving Azure pointing somewhere the
-// credential does not belong.
+// The credential is committed first because it is the half that can fail on its own: if it fails,
+// nothing has changed anywhere. Region-first would persist a region the user's key was never saved
+// against, and then report the whole save as failed — leaving Azure pointing somewhere the credential
+// does not belong.
 func TestSaveConnectionLeavesTheRegionAloneWhenTheKeychainFails(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	if err := st.UpdateSettings(func(cfg *store.Settings) error {
@@ -482,7 +483,7 @@ func TestSaveConnectionLeavesTheRegionAloneWhenTheKeychainFails(t *testing.T) {
 		t.Fatalf("seeding: %v", err)
 	}
 	svc, _ := testService(t, st)
-	svc.setSecret = func(store.KeySlot, string) error { return store.ErrKeychainTimeout }
+	svc.setSecret = func(store.KeySlot, string) error { return store.ErrSecretsUnreadable }
 
 	res := svc.SaveConnection("azure-speech", "westeurope", "azure-key")
 	if res.Error == "" {
@@ -616,8 +617,17 @@ func TestARegionOnlyFailureDoesNotClaimTheKeyWasSaved(t *testing.T) {
 //
 // Until then the user is told the operation is unconfirmed and sent back to Ajustes, where the
 // payload reports what is actually stored. This test fails the moment the behaviour changes, in
-// either direction, so the residual cannot quietly become something else.
-func TestALateLandingKeychainWriteIsAKnownResidual(t *testing.T) {
+// THE RESIDUAL THIS REPLACES IS CLOSED, and that is worth stating rather than quietly deleting.
+//
+// Under the Keychain backend a write could be abandoned mid-flight and land seconds later, so
+// SaveConnection could report a failure and end up with the new key stored against the OLD region —
+// a pairing the user never asked for. TestALateLandingKeychainWriteIsAKnownResidual pinned exactly
+// that, and it pinned it as a KNOWN DEFECT. The file backend cannot produce it: a failed write never
+// renamed anything, so there is no late arrival to pair with a stale region.
+//
+// What this asserts instead is the property that replaces it: a failed credential write leaves BOTH
+// halves untouched.
+func TestAFailedCredentialWriteLeavesTheRegionAloneToo(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	if err := st.UpdateSettings(func(cfg *store.Settings) error {
 		cfg.Region = "eastus"
@@ -626,45 +636,20 @@ func TestALateLandingKeychainWriteIsAKnownResidual(t *testing.T) {
 		t.Fatalf("seeding: %v", err)
 	}
 	svc, vault := testService(t, st)
+	svc.setSecret = func(store.KeySlot, string) error { return store.ErrSecretsUnreadable }
 
-	// Exactly what store.SetKey does on a hang: report the timeout, keep going underneath.
-	//
-	// The write is gated on returned, which SaveConnection's caller closes, so it lands strictly
-	// AFTER the whole operation has finished. Without the gate the goroutine could be scheduled
-	// first and the test would prove nothing about lateness — only that the combination is wrong.
-	returned := make(chan struct{})
-	landed := make(chan struct{})
-	svc.setSecret = func(slot store.KeySlot, secret string) error {
-		go func() {
-			<-returned
-			vault.set(slot, secret) // the abandoned call completing, late
-			close(landed)
-		}()
-		return store.ErrKeychainTimeout
-	}
-
-	res := svc.SaveConnection("azure-speech", "westeurope", "late-key")
-	close(returned) // only now may the abandoned write land
+	res := svc.SaveConnection("azure-speech", "westeurope", "la-nueva")
 
 	if res.Error == "" {
-		t.Fatal("an unconfirmed write was reported as success")
+		t.Fatal("a failed write was reported as success")
 	}
-	// The user must be told it is UNCONFIRMED, not that it failed: it may well have worked.
-	if !strings.Contains(res.Error, "no está confirmada") {
-		t.Errorf("error = %q, want it to say the operation is unconfirmed", res.Error)
+	if _, ok := vault.get(store.SlotAzureSpeech); ok {
+		t.Error("the key was stored despite the reported failure")
 	}
-
-	<-landed
-	stored, _ := vault.get(store.SlotAzureSpeech)
-
-	// The residual, stated outright: the key is now the new one...
-	if stored != "late-key" {
-		t.Fatalf("the late write did not land (%q) — this test no longer reproduces the residual", stored)
-	}
-	// ...while the region is still the old one. If this ever becomes "westeurope", the versioned
-	// credential work has been done and this test should be replaced by one asserting atomicity.
+	// THE HALF THAT USED TO SLIP. The credential is written first precisely so its failure leaves the
+	// region alone; if this ever reads "westeurope", a rejected save has half-applied itself.
 	if got := st.LoadSettings().Region; got != "eastus" {
-		t.Errorf("Region = %q — the region/key pairing changed; revisit whether the residual is gone", got)
+		t.Errorf("Region = %q, want eastus — a failed save moved the region anyway", got)
 	}
 }
 
