@@ -192,6 +192,11 @@ line on the page already behaves this way — they belong to an action and are r
 
 ## What this report does NOT cover
 
+> **Items 1 and 2 were closed later, on 2026-08-06** — see UC-7 and UC-8 of
+> `2026-08-06-keys-in-a-file.md`. The verdict above is left as PARTIAL because it was true when this
+> report was written: the credential did not exist yet. Rewriting it would make the record lie about
+> what had been verified at the time.
+
 1. **`✓ Conexión correcta`** — needs a valid Azure key. See the header.
 2. **`✓ Clave guardada` and `✓ Motor activo: Azure`** — the success path of Save and of "Use this
    engine" has not been executed either, for the same reason: without a valid key you never reach

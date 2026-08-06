@@ -4,22 +4,28 @@
 > Keep it current and SMALL; refresh it with the `checkpoint` skill before closing a session.
 
 - **Focus:** port of **Loqui** (Electron/TS, in `../loqui`) to **Go + Wails v3**, macOS arm64 only.
-  Phases 0-3 done except two providers. **Phase 4 (the UI) nearly closed:** the app can be
-  navigated, configured and used. The user tried it and says "it all looks good"; some minor UI
-  details are left, which he will polish himself.
+  **The app dictates for real through Azure** as of 2026-08-06 — the thing phase 1 had carried as
+  outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
+  (the UI) nearly closed: the app is navigated, configured and used.
 
-- **Next step:** **port "Test connection" to OpenAI, Grok and ElevenLabs** — asked for by the user on
-  2026-08-01 and declared out of scope for the previous change. All three are WebSocket with
-  different handshakes (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
+- **Next step:** **`availableKeySlots` lists only `azure-speech` and `grok`** (`store/secrets.go`),
+  but OpenAI and ElevenLabs were ported afterwards. `SetKey`/`SaveConnection` reject slots that are not
+  listed, so **today the app cannot save an OpenAI or ElevenLabs key at all**: two ported engines are
+  unusable through the interface. This goes ahead of anything else because it is small, it is a
+  one-line-plus-tests fix, and everything below depends on being able to store those credentials.
+
+- **Then:** **port "Test connection" to OpenAI, Grok and ElevenLabs** — asked for by the user on
+  2026-08-01. All three are WebSocket with different handshakes
+  (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
   `wss://api.elevenlabs.io/v1/speech-to-text/realtime`), so they do not share a test with Azure's
   HTTP token exchange: each needs its own, reusing the dial from its package. The mould is in
   `internal/app/settings_probe.go` (the `slotsWithProbe` allowlist, preflight before the network,
   three distinct outcomes from reading the credential) and the card already has the button wired.
-  **The green path for Azure still needs verifying too**: `✓ Conexión correcta` has never been
-  executed because there is no valid key on the machine — the bug itself deleted it (see below).
+  **Azure's green path is now verified** and is the reference for what a working one looks like:
+  UC-7 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`.
 
-- **After that:** **port the whisper model row**, the only thing left from the fidelity assignment
-  (the previous session's work is already merged into `main`, up to `a83b2f5`). Start with the red
+- **After that:** **port the whisper model row**, the only thing left from the fidelity assignment.
+  Start with the red
   `modelSpec` test in Go: port `../loqui/src/shared/modelSpec.ts` to `internal/store/model.go`
   (file name, expected size, download URL) with tests, and only then the download service with
   progress and the DOM of `renderModelInto` in `#modelRow`. It is **load-bearing**: without
@@ -27,25 +33,27 @@
   `./scripts/build-whisper-stt.sh`.
 
 - **Blockers:**
-  1. **No remote.** `git remote -v` is empty: there is no copy off this machine. The user said he
-     would set it up later. When the time comes: the module path says
-     `github.com/Juan-Motta/loqui-go` but `gh` is authenticated as `Juan-Andres-LM`, and creating
-     the repo would publish the code → an owner and public/private have to be chosen.
+  1. ~~**No remote.**~~ **Closed 2026-08-06:** `origin` is
+     `git@github-jualopezmo:Juan-Motta/loqui.git` and `main` is pushed. Two loose ends: the repo is
+     called `loqui` while the module path says `github.com/Juan-Motta/loqui-go` (harmless for a desktop
+     app, but inconsistent), and `../loqui` — the Electron project — still has that same remote in its
+     local config, so pushing from there would collide with 46 unrelated commits.
   2. **Ad-hoc signing.** Down from three symptoms to two: permissions are revoked on every rebuild,
      and probably Apple's engine. The third — the Keychain not answering — was routed around rather
      than fixed: the credentials now live in a cleartext file (`store/secrets.go`), a trade the owner
      accepted for a personal build. Signing is still the only thing that fixes the rest, and the only
      thing that would let the keys go back to being encrypted at rest. Pending decision: a fixed
      self-signed identity vs a Developer ID.
-  3. **Cloud keys.** The Azure one is marked as exposed; there is no xAI one at all. Without them,
-     real transcription through those routes cannot be verified.
+  3. **Cloud keys — Azure is DONE, the rest are not.** A working Azure key is stored and has
+     transcribed for real (UC-9 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`). There is still no
+     xAI, OpenAI or ElevenLabs credential, so those three routes remain unverified end to end.
 
-- **The Azure key is in the Keychain, which the app no longer reads.** The bug that deleted it is
-  fixed (the card speaks), and the user pasted a new key on 2026-08-03 — but the credentials moved to
-  a file on 2026-08-06, and migrating the old item needs an interactive Keychain prompt that only the
-  user can approve. Until they do (`security find-generic-password -s com.jualopezmo.loquigo -a
-  azure-speech -w`) or paste it again in the app, **the `azure-speech` slot is empty** and the green
-  path — `✓ Conexión correcta` — still has never been executed.
+- **Credentials now live in a cleartext file**, `~/Library/Application Support/LoquiGo/secrets.json`,
+  mode 0600 — not the Keychain, which hangs under ad-hoc signing. A deliberate trade the owner accepted
+  with FileVault off; see `store/secrets.go` and the About view, which says so to the user. The Azure
+  key was pasted through the app on 2026-08-06 and works. **An orphan remains**: the older item is
+  still in the login Keychain (`security find-generic-password -s com.jualopezmo.loquigo -a
+  azure-speech`) and nothing reads it — worth deleting so there is one copy, not two.
 
 - **Debt, unowned: the frontend does not type-check.** `typescript@^4.9.3` against a `tsconfig.json`
   with TS5 options, so `tsc` cannot read the config and vite strips the types without validating
@@ -57,9 +65,10 @@
   by the hour) and reconnection leaks the previous capture. With `file:line` at the end of
   `docs/plans/grok-stt-provider.md`. They go in their own change.
 
-- **Active workflow:** none. The last one closed (the Settings setters) is in `.workflow/state.md` —
-  **gitignored**, so a fresh clone does not have it.
-- **Updated:** 2026-08-01
+- **Active workflow:** none. The last one closed (credentials into a file) is in `.workflow/state.md` —
+  **gitignored**, so a fresh clone does not have it. It is the first workflow whose
+  `check-gates.sh` came back green.
+- **Updated:** 2026-08-06
 
 ## Handoff notes
 
@@ -139,10 +148,22 @@ clean. Five Wails services: `Settings`, `History`, `Clipboard`, `Dictation`, `Pe
   line were added); five TS modules, one per view; `overlay.html` is the pill.
 - `cmd/stt-probe` — dictation from the CLI, to isolate failures without the app.
 
-## Providers: what is left
+## Providers: where each one stands
 
-- ⬜ **elevenlabs** — the same mould as Grok (WebSocket, `xi-api-key` header, JSON with base64
-  instead of binary frames). The moment to **extract the socket lifecycle** out of
-  `internal/stt/grok`, with two real implementations in front of us rather than deduced from one.
-- ⬜ **openai realtime** — does **not** fit that mould (setup message, different lifecycle): its own
-  package.
+This section was stale for two sessions: it listed elevenlabs and openai as unported when both had
+been done on 2026-07-30. Corrected here.
+
+| Engine | Ported | Real transcription | Blocked on |
+| --- | --- | --- | --- |
+| **whisper** | ✅ | ✅ 2026-07-28 | the model row — `ggml-small.bin` is downloaded by hand today |
+| **azure** | ✅ | ✅ **2026-08-06** | nothing |
+| **macos** (SpeechAnalyzer) | ✅ | ⛔ | blocked before `started`, cause unknown — risk 5 of the port plan |
+| **grok** (xAI) | ✅ | ⬜ | no xAI credential |
+| **openai realtime** | ✅ | ⬜ | no credential — **and the UI cannot store one** (`availableKeySlots`) |
+| **elevenlabs** | ✅ | ⬜ | no credential — **and the UI cannot store one** (`availableKeySlots`) |
+
+**Still not done, and worth keeping visible:** the WebSocket lifecycle was never extracted out of
+`internal/stt/grok` into a shared package. Two real implementations now exist (grok and elevenlabs),
+which was the condition set for doing it — see the approach section of
+`docs/plans/grok-stt-provider.md`. It is refactoring, not a feature, so it goes behind the items
+above.
