@@ -417,3 +417,64 @@ func assertNoTempFiles(t *testing.T, dir string) {
 		}
 	}
 }
+
+// EVERY PORTED ENGINE THAT NEEDS A CREDENTIAL MUST BE ABLE TO STORE ONE.
+//
+// This test exists because the absence of it cost two engines. `availableKeySlots` was written when
+// only Azure Speech and Grok were ported, and when OpenAI and ElevenLabs landed afterwards nobody
+// widened it — so SetKey and SaveConnection refused their keys with "este servicio todavía no está
+// disponible en esta versión", a sentence that had quietly become false. Two fully ported engines were
+// unusable through the interface, and the suite was green throughout.
+//
+// The provider list already has a contract test tying it to what buildProvider can construct. This is
+// the same idea one level down, and it ties the two lists that drifted: if an engine is available AND
+// KeySlotFor says it needs a credential, that credential's slot has to be storable.
+//
+// The next provider to be ported now fails here until its slot is listed, which is the point.
+func TestEveryAvailableEngineThatNeedsAKeyCanStoreOne(t *testing.T) {
+	for _, provider := range AllProviders {
+		if !IsAvailableProvider(provider) {
+			continue // not ported yet: refusing its key is correct
+		}
+		slot, needsKey := KeySlotFor(provider, "")
+		if !needsKey {
+			continue // whisper and macos carry no credential
+		}
+		if !IsAvailableKeySlot(slot) {
+			t.Errorf("engine %q is available and needs slot %q, but IsAvailableKeySlot(%q) is false — "+
+				"the app cannot save its key, so a ported engine is unusable from the interface",
+				provider, slot, slot)
+		}
+	}
+}
+
+// And the converse, so the list does not grow past what the app can use: a storable slot has to be one
+// some available engine actually reads. Without this half, "fix the test by adding everything" passes.
+//
+// azure-openai is the case that keeps this honest. It is a real slot with a real form in the UI, and it
+// must stay UNAVAILABLE: the realtime subservice is not ported, and app.(*Dictation).buildProvider
+// always opens Speech for "azure". A key stored there would never be read, while the page cheerfully
+// offered to store one.
+func TestNoSlotIsStorableWithoutAnEngineThatReadsIt(t *testing.T) {
+	readable := map[KeySlot]string{}
+	for _, provider := range AllProviders {
+		if !IsAvailableProvider(provider) {
+			continue
+		}
+		// The RUNTIME slot, not the settings one: for Azure those differ until the realtime subservice
+		// is ported, and the runtime answer is the one that says what dictation will actually read.
+		if slot, ok := RuntimeKeySlotFor(provider); ok {
+			readable[slot] = provider
+		}
+	}
+	for _, slot := range AllKeySlots {
+		if IsAvailableKeySlot(slot) && readable[slot] == "" {
+			t.Errorf("slot %q is storable but no available engine reads it — the UI would offer to save "+
+				"a credential that nothing will ever use", slot)
+		}
+	}
+	if IsAvailableKeySlot(SlotAzureOpenAI) {
+		t.Error("azure-openai is storable, but the realtime subservice is not ported: buildProvider " +
+			"always opens Speech for azure, so a key stored there is dead on arrival")
+	}
+}

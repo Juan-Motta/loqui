@@ -196,6 +196,38 @@ transcription (needs a key)". The full chain — `fn` key → capture → Azure 
 LID → transcript → paste → history — has now run for a real user. **Transcript text was never read
 by the session**: only the record count, the timestamps, the language field and the character counts.
 
+## UC-10 — OpenAI and ElevenLabs can store a key at all: PASS at the service, PARTIAL at the click
+
+This was item 5 of this report's own "does NOT cover" list, fixed the same day.
+`availableKeySlots` was written when only Azure Speech and Grok were ported and was never widened, so
+`SetKey` and `SaveConnection` refused OpenAI and ElevenLabs keys with *"este servicio todavía no está
+disponible en esta versión"* — a sentence that had become false. **Two fully ported engines were
+unusable from the interface for two sessions, with the suite green the whole time.**
+
+The fix is one map entry each. The durable part is the contract test that was missing, which is why it
+drifted: nothing tied the credential-slot list to the engines the app can build.
+`TestEveryAvailableEngineThatNeedsAKeyCanStoreOne` now names any newly ported engine whose slot has not
+been listed, and its converse refuses a slot no available engine reads — which keeps `azure-openai`
+correctly out, since `buildProvider` always opens Speech for `azure`.
+
+Both cards in the packaged app:
+
+```
+openai      badge:Sin configurar  keyState:(no configurada)  save:shown/enabled  test:absent  use:shown/disabled
+elevenlabs  badge:Sin configurar  keyState:(no configurada)  save:shown/enabled  test:absent  use:shown/disabled
+```
+
+**What that does and does not prove, said plainly.** `save:shown/enabled` was *also* true before the
+fix — the button was live and the write was rejected on click — so the card report does not distinguish
+the two states. Closing it through the interface needs an OpenAI or ElevenLabs key to type, and there
+is none on this machine, so **no key has been saved for either engine from a click**. What is verified
+is one level down: `svc.SetKey` accepts all four ported slots and the credential lands, asserted through
+the service the binding exposes rather than against the store's map, because `SetKey` and
+`SaveConnection` consult that map separately and either could have kept its own gate.
+
+`test:absent` is correct and not a gap: these engines have no "Probar conexión" yet — `slotsWithProbe`
+still lists only `azure-speech`. Porting it to the other three is the next item.
+
 ---
 
 ## What this report does NOT cover
@@ -213,10 +245,13 @@ by UC-6 and UC-7. What remains is either not a defect or not this change's busin
 4. **Deleting a key that exists** — now finally reachable (`delete:shown/enabled`) and not exercised.
    It is the action that destroyed a credential in silence on 2026-08-01, so it deserves its own run:
    the notice, the postcondition wording, and the fallback moving off Azure the moment its key goes.
-5. **The other four providers' credentials.** OpenAI, Grok, ElevenLabs and Azure OpenAI were not
-   stored or read through the app. Two of them *cannot* be, which is the next thing to fix:
-   `availableKeySlots` lists only `azure-speech` and `grok`, so the UI refuses to save an OpenAI or
-   ElevenLabs key at all.
+5. **The other providers' credentials.** Grok, OpenAI and ElevenLabs were not stored or read through
+   the app — there is no credential for any of them on this machine. They are no longer *refused*
+   (UC-10), but "accepted by the service" is a weaker claim than "saved from a click". Azure OpenAI
+   stays deliberately refused: its subservice is not ported.
+6. **"Probar conexión" for anything but Azure.** `slotsWithProbe` lists only `azure-speech`, so the
+   other three cards have no test button. That is the next piece of work, and Azure's now-verified
+   green path (UC-7) is the reference for what one looks like.
 
 ### What the unit tests cover, stated exactly
 

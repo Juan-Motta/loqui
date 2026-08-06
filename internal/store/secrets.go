@@ -86,9 +86,18 @@ var knownSlots = func() map[KeySlot]bool {
 // available provider, but only through its SPEECH subservice. azure-openai is Azure's realtime
 // service, which is not ported — so a key stored there would never be read, while the settings page
 // happily offers to store one.
+//
+// KEEP IT IN STEP WITH WHAT IS PORTED. This list was written when only Azure Speech and Grok existed
+// and was not widened when OpenAI and ElevenLabs landed, so SetKey and SaveConnection refused their
+// keys with "este servicio todavía no está disponible en esta versión" — a sentence that had become
+// false. Two fully ported engines were unusable from the interface for two sessions, with the suite
+// green. TestEveryAvailableEngineThatNeedsAKeyCanStoreOne now fails until a newly ported engine's slot
+// is listed here, and its converse fails if a slot is listed that nothing reads.
 var availableKeySlots = map[KeySlot]bool{
 	SlotAzureSpeech: true,
 	SlotGrok:        true,
+	SlotOpenAI:      true,
+	SlotElevenLabs:  true,
 }
 
 // IsAvailableKeySlot reports whether a credential in this slot would ever be used.

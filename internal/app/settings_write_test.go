@@ -823,3 +823,45 @@ func TestSettingOnboardedFalseIsStorableAndIndependentOfOtherSettings(t *testing
 		t.Errorf("Provider = %q tras escribir el flag, quería whisper intacto", got)
 	}
 }
+
+// THE CONTRAPOSITIVE OF TestWritingAKeyIntoAnUnusableSlotIsRefused, and the one that was missing.
+//
+// That test pins the refusal; nothing pinned the acceptance, so when OpenAI and ElevenLabs were ported
+// and `availableKeySlots` was not widened, their keys were refused with "este servicio todavía no está
+// disponible en esta versión" and the whole suite stayed green. Two ported engines were unusable from
+// the interface for two sessions.
+//
+// It asserts through the SERVICE rather than the store's map, because that is what the user reaches:
+// the map being right is necessary and not sufficient — SaveConnection and SetKey each consult it
+// separately, and either could have its own gate.
+func TestEveryPortedEngineAcceptsItsKeyThroughTheService(t *testing.T) {
+	for _, c := range []struct {
+		slot string
+		key  store.KeySlot
+	}{
+		{"azure-speech", store.SlotAzureSpeech},
+		{"grok", store.SlotGrok},
+		{"openai", store.SlotOpenAI},
+		{"elevenlabs", store.SlotElevenLabs},
+	} {
+		t.Run(c.slot, func(t *testing.T) {
+			st := store.NewAt(t.TempDir())
+			svc, vault := testService(t, st)
+
+			res := svc.SetKey(c.slot, "una-clave-de-"+c.slot)
+			if res.Error != "" {
+				t.Fatalf("SetKey(%q) = %q — a ported engine's key was refused", c.slot, res.Error)
+			}
+			if got, ok := vault.get(c.key); !ok || got != "una-clave-de-"+c.slot {
+				t.Errorf("stored %q, %v — the write reported success without storing", got, ok)
+			}
+			// And the payload must report it as usable, or the card goes on offering to configure
+			// something it just accepted.
+			for _, k := range res.Payload.Keys {
+				if k.Slot == c.slot && !k.Available {
+					t.Errorf("slot %q accepted the key but the payload says Available=false", c.slot)
+				}
+			}
+		})
+	}
+}
