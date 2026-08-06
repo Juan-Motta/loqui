@@ -8,21 +8,16 @@
   outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
   (the UI) nearly closed: the app is navigated, configured and used.
 
-- **Next step:** **`availableKeySlots` lists only `azure-speech` and `grok`** (`store/secrets.go`),
-  but OpenAI and ElevenLabs were ported afterwards. `SetKey`/`SaveConnection` reject slots that are not
-  listed, so **today the app cannot save an OpenAI or ElevenLabs key at all**: two ported engines are
-  unusable through the interface. This goes ahead of anything else because it is small, it is a
-  one-line-plus-tests fix, and everything below depends on being able to store those credentials.
+- **Next step, and it is one concrete action:** **write
+  `docs/e2e/reports/2026-08-06-probe-remaining-providers.md`.** The branch
+  `feat/probe-remaining-providers` (4 commits, tree clean, **not merged, not pushed**) has the whole
+  feature working and verified against the real services — the evidence is already captured and pasted
+  in `.workflow/state.md`, it just has to be written up as a report. `check-gates.sh` correctly refuses
+  the branch today because the E2E box still points at the previous change's report, which is not fresh
+  here. After the report: run check-gates, merge fast-forward, push.
 
-- **Then:** **port "Test connection" to OpenAI, Grok and ElevenLabs** — asked for by the user on
-  2026-08-01. All three are WebSocket with different handshakes
-  (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
-  `wss://api.elevenlabs.io/v1/speech-to-text/realtime`), so they do not share a test with Azure's
-  HTTP token exchange: each needs its own, reusing the dial from its package. The mould is in
-  `internal/app/settings_probe.go` (the `slotsWithProbe` allowlist, preflight before the network,
-  three distinct outcomes from reading the credential) and the card already has the button wired.
-  **Azure's green path is now verified** and is the reference for what a working one looks like:
-  UC-7 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`.
+  Worth doing before merging, and not blocking: **a cross-engine review of the DIFF.** Codex reviewed
+  the plan three times; nobody has reviewed the code.
 
 - **After that:** **port the whisper model row**, the only thing left from the fidelity assignment.
   Start with the red
@@ -65,12 +60,24 @@
   by the hour) and reconnection leaks the previous capture. With `file:line` at the end of
   `docs/plans/grok-stt-provider.md`. They go in their own change.
 
-- **Active workflow:** none. The last one closed (credentials into a file) is in `.workflow/state.md` —
-  **gitignored**, so a fresh clone does not have it. It is the first workflow whose
-  `check-gates.sh` came back green.
-- **Updated:** 2026-08-06
+- **Active workflow: YES** — "Probar conexión" for the three remaining providers, in
+  `.workflow/state.md` (**gitignored**, so a fresh clone does not have it). That file holds the
+  ship-gate boxes, the review log and the captured E2E evidence. Do not duplicate it here; read it.
+- **Updated:** 2026-08-06 (second checkpoint of the day)
 
 ## Handoff notes
+
+0. **THE ONE THING THAT WOULD HAVE SHIPPED A LIE, and how it was caught.** The connection test was
+   designed as "open the socket, close it, report success". Measuring the three services with an
+   invalid key showed **OpenAI and ElevenLabs return HTTP 101 for a garbage key** and refuse afterwards
+   as an event — so that design would have answered `✓ Conexión correcta` to any string a user pasted.
+   The protocol is now: dial → wait for the FIRST server message → classify it → CloseNow. Success is
+   positive only, by event name; a clean close is **not** success (ElevenLabs closes with 1000 *after*
+   refusing). Full measurement: `docs/research/2026-08-06-where-realtime-stt-auth-fails.md`.
+
+   The transferable part: **ask where auth fails before designing anything that tests a credential.**
+   One curl per service, no account needed, and it decided the whole shape of the feature.
+
 
 1. **The UI works and is ported FAITHFULLY to the original layout.** `frontend/index.html` is still
    the Electron markup almost verbatim, and the CSS is its own — which is why **what the page emits
@@ -159,8 +166,12 @@ been done on 2026-07-30. Corrected here.
 | **azure** | ✅ | ✅ **2026-08-06** | nothing |
 | **macos** (SpeechAnalyzer) | ✅ | ⛔ | blocked before `started`, cause unknown — risk 5 of the port plan |
 | **grok** (xAI) | ✅ | ⬜ | no xAI credential |
-| **openai realtime** | ✅ | ⬜ | no credential — **and the UI cannot store one** (`availableKeySlots`) |
-| **elevenlabs** | ✅ | ⬜ | no credential — **and the UI cannot store one** (`availableKeySlots`) |
+| **openai realtime** | ✅ | ⬜ | no credential |
+| **elevenlabs** | ✅ | ⬜ | no credential |
+
+All four cloud engines can now **store** a key and **test** it. Storing was fixed in `07c14a3`; testing
+is on the unmerged branch. What none of the three non-Azure ones has ever done is transcribe — that
+needs a credential, and there is none on this machine.
 
 **Still not done, and worth keeping visible:** the WebSocket lifecycle was never extracted out of
 `internal/stt/grok` into a shared package. Two real implementations now exist (grok and elevenlabs),
