@@ -60,7 +60,7 @@ func TestConnection(ctx context.Context, key string, opts ProbeOptions) stt.Prob
 		HTTPHeader: http.Header{APIKeyHeader: []string{key}},
 	})
 	if err != nil {
-		return handshakeResult(resp, key)
+		return handshakeResult(resp, key, err)
 	}
 	// CloseNow, never Close: Close takes no context, writes a close frame and waits for the peer. With a
 	// synchronous read and no CloseRead there is no goroutine to join, so this returns at once.
@@ -120,7 +120,7 @@ func probeMessageFor(kind stt.ProbeKind) string {
 }
 
 // handshakeResult classifies a refused upgrade with the same reader dictation uses.
-func handshakeResult(resp *http.Response, key string) stt.ProbeResult {
+func handshakeResult(resp *http.Response, key string, dialErr error) stt.ProbeResult {
 	code, message := handshakeFailure(resp, key)
 	if code == codeAuth || code == codeForbidden {
 		return stt.ProbeResult{Kind: stt.ProbeKeyRejected, Message: message, Code: code}
@@ -129,7 +129,8 @@ func handshakeResult(resp *http.Response, key string) stt.ProbeResult {
 		return stt.ProbeResult{
 			Kind:    stt.ProbeFailed,
 			Message: "no se pudo contactar con ElevenLabs — comprueba tu conexión a internet",
-			Code:    code,
+			Code:    "network",
+			Detail:  dialErrText(dialErr),
 		}
 	}
 	return stt.ProbeResult{Kind: stt.ProbeFailed, Message: message, Code: code}
@@ -156,4 +157,13 @@ func firstMessageFailure(ctx context.Context, err error) stt.ProbeResult {
 		Kind:    stt.ProbeFailed,
 		Message: "se perdió la conexión con ElevenLabs antes de confirmar la sesión",
 	}
+}
+
+// dialErrText is Go's transport text, for the log only. Nil-safe because a refused upgrade arrives with
+// a response and no error worth quoting.
+func dialErrText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

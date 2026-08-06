@@ -22,7 +22,11 @@ import (
 
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
+	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/elevenlabs"
+	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
+	"github.com/Juan-Motta/loqui-go/internal/stt/openai"
 )
 
 // ProbeResult is what the page shows after a connection test.
@@ -53,35 +57,104 @@ type ProbeResult struct {
 // the credential — which used to be up to three seconds of Keychain timeout, and is now a file read.
 const probeHTTPTimeout = 15 * time.Second
 
-// slotsWithProbe is the credentials this app knows how to TEST, which is a different list from the
-// ones it can use.
+// prober is one provider's connection test, plus the name its messages speak in.
 //
-// An allowlist rather than store.IsAvailableKeySlot, and the difference is not academic: that
-// function is true for grok, whose key would then be sent to Azure's token endpoint — a credential
-// posted to another vendor's server, and a "your Grok key is invalid" verdict from a service that
-// was never asked about it. Anything absent here is refused before it can leave the machine.
-var slotsWithProbe = map[store.KeySlot]bool{
-	store.SlotAzureSpeech: true,
+// The name is not decoration: the wording used to hard-code Azure, so a Grok test with no DNS said
+// "No se pudo contactar con Azure" and a green OpenAI claimed Azure had accepted the key "for that
+// region". Each entry words its own outcomes.
+type prober struct {
+	name string
+	// usesRegion is Azure's alone. The region must NOT be demanded of a service that has none —
+	// resolveRegion runs before the key, so widening the list without this would fail a Grok test with
+	// "elige una región antes de probar la conexión".
+	usesRegion bool
+	probe      func(ctx context.Context, key, region string, doer azure.Doer) stt.ProbeResult
+}
+
+// probers is what this app knows how to TEST, and it replaces the allowlist that used to sit beside a
+// separate dispatch. One map means "listed but unreachable" is no longer expressible.
+//
+// It is NOT store.IsAvailableKeySlot, and the difference is not academic: that function is true for
+// grok, whose key would then have gone to Azure's token endpoint — a credential posted to another
+// vendor's server, and a "your Grok key is invalid" verdict from a service never asked about it. What
+// keeps the two lists honest is TestEveryStorableSlotHasAProber, not a comment.
+var probers = map[store.KeySlot]prober{
+	store.SlotAzureSpeech: {
+		name:       "Azure",
+		usesRegion: true,
+		probe: func(ctx context.Context, key, region string, doer azure.Doer) stt.ProbeResult {
+			return azureProbeResult(azure.TestConnection(ctx, region, key, doer))
+		},
+	},
+	store.SlotGrok: {
+		name: "xAI",
+		probe: func(ctx context.Context, key, _ string, _ azure.Doer) stt.ProbeResult {
+			return grok.TestConnection(ctx, key, grok.ProbeOptions{})
+		},
+	},
+	store.SlotOpenAI: {
+		name: "OpenAI",
+		probe: func(ctx context.Context, key, _ string, _ azure.Doer) stt.ProbeResult {
+			return openai.TestConnection(ctx, key, openai.ProbeOptions{})
+		},
+	},
+	store.SlotElevenLabs: {
+		name: "ElevenLabs",
+		probe: func(ctx context.Context, key, _ string, _ azure.Doer) stt.ProbeResult {
+			return elevenlabs.TestConnection(ctx, key, elevenlabs.ProbeOptions{})
+		},
+	},
+}
+
+// azureProbeResult adapts Azure's own result to the shared one, WITHOUT changing its behaviour.
+//
+// Azure groups 401 and 403 into a single credential verdict (token.go:124) and it keeps doing that: a
+// shared shape that split them would have quietly changed behaviour verified against the live service.
+// It is the only provider that can report a bad REGION, which has nowhere to go in the shared kinds —
+// so it travels as a rejected key with the region named in the message, which is what the user has to
+// fix either way.
+func azureProbeResult(conn azure.ConnResult) stt.ProbeResult {
+	switch {
+	case conn.OK:
+		return stt.ProbeResult{
+			OK:      true,
+			Kind:    stt.ProbeOK,
+			Message: "Conexión correcta: Azure aceptó la clave para esa región",
+		}
+	case conn.Kind == azure.ConnNoKey:
+		return stt.ProbeResult{Kind: stt.ProbeNoKey, Message: conn.Error}
+	case conn.Kind == azure.ConnBadCredentials, conn.Kind == azure.ConnBadRegion:
+		return stt.ProbeResult{Kind: stt.ProbeKeyRejected, Message: conn.Error}
+	case conn.Kind == azure.ConnNetwork:
+		// conn.Error here is Go's transport text. It goes to the log, never to the user.
+		return stt.ProbeResult{Kind: stt.ProbeFailed, Code: "network", Detail: conn.Error}
+	default:
+		return stt.ProbeResult{Kind: stt.ProbeFailed, Message: conn.Error}
+	}
 }
 
 // TestConnection checks one provider's credential. Bound as Settings.TestConnection().
 //
-// EVERYTHING THAT CAN FAIL WITHOUT THE NETWORK FAILS FIRST, in this order: the slot, then the
-// region, then the key. The order is load-bearing rather than tidy — a region that cannot work does
-// not justify reading the credential to discover the key, and neither justifies a
-// request to a URL built from a region Azure would reject.
+// EVERYTHING THAT CAN FAIL WITHOUT THE NETWORK FAILS FIRST, in this order: the slot, then the region,
+// then the key. The order is load-bearing rather than tidy — a region that cannot work does not justify
+// reading the credential, and neither justifies a request to a URL built from a region Azure would
+// reject.
 func (s *SettingsService) TestConnection(slot string, region string, secret string) ProbeResult {
 	keySlot, ok := knownKeySlot(slot)
 	if !ok {
 		return s.probeFailed("", "ranura de clave desconocida: %q", slot)
 	}
-	if !slotsWithProbe[keySlot] {
+	p, ok := s.proberFor(keySlot)
+	if !ok {
 		return s.probeFailed("", "este servicio todavía no tiene prueba de conexión")
 	}
 
-	regionID, res, ok := s.resolveRegion(region)
-	if !ok {
-		return res
+	regionID := ""
+	if p.usesRegion {
+		var res ProbeResult
+		if regionID, res, ok = s.resolveRegion(region); !ok {
+			return res
+		}
 	}
 	key, source, res, ok := s.resolveKey(keySlot, secret)
 	if !ok {
@@ -92,31 +165,46 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	ctx, cancel := context.WithTimeout(context.Background(), s.httpTimeout())
 	defer cancel()
 
-	conn := azure.TestConnection(ctx, regionID, key, s.probeDoer())
-	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t", keySlot, conn.OK))
+	conn := p.probe(ctx, key, regionID, s.probeDoer())
+	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", keySlot, conn.OK, conn.Code))
 
 	if conn.OK {
-		return ProbeResult{
-			OK:      true,
-			Message: "Conexión correcta: Azure aceptó la clave para esa región",
-			Payload: s.bootstrap.Payload(),
-		}
+		return ProbeResult{OK: true, Message: conn.Message, Payload: s.bootstrap.Payload()}
 	}
 	// A deadline that ran out is NOT a rejected credential, and saying so would send the user to
 	// re-copy a key that may be perfectly good.
 	if ctx.Err() != nil {
-		return s.probeFailed("", "Azure no respondió a tiempo (%s) — comprueba tu conexión a internet",
-			s.httpTimeout())
+		return s.probeFailed("", "%s no respondió a tiempo (%s) — comprueba tu conexión a internet",
+			p.name, s.httpTimeout())
 	}
-	if conn.Kind == azure.ConnNetwork {
-		// Never reached Azure. conn.Error here is Go's transport text — English, and about sockets
-		// rather than about anything the user can act on — so it goes to the log and they get a
-		// sentence that tells them where to look.
-		s.logLine("PROBE-NET", fmt.Sprintf("slot=%s region=%s: %s", keySlot, regionID, conn.Error))
-		return s.probeFailed("", "No se pudo contactar con Azure — comprueba tu conexión a internet. "+
-			"El detalle técnico está en el registro")
+	if conn.Detail != "" {
+		// The technical detail is kept for diagnosis and kept OUT of the message: it is English, it is
+		// about sockets, and it is not something a person can act on.
+		s.logLine("PROBE-NET", fmt.Sprintf("slot=%s region=%s: %s", keySlot, regionID, conn.Detail))
 	}
-	return s.probeFailed("", "%s", conn.Error)
+	if conn.Code == "network" {
+		return s.probeFailed("", "No se pudo contactar con %s — comprueba tu conexión a internet. "+
+			"El detalle técnico está en el registro", p.name)
+	}
+	// The provider's own code is appended when it gave one: short, non-prose, no key material, and
+	// exactly what the user would search for. It is never a substitute for the message.
+	if conn.Code != "" {
+		return s.probeFailed("", "%s (%s)", conn.Message, conn.Code)
+	}
+	return s.probeFailed("", "%s", conn.Message)
+}
+
+// proberFor is the registry lookup, overridable per SERVICE INSTANCE for tests.
+//
+// Per instance rather than by mutating the package-level map: parallel tests and two probes in flight
+// would otherwise race on it.
+func (s *SettingsService) proberFor(slot store.KeySlot) (prober, bool) {
+	if s.probers != nil {
+		p, ok := s.probers[slot]
+		return p, ok && p.probe != nil
+	}
+	p, ok := probers[slot]
+	return p, ok && p.probe != nil
 }
 
 // resolveRegion picks the region to test and validates it.

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/Juan-Motta/loqui-go/internal/store"
+	"github.com/Juan-Motta/loqui-go/internal/stt"
+	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
 )
 
 // fakeDoer stands in for the network. It counts calls, so a test can assert that a rejected probe
@@ -558,4 +560,171 @@ func TestProbeDistinguishesGivingUpFromBeingRejected(t *testing.T) {
 		t.Errorf("error = %q — a timeout is not a bad credential", res.Error)
 	}
 	_ = context.Canceled
+}
+
+// EVERY STORABLE SLOT HAS A PROBE, AND EVERY PROBE BELONGS TO A STORABLE SLOT.
+//
+// The same lesson `availableKeySlots` taught earlier the same day, applied before it can bite twice:
+// two lists that must agree, and nothing making them. A slot the app will store a key for but cannot
+// test leaves a button that refuses; a prober for a slot nothing reads would send a credential to a
+// service the app never uses.
+//
+// azure-openai satisfies this by being in neither: its subservice is not ported.
+func TestEveryStorableSlotHasAProber(t *testing.T) {
+	for _, slot := range store.AllKeySlots {
+		_, hasProbe := probers[slot]
+		storable := store.IsAvailableKeySlot(slot)
+		if hasProbe != storable {
+			t.Errorf("slot %q: prober=%v storable=%v — the two lists disagree", slot, hasProbe, storable)
+		}
+	}
+}
+
+// A registered prober must be callable. A nil function would satisfy a map-key check and panic on the
+// first click.
+func TestNoProberIsNil(t *testing.T) {
+	for slot, p := range probers {
+		if p.probe == nil {
+			t.Errorf("slot %q has a nil probe", slot)
+		}
+		if p.name == "" {
+			t.Errorf("slot %q has no display name — its messages would name nobody", slot)
+		}
+	}
+}
+
+// A REGION IS DEMANDED ONLY WHERE ONE EXISTS.
+//
+// resolveRegion runs before the key, so simply widening the old allowlist would have failed a Grok test
+// with "elige una región antes de probar la conexión" — an Azure region asked of a service that has
+// none. This is the trap the plan was written to avoid.
+func TestARegionIsOnlyRequiredForAzure(t *testing.T) {
+	for _, c := range []struct {
+		slot        string
+		wantsRegion bool
+	}{
+		{"azure-speech", true},
+		{"grok", false},
+		{"openai", false},
+		{"elevenlabs", false},
+	} {
+		t.Run(c.slot, func(t *testing.T) {
+			st := store.NewAt(t.TempDir()) // no region stored anywhere
+			svc, _, _, _ := probeService(t, st)
+
+			reached := false
+			svc.probers = map[store.KeySlot]prober{
+				store.KeySlot(c.slot): {
+					name:       "Servicio",
+					usesRegion: c.slot == "azure-speech",
+					probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+						reached = true
+						return stt.ProbeResult{OK: true, Kind: stt.ProbeOK, Message: "ok"}
+					},
+				},
+			}
+
+			res := svc.TestConnection(c.slot, "", "una-clave")
+
+			if c.wantsRegion {
+				if reached {
+					t.Error("it probed without a region — Azure cannot")
+				}
+				if res.Field != "region" {
+					t.Errorf("Field = %q, want region", res.Field)
+				}
+				return
+			}
+			if !reached {
+				t.Errorf("a region was demanded of a service that has none: %q", res.Error)
+			}
+		})
+	}
+}
+
+// Each slot reaches ITS OWN prober. The mistake this forecloses is the one IsAvailableKeySlot once
+// invited: a Grok key posted to Azure's token endpoint.
+func TestEachSlotReachesItsOwnProber(t *testing.T) {
+	for _, slot := range []string{"azure-speech", "grok", "openai", "elevenlabs"} {
+		t.Run(slot, func(t *testing.T) {
+			st := store.NewAt(t.TempDir())
+			if err := st.UpdateSettings(func(cfg *store.Settings) error {
+				cfg.Region = "eastus2"
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			svc, _, _, _ := probeService(t, st)
+
+			called := ""
+			reg := map[store.KeySlot]prober{}
+			for _, s := range []string{"azure-speech", "grok", "openai", "elevenlabs"} {
+				name := s
+				reg[store.KeySlot(s)] = prober{
+					name:       name,
+					usesRegion: name == "azure-speech",
+					probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+						called = name
+						return stt.ProbeResult{OK: true, Kind: stt.ProbeOK, Message: "ok"}
+					},
+				}
+			}
+			svc.probers = reg
+
+			if res := svc.TestConnection(slot, "", "una-clave"); !res.OK {
+				t.Fatalf("probe failed: %q", res.Error)
+			}
+			if called != slot {
+				t.Errorf("slot %q reached the prober for %q", slot, called)
+			}
+		})
+	}
+}
+
+// The failure message names ITS OWN provider. It used to hard-code Azure, so a Grok test with no DNS
+// said "No se pudo contactar con Azure".
+func TestAFailureNamesItsOwnProvider(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _, _, _ := probeService(t, st)
+	svc.probers = map[store.KeySlot]prober{
+		store.SlotGrok: {
+			name: "xAI",
+			probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+				return stt.ProbeResult{Kind: stt.ProbeFailed, Code: "network"}
+			},
+		},
+	}
+
+	res := svc.TestConnection("grok", "", "una-clave")
+
+	if !strings.Contains(res.Error, "xAI") {
+		t.Errorf("error = %q — it must name xAI", res.Error)
+	}
+	if strings.Contains(res.Error, "Azure") {
+		t.Errorf("error = %q — it names another provider", res.Error)
+	}
+}
+
+// The provider's own code is shown, because it is the short, searchable, key-free part.
+func TestTheProvidersCodeIsShown(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _, _, _ := probeService(t, st)
+	svc.probers = map[store.KeySlot]prober{
+		store.SlotOpenAI: {
+			name: "OpenAI",
+			probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+				return stt.ProbeResult{
+					Kind:    stt.ProbeFailed,
+					Message: "OpenAI rechazó la conexión",
+					Code:    "insufficient_quota",
+				}
+			},
+		},
+	}
+
+	res := svc.TestConnection("openai", "", "una-clave")
+
+	if !strings.Contains(res.Error, "insufficient_quota") {
+		t.Errorf("error = %q — the provider's code is what the user would search for", res.Error)
+	}
 }

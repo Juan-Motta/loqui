@@ -404,6 +404,10 @@ type SettingsService struct {
 	// what an atomic one could not: the count can only move while somebody holds the lock.
 	readiness uint64
 
+	// probers overrides the connection-test registry. Only the tests set it, and per instance rather
+	// than by mutating the package map, which two probes in flight would race on.
+	probers map[store.KeySlot]prober
+
 	// defaultProblem overrides the check for whether the fallback engine can run. Only the tests set
 	// it: the real one looks for a 465 MB model file on disk.
 	defaultProblem func() error

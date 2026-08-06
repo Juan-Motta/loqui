@@ -133,7 +133,8 @@ func handshakeResult(resp *http.Response, key string, dialErr error) stt.ProbeRe
 		return stt.ProbeResult{
 			Kind:    stt.ProbeFailed,
 			Message: "no se pudo contactar con xAI — comprueba tu conexión a internet",
-			Code:    code,
+			Code:    "network",
+			Detail:  dialErrText(dialErr),
 		}
 	}
 	return stt.ProbeResult{Kind: stt.ProbeFailed, Message: message, Code: code}
@@ -160,4 +161,13 @@ func firstMessageFailure(ctx context.Context, err error) stt.ProbeResult {
 		Kind:    stt.ProbeFailed,
 		Message: "se perdió la conexión con xAI antes de confirmar la sesión",
 	}
+}
+
+// dialErrText is Go's transport text, for the log only. Nil-safe because a refused upgrade arrives with
+// a response and no error worth quoting.
+func dialErrText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }

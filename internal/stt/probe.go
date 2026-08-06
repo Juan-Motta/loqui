@@ -21,6 +21,11 @@ type ProbeResult struct {
 	// key it is OUR wording rather than the provider's: the services were measured echoing key
 	// material back, masked in the middle with the tail intact.
 	Message string
+	// Detail is technical text for the LOG and never for the user: Go's transport error, the socket
+	// that refused, the DNS failure. It is English, it is about sockets rather than about anything a
+	// person can act on, and — like everything the server writes — it must be treated as possibly
+	// carrying whatever the caller sent. Callers log it; nothing paints it.
+	Detail string
 	// Code is the provider's own machine-readable string when it gave one — "invalid_api_key",
 	// "insufficient_quota", "server_error", a close code. Short, non-prose, no key material, and
 	// exactly what a user would search for. Empty when the provider offered nothing.
