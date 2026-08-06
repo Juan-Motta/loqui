@@ -138,7 +138,12 @@ func TestDecodeRecognisesEachEvent(t *testing.T) {
 			Final, "", "hola mundo",
 		},
 		{"error", `{"type":"error","error":{"message":"clave inválida"}}`, Error, "", ""},
-		{"desconocido", `{"type":"session.created"}`, Ignore, "", ""},
+		// session.created was listed here as "desconocido" — the old reading, and it was wrong. It is
+		// the service's session confirmation, and for a probe it is the ONLY positive proof the
+		// credential was accepted, because an invalid key still gets an HTTP 101 from this service
+		// (measured — docs/research/2026-08-06-where-realtime-stt-auth-fails.md).
+		{"session.created es la confirmación de sesión", `{"type":"session.created"}`, Ready, "", ""},
+		{"desconocido de verdad", `{"type":"algo.que.no.existe"}`, Ignore, "", ""},
 		{"json roto", `{no`, Ignore, "", ""},
 	}
 	for _, c := range cases {

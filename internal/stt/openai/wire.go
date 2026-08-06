@@ -87,6 +87,12 @@ type OutcomeKind int
 const (
 	// Ignore is the default, so an unknown event is never mistaken for text or for a failure.
 	Ignore OutcomeKind = iota
+	// Ready is session.created: the service has opened a session, which is the only positive proof the
+	// credential was accepted. The dictation path does not need it — it treats "socket open and
+	// configured" as ready — so this event used to fall through to Ignore. A probe DOES need it: for
+	// this service an invalid key still gets an HTTP 101 (measured 2026-08-06), so the upgrade proves
+	// nothing and only a named session confirmation does.
+	Ready
 	// PartialDelta is a FRAGMENT to append, not a whole partial. Getting this wrong shows the user
 	// one word at a time instead of a growing phrase.
 	PartialDelta
@@ -98,6 +104,8 @@ const (
 
 func (k OutcomeKind) String() string {
 	switch k {
+	case Ready:
+		return "ready"
 	case PartialDelta:
 		return "partial-delta"
 	case Final:
@@ -150,6 +158,8 @@ func Decode(raw []byte) Outcome {
 		return Outcome{Kind: Ignore}
 	}
 	switch {
+	case ev.Type == "session.created":
+		return Outcome{Kind: Ready}
 	case ev.Type == "error":
 		msg := ev.Error.Message
 		if msg == "" {
