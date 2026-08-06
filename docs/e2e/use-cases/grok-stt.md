@@ -1,65 +1,65 @@
-# Use cases — dictado con Grok (xAI)
+# Use cases — dictation with Grok (xAI)
 
-Interfaz: **CLI** (`cmd/stt-probe`). La UI de Ajustes es todavía un stub (fase 4), así que no
-hay recorrido de UI que ejecutar: el selector de proveedor se ve en `frontend/index.html:769`
-pero no responde a nada. El recorrido por la app (tecla `fn` → pegado → historial) se cubrirá
-cuando exista la fase 4 y haya una key.
+Interface: **CLI** (`cmd/stt-probe`). The Settings UI is still a stub (phase 4), so there is no
+UI journey to execute: the provider picker can be seen at `frontend/index.html:769` but responds
+to nothing. The journey through the app (`fn` key → paste → history) will be covered once phase 4
+exists and there is a key.
 
 ---
 
-## UC-GROK-01 — llego nuevo y todavía no he puesto mi API key
+## UC-GROK-01 — I am new and have not put my API key in yet
 
-- **Actor:** alguien que acaba de elegir Grok en Ajustes y aún no ha pegado su key.
-- **Escenario:** intenta dictar sin credencial, y luego con una.
-- **Interfaz:** CLI
-- **Intención:** que la app diga **qué** falta y **dónde** arreglarlo, en vez de fallar de una
-  forma que parezca un problema de red o de micrófono.
-- **Setup:** ninguno. No configurar ninguna key (el estado de un usuario nuevo es el estado por
-  defecto — el Setup no puede realizar la acción bajo prueba).
-- **Pasos:**
+- **Actor:** someone who has just chosen Grok in Settings and has not pasted their key yet.
+- **Scenario:** they try to dictate without a credential, and then with one.
+- **Interface:** CLI
+- **Intent:** that the app says **what** is missing and **where** to fix it, instead of failing in
+  a way that looks like a network or microphone problem.
+- **Setup:** none. Configure no key (a new user's state is the default state — Setup cannot
+  perform the action under test).
+- **Steps:**
   1. `env -u XAI_API_KEY ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 1`
-  2. Repetir **con** una key presente, para comprobar que el resultado del paso 1 venía de leer
-     la credencial y no de fallar siempre igual.
-- **Verificación:** el paso 1 reporta `NotConfigured` con un mensaje que nombra Ajustes; el
-  paso 2 llega **más allá** de la configuración y falla en la autenticación. Dos resultados
-  distintos ⇒ la lectura de la key es real.
-- **Persistencia:** el código emitido, clasificado por la política de reintentos de
-  `internal/session`, debe dar `reconnect=false`: un dictado que no puede funcionar no debe
-  quedar reintentando contra un servicio que factura por hora.
+  2. Repeat **with** a key present, to check that step 1's result came from reading the
+     credential and not from always failing the same way.
+- **Verification:** step 1 reports `NotConfigured` with a message that names Settings; step 2
+  gets **past** configuration and fails on authentication. Two different outcomes ⇒ the key read
+  is real.
+- **Persistence:** the emitted code, classified by `internal/session`'s retry policy, must give
+  `reconnect=false`: a dictation that cannot work must not sit retrying against a service that
+  bills by the hour.
 
 ---
 
-## UC-GROK-02 — me equivoqué al pegar la key
+## UC-GROK-02 — I pasted the key wrong
 
-- **Actor:** alguien que pegó una key mal copiada.
-- **Escenario:** dicta con una credencial que el servicio real rechaza.
-- **Interfaz:** CLI
-- **Intención:** que le digan **que es la key**, y que la app no se quede reintentando.
-- **Setup:** exportar `XAI_API_KEY` con un valor inválido. Contra el servicio **real**, que es
-  el único que puede decir cómo rechaza de verdad.
-- **Pasos:**
-  1. `XAI_API_KEY=<inválida> ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 2`
-  2. Clasificar el código emitido con `session.ClassifyCancel` + `session.ShouldReconnect`.
-- **Verificación:** un solo `canceled` cuyo mensaje nombra la API key; **no** un "status 400"
-  genérico, que mandaría al usuario a auditar su configuración.
-- **Persistencia:** `reconnect=false`.
+- **Actor:** someone who pasted a badly copied key.
+- **Scenario:** they dictate with a credential the real service rejects.
+- **Interface:** CLI
+- **Intent:** that they are told **it is the key**, and that the app does not sit retrying.
+- **Setup:** export `XAI_API_KEY` with an invalid value. Against the **real** service, which is
+  the only thing that can say how it actually rejects.
+- **Steps:**
+  1. `XAI_API_KEY=<invalid> ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 2`
+  2. Classify the emitted code with `session.ClassifyCancel` + `session.ShouldReconnect`.
+- **Verification:** a single `canceled` whose message names the API key; **not** a generic
+  "status 400", which would send the user off to audit their configuration.
+- **Persistence:** `reconnect=false`.
 
 ---
 
-## UC-GROK-03 — dicto dos frases y aparecen como un solo mensaje *(BLOQUEADO)*
+## UC-GROK-03 — I dictate two sentences and they appear as one message *(BLOCKED)*
 
-- **Actor:** alguien con una cuenta de xAI válida.
-- **Escenario:** mantiene la tecla, dice dos frases con una pausa clara, suelta.
-- **Interfaz:** CLI (y luego la app)
-- **Intención:** que las dos frases lleguen **unidas en un mensaje**, en orden y **sin
-  duplicados** — el fallo que el mapeo de eventos de Electron produciría.
-- **Setup:** `XAI_API_KEY` con una key válida.
-- **Pasos:**
-  1. `XAI_API_KEY=<válida> ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 20`,
-     hablando dos frases con una pausa clara.
-  2. Registrar **cada evento literal** y comparar con la línea de tiempo ensamblada.
-- **Verificación:** un solo `FINAL` con las dos frases, en orden, sin ninguna repetida.
-- **Persistencia:** repetirlo por la app y comprobar que `history.jsonl` gana **un** registro.
-- **BLOQUEADO:** no hay key de xAI. Es el mismo bloqueo que tiene Azure (ver `CONTINUITY.md`).
-  Este recorrido es además el experimento que confirma el riesgo 1 del plan (si `start` es
-  relativo a la sesión); hay que ejecutarlo en cuanto haya credencial.
+- **Actor:** someone with a valid xAI account.
+- **Scenario:** they hold the key, say two sentences with a clear pause, release.
+- **Interface:** CLI (and later the app)
+- **Intent:** that both sentences arrive **joined in one message**, in order and **without
+  duplicates** — the failure that Electron's event mapping would produce.
+- **Setup:** `XAI_API_KEY` with a valid key.
+- **Steps:**
+  1. `XAI_API_KEY=<valid> ./scripts/go.sh run ./cmd/stt-probe -provider grok -seconds 20`,
+     speaking two sentences with a clear pause.
+  2. Log **every event verbatim** and compare against the assembled timeline.
+- **Verification:** a single `FINAL` with both sentences, in order, with none repeated.
+- **Persistence:** repeat it through the app and check that `history.jsonl` gains **one** record.
+- **BLOCKED:** there is no xAI key. It is the same blocker Azure has (see `CONTINUITY.md`).
+  This journey is also the experiment that confirms risk 1 in the plan (whether `start` is
+  session-relative); it has to be run as soon as there is a credential.

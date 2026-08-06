@@ -1,129 +1,131 @@
 # loqui-go
 
-Dictado por voz para macOS: mantenés una tecla, hablás, y el texto aparece donde está el
-cursor — en la terminal, en un correo, en cualquier app. Port a **Go + Wails v3** de
+Voice dictation for macOS: hold a key, speak, and the text appears wherever the cursor is —
+in the terminal, in an email, in any app. A **Go + Wails v3** port of
 [Loqui](../loqui) (Electron + TypeScript).
 
-Estado y siguiente paso: **`CONTINUITY.md`**. Diseño y mapa de módulos:
+Status and next step: **`CONTINUITY.md`**. Design and module map:
 **`docs/plans/loqui-go-port.md`**.
 
-## Lo primero que hay que saber
+## The first thing to know
 
-> **No uses `go` a secas en este repo.**
+> **Do not use bare `go` in this repo.**
 
-El binding de Go del Azure Speech SDK es cgo sobre la librería nativa y **no declara sus
-propios `#cgo`**, así que la ruta de headers y los flags de enlace sólo pueden venir del
-entorno. Go no tiene ningún archivo donde un proyecto pueda dejarlos fijados (`CGO_CFLAGS`
-es por proceso), y el paquete que los necesita es el del SDK, no uno nuestro — poner
-directivas `#cgo` en nuestro código no ayudaría.
+The Go binding for the Azure Speech SDK is cgo over the native library and **declares no
+`#cgo` directives of its own**, so the header path and link flags can only come from the
+environment. Go has no file where a project can record them (`CGO_CFLAGS` is per-process),
+and the package that needs them is the SDK's, not ours — putting `#cgo` lines in our own
+code would not help.
 
-Sin ellos, cualquier build que alcance el SDK muere así:
+Without them, any build that reaches the SDK dies like this:
 
 ```
 fatal error: 'speechapi_c_error.h' file not found
 ```
 
-Incluso comandos que no tocan Azure, como `-mic-only`, porque el binario igual lo enlaza.
+Even commands that never touch Azure, like `-mic-only`, because the binary still links it.
 
-**Usá el wrapper**, que es donde viven los flags (y que descarga el framework la primera vez):
+**Use the wrapper**, which is where the flags live (and which fetches the framework on first
+use):
 
 ```bash
 ./scripts/go.sh test ./...
 ./scripts/go.sh run ./cmd/stt-probe -mic-only
-. scripts/go.sh            # o sourcealo, y usá `go` normal en esa shell
+. scripts/go.sh            # or source it, and use plain `go` in that shell
 ```
 
-## Lo segundo: `wails3` no está en tu PATH
+## The second thing: `wails3` is not on your PATH
 
-`wails3` se instala en `$(go env GOPATH)/bin`, que en macOS **no está en el PATH** salvo que
-lo hayas agregado. Así que `wails3 task ...` falla con `command not found` en una máquina que
-tiene todo bien instalado.
+`wails3` installs into `$(go env GOPATH)/bin`, which on macOS is **not on the PATH** unless
+you put it there. So `wails3 task ...` fails with `command not found` on a machine that has
+everything correctly installed.
 
-Usá el wrapper, que además lo instala si falta:
+Use the wrapper, which also installs it if missing:
 
 ```bash
 ./scripts/task.sh build
 ./scripts/task.sh probe:mic
 ```
 
-O arreglalo de raíz y usá `wails3` directo en todas partes:
+Or fix it at the root and use `wails3` directly everywhere:
 
 ```bash
 echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc && exec zsh
 ```
 
-## Comandos
+## Commands
 
 ```bash
-./scripts/task.sh build          # compila (frontend + go)
-./scripts/task.sh package        # arma bin/loqui.app y lo firma ad-hoc
+./scripts/task.sh build          # compiles (frontend + go)
+./scripts/task.sh package        # builds bin/loqui.app and signs it ad-hoc
 ./scripts/task.sh dev            # hot reload
 ./scripts/task.sh test
 ./scripts/task.sh vet
 
-./scripts/task.sh probe:devices  # lista micrófonos
-./scripts/task.sh probe:mic      # nivel del micrófono, sin tocar la red
+./scripts/task.sh probe:devices  # lists microphones
+./scripts/task.sh probe:mic      # microphone level, without touching the network
 SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/task.sh probe -- -seconds 20
 ```
 
-Con `wails3` en el PATH, `wails3 task <lo-mismo>` es equivalente.
+With `wails3` on the PATH, `wails3 task <the-same>` is equivalent.
 
-Afordancias de desarrollo (documentadas donde se leen, no sólo acá):
+Development affordances (documented where they are read, not only here):
 
 ```bash
-LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # muestra el pill a los 2s
-LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dicta 6s sin tocar una tecla
-LOQUI_AZURE_KEY=...                                          # evita el Keychain (ver abajo)
-LOQUI_GROK_KEY=...                                           # ídem, para xAI
+LOQUI_DEBUG_OVERLAY=1 ./bin/loqui.app/Contents/MacOS/loqui   # shows the pill after 2s
+LOQUI_DEBUG_DICTATE=6 ./bin/loqui.app/Contents/MacOS/loqui   # dictates 6s without a keypress
+LOQUI_AZURE_KEY=...                                          # bypasses the Keychain (see below)
+LOQUI_GROK_KEY=...                                           # same, for xAI
 ```
 
-Hay una escotilla por proveedor (`LOQUI_AZURE_KEY`, `LOQUI_GROK_KEY`, `LOQUI_OPENAI_KEY`,
-`LOQUI_AZURE_OPENAI_KEY`, `LOQUI_ELEVENLABS_KEY`). Una **no** sirve para otro proveedor, a
-propósito: dictar contra el servicio equivocado con la credencial equivocada es peor que no
-dictar.
+There is one escape hatch per provider (`LOQUI_AZURE_KEY`, `LOQUI_GROK_KEY`,
+`LOQUI_OPENAI_KEY`, `LOQUI_AZURE_OPENAI_KEY`, `LOQUI_ELEVENLABS_KEY`). One does **not** work
+for another provider, deliberately: dictating against the wrong service with the wrong
+credential is worse than not dictating.
 
-Para aislar un fallo sin el app, `cmd/stt-probe` corre un dictado desde la CLI contra el
-proveedor que se le diga:
+To isolate a failure without the app, `cmd/stt-probe` runs a dictation from the CLI against
+whichever provider you name:
 
 ```bash
-./scripts/go.sh run ./cmd/stt-probe -mic-only                        # ¿el micrófono da audio?
+./scripts/go.sh run ./cmd/stt-probe -mic-only                        # is the microphone giving audio?
 XAI_API_KEY=... ./scripts/go.sh run ./cmd/stt-probe -provider grok    # xAI, 15s
-SPEECH_KEY=... ./scripts/go.sh run ./cmd/stt-probe                   # Azure (el default)
+SPEECH_KEY=... ./scripts/go.sh run ./cmd/stt-probe                   # Azure (the default)
 ```
 
-## Setup en una máquina nueva
+## Setup on a fresh machine
 
 ```bash
 cd frontend && npm install && cd ..
-./scripts/build-globe-listener.sh    # el listener de la tecla fn
-./scripts/task.sh package            # instala wails3 si falta
+./scripts/build-globe-listener.sh    # the fn-key listener
+./scripts/task.sh package            # installs wails3 if missing
 ```
 
-El framework de Azure lo baja `scripts/vendor-speech-sdk.sh` solo, con sha256 fijado.
+The Azure framework is fetched by `scripts/vendor-speech-sdk.sh` on its own, with a pinned
+sha256.
 
-## Permisos de macOS
+## macOS permissions
 
-- **Micrófono** — se pide solo la primera vez.
-- **Accesibilidad** — sin esto el `Cmd+V` sintético se traga *en silencio*: el dictado
-  transcribe y no aparece nada. La app lo avisa al arrancar.
-- **Input Monitoring** — para la tecla `fn`, concedido al helper `globe-listener`.
+- **Microphone** — asked for once, on first use.
+- **Accessibility** — without it the synthetic `Cmd+V` is swallowed *silently*: dictation
+  transcribes and nothing appears. The app says so at launch.
+- **Input Monitoring** — for the `fn` key, granted to the `globe-listener` helper.
 
-**Con firma ad-hoc hay que re-concederlos en cada rebuild**, porque macOS ata los permisos a
-la firma y ésta cambia cada vez. Peor: la lectura del Keychain **se cuelga** (de ahí el
-timeout en `GetKey` y las escotillas `LOQUI_*_KEY`). Firmar los builds de dev con una
-identidad estable es el siguiente paso del proyecto, no una comodidad.
+**With ad-hoc signing these have to be re-granted on every rebuild**, because macOS ties
+permissions to the signature and it changes each time. Worse: the Keychain read **hangs**
+(hence the timeout in `GetKey` and the `LOQUI_*_KEY` escape hatches). Signing dev builds
+with a stable identity is the project's next step, not a convenience.
 
-## Estructura
+## Structure
 
 ```
-main.go, wiring.go      la app Wails: ventanas, tray, hotkey
-internal/session/       el controlador de dictado (decisiones puras, con tests)
-internal/stt/           contrato de proveedor + azure/
-internal/audio/         captura (malgo/CoreAudio) + PCM/nivel
-internal/inject/        paste con NSPasteboard.changeCount + focus guard
+main.go, wiring.go      the Wails app: windows, tray, hotkey
+internal/session/       the dictation controller (pure decisions, with tests)
+internal/stt/           provider contract + azure/
+internal/audio/         capture (malgo/CoreAudio) + PCM/level
+internal/inject/        paste with NSPasteboard.changeCount + focus guard
 internal/store/         settings JSON + Keychain
-internal/hotkey/        protocolo de la tecla fn + listener
-helpers/                los 3 helpers nativos (Swift/C++), portados sin cambios
-frontend/               index.html = Ajustes, overlay.html = el pill
-cmd/stt-probe/          dictado desde la CLI, para aislar fallos
+internal/hotkey/        fn-key protocol + listener
+helpers/                the 3 native helpers (Swift/C++), ported unchanged
+frontend/               index.html = Settings, overlay.html = the pill
+cmd/stt-probe/          dictation from the CLI, to isolate failures
 ```

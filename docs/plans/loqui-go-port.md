@@ -1,172 +1,176 @@
-# Plan — Port de Loqui (Electron/TS) a Go + Wails v3
+# Plan — Porting Loqui (Electron/TS) to Go + Wails v3
 
-- **Fecha:** 2026-07-27
-- **Origen:** `~/Desktop/personal/projects/loqui` — Electron + TypeScript, ~13.4k LOC,
-  517 tests, 3 helpers nativos, DMG firmado y notarizado.
-- **Objetivo:** port 1:1 de funcionalidad. Sólo macOS (arm64) en esta fase; Windows
-  queda como puerta abierta, no como requisito.
-- **Investigación base:** `docs/research/2026-07-27-azure-speech-go-macos.md`
+- **Date:** 2026-07-27
+- **Source:** `~/Desktop/personal/projects/loqui` — Electron + TypeScript, ~13.4k LOC,
+  517 tests, 3 native helpers, signed and notarised DMG.
+- **Goal:** a 1:1 port of the functionality. macOS (arm64) only in this phase; Windows
+  stays an open door, not a requirement.
+- **Underlying research:** `docs/research/2026-07-27-azure-speech-go-macos.md`
 
-## Decisiones tomadas
+## Decisions taken
 
-| Decisión | Elegido | Por qué |
+| Decision | Chosen | Why |
 | --- | --- | --- |
-| Framework | **Wails v3 alpha** | v2 no tiene systray ni multi-ventana; Loqui necesita ambos. v3 marca estables las APIs de app/ventanas/menús/eventos/servicios. |
-| Frontend | **Reutilizar verbatim** | La UI actual es HTML+CSS+TS vanilla sin framework, y Wails también renderiza en un webview. El HTML se copia tal cual; sólo cambia la capa de IPC. |
-| Lógica pura | **Toda a Go** | En Electron main y renderer compartían TS. Aquí no comparten lenguaje, así que las reglas viven en Go una sola vez y la UI sólo pinta. En Loqui ya hubo dos bugs por reglas duplicadas/derivadas (`sessionPolicy` clasificando por prosa traducida, i18n rompiendo una decisión no-UI). |
-| Orden | **Azure Speech primero** | Era el único riesgo sin equivalente Go. Resuelto: ver la investigación. |
-| Bundle id | **`com.jualopezmo.loquigo`** | NO reutilizar `com.jualopezmo.loqui`: macOS ata los permisos de Accesibilidad e Input Monitoring a bundle id + firma, así que dos binarios firmados distinto con el mismo id se pelean el mismo registro TCC. Tomar el id original será un paso de migración explícito cuando el port reemplace a Electron. |
+| Framework | **Wails v3 alpha** | v2 has no systray and no multi-window; Loqui needs both. v3 marks the app/windows/menus/events/services APIs as stable. |
+| Frontend | **Reuse verbatim** | The current UI is vanilla HTML+CSS+TS with no framework, and Wails also renders in a webview. The HTML is copied as-is; only the IPC layer changes. |
+| Pure logic | **All to Go** | In Electron, main and renderer shared TS. Here they do not share a language, so the rules live in Go once and the UI only paints. Loqui already had two bugs from duplicated/derived rules (`sessionPolicy` classifying by translated prose, i18n breaking a non-UI decision). |
+| Order | **Azure Speech first** | It was the only risk with no Go equivalent. Resolved: see the research. |
+| Bundle id | **`com.jualopezmo.loquigo`** | Do NOT reuse `com.jualopezmo.loqui`: macOS ties Accessibility and Input Monitoring permissions to bundle id + signature, so two differently signed binaries with the same id fight over the same TCC record. Taking the original id will be an explicit migration step when the port replaces Electron. |
 
-## Cambio arquitectónico central: se cae la ventana `engine`
+## The central architectural change: the `engine` window goes away
 
-Electron tenía **3 renderers**. El `engine` existía por dos razones que en Go
-desaparecen: hospedar el SDK JS de Azure Speech, y ser la única ventana con permiso
-de micrófono (`getUserMedia`).
+Electron had **3 renderers**. The `engine` one existed for two reasons that disappear in
+Go: hosting Azure Speech's JS SDK, and being the only window with microphone permission
+(`getUserMedia`).
 
-En el port **Go captura el audio** (malgo/miniaudio → CoreAudio) y **Go maneja todos
-los proveedores**. Consecuencias:
+In the port **Go captures the audio** (malgo/miniaudio → CoreAudio) and **Go drives all
+the providers**. Consequences:
 
-- Quedan **2 ventanas**: `settings` y `overlay`. Ambas con los permisos del webview
-  explícitamente denegados: no necesitan ninguno.
-- **Un solo camino de audio**: PCM16 16 kHz mono desde Go hacia cualquier proveedor
-  (push stream para Azure, WebSocket para Grok/ElevenLabs/OpenAI, stdin para los
-  helpers nativos). En Electron había 3 topologías distintas de captura.
-- Se elimina la dependencia de `getUserMedia` en WKWebView, que es terreno dudoso.
-- Desaparece toda la superficie IPC `engine:*` y su guardia por ventana
-  (`ipcGuard`/`ENGINE_CHANNELS`): ya no hay un renderer que maneje secretos.
-- El medidor de nivel (`meter.ts`, AnalyserNode) se vuelve RMS en Go.
+- **2 windows** remain: `settings` and `overlay`. Both with the webview's permissions
+  explicitly denied: they need none.
+- **A single audio path**: PCM16 16 kHz mono from Go to any provider (push stream for
+  Azure, WebSocket for Grok/ElevenLabs/OpenAI, stdin for the native helpers). In Electron
+  there were 3 different capture topologies.
+- The dependence on `getUserMedia` in WKWebView, which is dubious territory, is removed.
+- The whole `engine:*` IPC surface and its per-window guard
+  (`ipcGuard`/`ENGINE_CHANNELS`) disappears: there is no longer a renderer handling
+  secrets.
+- The level meter (`meter.ts`, AnalyserNode) becomes RMS in Go.
 
-## Mapa de módulos: Electron → Go
+## Module map: Electron → Go
 
-### Lógica pura → paquetes Go con tests (el corazón del port)
+### Pure logic → Go packages with tests (the heart of the port)
 
-| Electron (`src/shared/`) | Go | Nota |
+| Electron (`src/shared/`) | Go | Note |
 | --- | --- | --- |
-| `sessionController.ts`, `dictationState.ts`, `sessionTracker.ts`, `sessionPolicy.ts` | `internal/session/` | El controlador con `desired` vs `actual`, generaciones, backoff. Se porta con su suite completa. |
-| `overlayState.ts` | `internal/session/overlay.go` | El reducer se va a Go; el frontend recibe `{status,error}` ya calculado. **Hecho** en el lado del frontend. |
-| `settings.ts`, `azureConfig.ts`, `azureOpenAi.ts`, `openaiRealtime.ts`, `grokStt.ts`, `elevenLabs.ts` | `internal/settings/`, `internal/stt/<provider>/` | Validación, normalización de región, endpoint v2, construcción de URLs/payloads. |
-| `languageSlots.ts`, `languageCatalog.ts`, `secretSlots.ts` | `internal/settings/` | Idiomas por slot de proveedor + migración del `languages` global legado. |
-| `triggerKey.ts` | `internal/hotkey/` | Ojo: los acceleradores dejan de ser de Electron. Ver "Riesgos". |
+| `sessionController.ts`, `dictationState.ts`, `sessionTracker.ts`, `sessionPolicy.ts` | `internal/session/` | The controller with `desired` vs `actual`, generations, backoff. Ported with its full suite. |
+| `overlayState.ts` | `internal/session/overlay.go` | The reducer moves to Go; the frontend receives `{status,error}` already computed. **Done** on the frontend side. |
+| `settings.ts`, `azureConfig.ts`, `azureOpenAi.ts`, `openaiRealtime.ts`, `grokStt.ts`, `elevenLabs.ts` | `internal/settings/`, `internal/stt/<provider>/` | Validation, region normalisation, v2 endpoint, URL/payload construction. |
+| `languageSlots.ts`, `languageCatalog.ts`, `secretSlots.ts` | `internal/settings/` | Languages per provider slot + migration of the legacy global `languages`. |
+| `triggerKey.ts` | `internal/hotkey/` | Careful: the accelerators stop being Electron's. See "Risks". |
 | `history.ts`, `historyFilter.ts` | `internal/store/` | |
-| `logFile.ts` | `internal/store/` | Formato, redacción y retención. |
-| `modelSpec.ts` | `internal/model/` | Aritmética de descarga + sha256. |
+| `logFile.ts` | `internal/store/` | Format, redaction and retention. |
+| `modelSpec.ts` | `internal/model/` | Download arithmetic + sha256. |
 | `audioPcm.ts` | `internal/audio/` | `downsample`, `floatTo16BitPCM`. |
 | `permissions.ts`, `mediaPermission.ts` | `internal/permissions/` | |
-| `connectionStatus.ts` | `internal/ui/` | Modelo de disponibilidad por proveedor. |
-| `helperExit.ts`, `sttHelperProtocol.ts`, `globeProtocol.ts` | `internal/stt/helper/`, `internal/hotkey/` | Protocolos de línea de los helpers. |
-| `i18n/` | `internal/i18n/` | Catálogos es/en. La UI recibe el catálogo resuelto al arrancar. |
+| `connectionStatus.ts` | `internal/ui/` | Per-provider availability model. |
+| `helperExit.ts`, `sttHelperProtocol.ts`, `globeProtocol.ts` | `internal/stt/helper/`, `internal/hotkey/` | The helpers' line protocols. |
+| `i18n/` | `internal/i18n/` | es/en catalogues. The UI receives the resolved catalogue at launch. |
 | `preRollBuffer.ts`, `pasteQueue.ts` | `internal/audio/`, `internal/inject/` | |
 
-### I/O y glue
+### I/O and glue
 
-| Electron (`src/main/`) | Go | Cambio real |
+| Electron (`src/main/`) | Go | The real change |
 | --- | --- | --- |
-| `main.ts` | `main.go` + `internal/app/` | **Esqueleto hecho.** |
-| `configStore.ts` (safeStorage) | `internal/store/keychain_darwin.go` | `safeStorage` no existe. Va al **Keychain de macOS** directo por cgo (Security.framework), un slot por proveedor. Con timeout: sin firma estable la lectura cuelga (ver riesgo 1). |
-| `historyStore.ts`, `logStore.ts`, `modelStore.ts`, `deviceState.ts` | `internal/store/` | `app.getPath("userData")` → `~/Library/Application Support/LoquiGo`. **No `Loqui`**: macOS es case-insensitive, así que ese nombre es el MISMO directorio que el `loqui` de Electron. |
-| `tokenService.ts`, `azureProbe.ts` | `internal/stt/azure/` | HTTP plano. |
-| `injection.ts` | `internal/inject/` | **Mejora sobre el original.** Electron dejó documentado que el restore del portapapeles necesitaba `NSPasteboard.changeCount` y no lo tenía. En Go con cgo **sí se puede**, y el PRD ya lo pedía (R6). Y el pegado puede ser `CGEventPost` en vez de `osascript`. |
-| `focusGuard.ts` | `internal/inject/focus.go` | Igual: la lectura AX puede ser AXUIElement por cgo en vez de AppleScript. |
-| `hotkey.ts` | `internal/hotkey/` | El helper Swift se conserva; sólo cambia quien lo lanza. |
-| `streamingStt.ts` | **por proveedor**, no compartido todavía | `ws` → `coder/websocket`. **Corregido 2026-07-28:** este mapeo decía `internal/stt/stream.go`, o sea dentro del paquete del **contrato**, lo que metería una dependencia de red en el paquete que importan `session`, `app` y los proveedores locales. Y extraerlo ya era prematuro: el `SttAdapter` de Electron **contiene** el bug que Grok tuvo que arreglar (cierra ante cualquier final tras el finalize, lo que trunca). El ciclo de vida vive en `internal/stt/grok/provider.go`; se extraerá a un paquete propio cuando ElevenLabs dé la segunda implementación real. Ver `docs/plans/grok-stt-provider.md`. |
-| `windowOptions.ts`, `ipcGuard.ts` | `main.go` | `ipcGuard` desaparece: no hay canales genéricos, Wails expone métodos tipados. |
-| `preload/` | — | Desaparece. Los bindings de Wails son la superficie. |
+| `main.ts` | `main.go` + `internal/app/` | **Skeleton done.** |
+| `configStore.ts` (safeStorage) | `internal/store/keychain_darwin.go` | `safeStorage` does not exist. It goes to the **macOS Keychain** directly through cgo (Security.framework), one slot per provider. With a timeout: without a stable signature the read hangs (see risk 1). |
+| `historyStore.ts`, `logStore.ts`, `modelStore.ts`, `deviceState.ts` | `internal/store/` | `app.getPath("userData")` → `~/Library/Application Support/LoquiGo`. **Not `Loqui`**: macOS is case-insensitive, so that name is the SAME directory as Electron's `loqui`. |
+| `tokenService.ts`, `azureProbe.ts` | `internal/stt/azure/` | Plain HTTP. |
+| `injection.ts` | `internal/inject/` | **An improvement on the original.** Electron left it documented that the clipboard restore needed `NSPasteboard.changeCount` and it did not have it. In Go with cgo it **is** possible, and the PRD already asked for it (R6). And the paste can be `CGEventPost` instead of `osascript`. |
+| `focusGuard.ts` | `internal/inject/focus.go` | Same: the AX read can be AXUIElement through cgo instead of AppleScript. |
+| `hotkey.ts` | `internal/hotkey/` | The Swift helper is kept; only who launches it changes. |
+| `streamingStt.ts` | **per provider**, not shared yet | `ws` → `coder/websocket`. **Corrected 2026-07-28:** this mapping said `internal/stt/stream.go`, i.e. inside the **contract** package, which would put a network dependency in the package that `session`, `app` and the local providers import. And extracting it was premature anyway: Electron's `SttAdapter` **contains** the bug Grok had to fix (it closes on any final after the finalize, which truncates). The lifecycle lives in `internal/stt/grok/provider.go`; it will be extracted into its own package when ElevenLabs provides the second real implementation. See `docs/plans/grok-stt-provider.md`. |
+| `windowOptions.ts`, `ipcGuard.ts` | `main.go` | `ipcGuard` disappears: there are no generic channels, Wails exposes typed methods. |
+| `preload/` | — | Disappears. Wails' bindings are the surface. |
 
-### Se porta sin tocar
+### Ported untouched
 
-Los tres helpers nativos son procesos aparte que hablan un protocolo de líneas, así
-que son independientes del lenguaje del host. Copiados ya a `helpers/`:
+The three native helpers are separate processes speaking a line protocol, so they are
+independent of the host's language. Already copied into `helpers/`:
 
-- `macos-globe-listener.swift` — la única forma de detectar `fn` down **y up**
+- `macos-globe-listener.swift` — the only way to detect `fn` down **and** up
 - `macos-stt.swift` — Apple SpeechAnalyzer (macOS 26+)
-- `whisper-stt.cpp` — whisper.cpp local
+- `whisper-stt.cpp` — local whisper.cpp
 
-## Fases
+## Phases
 
-- **Fase 0 — cimientos.** ✅ **HECHO.** Spike de Azure verificado; scaffold Wails v3;
-  2 ventanas; tray con icono template/activo; single instance; shim AppKit para el
-  overlay no-activante (verificado: `layer=25`, en pantalla, sin robar foco);
-  `patch-plists.sh` para las usage descriptions.
-- **Fase 1 — Azure Speech real.** ✅ **HECHA**, salvo la transcripción real (necesita key).
-  Proveedor en `internal/stt/azure`, `scripts/vendor-speech-sdk.sh` con sha256 fijado,
-  captura con malgo verificada, `tokenService` con tests, `cmd/stt-probe`.
-- **Fase 2 — sesión y entrega.** ✅ **HECHA** (bloqueada por firma, ver riesgos).
-  `internal/session` completo con tests, hotkey `fn`, inyección con `changeCount` real,
-  focus guard por AX, historial, settings + Keychain, todo cableado. Falta el atajo global
-  no-`fn` (ver riesgo 2) y la primera transcripción real (necesita firma estable + key).
-- **Fase 3 — el resto de proveedores.** PARCIAL.
-  - ✅ `internal/stt/helper` — un proveedor para los dos motores locales (mismo protocolo de
-    líneas JSON), con tests. `internal/permissions` — micrófono + reconocimiento de voz.
-  - ✅ **whisper: funciona.** Primer transcript real verificado 2026-07-28.
-  - ⛔ **macos (Apple SpeechAnalyzer): bloqueado, causa desconocida.** Ver riesgo 6.
-  - ✅ **grok (xAI): implementado** 2026-07-28, `internal/stt/grok`. Falta la transcripción real
-    (necesita una key de xAI); todo lo demás está verificado contra un servidor WebSocket local,
-    y el rechazo del handshake contra el servicio real. **No se portó el parseo de eventos
-    verbatim**: el de Electron pierde el texto (ver `docs/plans/grok-stt-provider.md`).
-  - ⬜ Faltan **openai, elevenlabs**. ElevenLabs sale del mismo molde que Grok y es cuando toca
-    extraer el ciclo de vida del WebSocket a un paquete compartido; OpenAI realtime **no** encaja
-    en ese molde (necesita un mensaje de setup y tiene otro ciclo de vida).
-- **Fase 4 — la UI.** Portar `settings.ts` (1828 líneas) contra un payload de
-  bootstrap calculado en Go; i18n; onboarding; historial; permisos; About; logs.
-- **Fase 5 — empaquetado.** Firma, entitlements, la dylib de Azure en
-  `Contents/Frameworks` con `@rpath`, notarización, DMG.
+- **Phase 0 — foundations.** ✅ **DONE.** Azure spike verified; Wails v3 scaffold;
+  2 windows; tray with template/active icon; single instance; AppKit shim for the
+  non-activating overlay (verified: `layer=25`, on screen, without stealing focus);
+  `patch-plists.sh` for the usage descriptions.
+- **Phase 1 — real Azure Speech.** ✅ **DONE**, except real transcription (needs a key).
+  Provider in `internal/stt/azure`, `scripts/vendor-speech-sdk.sh` with a pinned sha256,
+  capture with malgo verified, `tokenService` with tests, `cmd/stt-probe`.
+- **Phase 2 — session and delivery.** ✅ **DONE** (blocked by signing, see risks).
+  `internal/session` complete with tests, `fn` hotkey, injection with a real `changeCount`,
+  focus guard through AX, history, settings + Keychain, all wired. Still missing the
+  non-`fn` global shortcut (see risk 2) and the first real transcription (needs a stable
+  signature + a key).
+- **Phase 3 — the remaining providers.** PARTIAL.
+  - ✅ `internal/stt/helper` — one provider for both local engines (same JSON line
+    protocol), with tests. `internal/permissions` — microphone + speech recognition.
+  - ✅ **whisper: works.** First real transcript verified 2026-07-28.
+  - ⛔ **macos (Apple SpeechAnalyzer): blocked, cause unknown.** See risk 6.
+  - ✅ **grok (xAI): implemented** 2026-07-28, `internal/stt/grok`. Real transcription is
+    still missing (needs an xAI key); everything else is verified against a local WebSocket
+    server, and the handshake rejection against the real service. **The event parsing was
+    not ported verbatim**: Electron's loses text (see `docs/plans/grok-stt-provider.md`).
+  - ⬜ **openai, elevenlabs** are missing. ElevenLabs comes out of the same mould as Grok
+    and that is when the WebSocket lifecycle should be extracted into a shared package;
+    OpenAI realtime does **not** fit that mould (it needs a setup message and has a
+    different lifecycle).
+- **Phase 4 — the UI.** Port `settings.ts` (1828 lines) against a bootstrap payload
+  computed in Go; i18n; onboarding; history; permissions; About; logs.
+- **Phase 5 — packaging.** Signing, entitlements, Azure's dylib in
+  `Contents/Frameworks` with `@rpath`, notarisation, DMG.
 
-## Lecciones del port (no re-introducir)
+## Lessons from the port (do not re-introduce)
 
-- **El mutex que Go necesita crea reentrada que JavaScript no tenía.** El
-  `SessionController` de Electron llamaba a `io.startEngine()` desde dentro de un método y
-  recibía el fallo del proveedor sincrónicamente de vuelta en `engineEvent()`. Sin lock eso
-  funciona; con lock es deadlock. **Regla: decidir bajo el lock, ejecutar efectos fuera.**
-- **macOS tiene filesystem case-insensitive.** `Loqui` y `loqui` son el mismo directorio
-  (verificado por inode), así que "le puse mayúscula para separarlo" no separa nada.
-- **Los cuelgues del port no dejan log.** Los dos bugs anteriores se encontraron con
-  `GOTRACEBACK=all` + `kill -QUIT`. Cuando algo se queda quieto, volcar goroutines es el
-  primer paso, no el último.
-- **`BackgroundType` no hace NADA en macOS.** Aparece cero veces en el código darwin de
-  Wails; la transparencia y la translucidez salen de `Mac.Backdrop`. El overlay quedó
-  dibujado sobre un rectángulo blanco opaco por esto, y **se veía perfectamente configurado
-  desde Go** — sólo los píxeles discrepaban. De ahí `macos.WindowOpacity`, que lee el estado
-  real del `NSWindow`: cuando la config y la pantalla pueden discrepar, hay que leer la
-  pantalla.
-- **Las rutas relativas no sirven en un `.app`.** Un app lanzado desde Finder tiene el cwd en
-  `/`, así que `helpers/bin/...` no resuelve a nada. Todo lookup de recurso pasa por
-  `app.HelperPath`, que mira primero dentro del bundle. Es el mismo error que los `-I`
-  relativos de cgo, en otro disfraz.
-- **Un watchdog de silencio se arma al PARAR, no desde la última salida.** Un helper no
-  imprime nada mientras escucha, así que medir desde su última línea gasta toda la gracia
-  antes de que el usuario suelte la tecla, y mata el flush que la gracia protegía.
-- **Los tests con procesos hijos necesitan esperas generosas.** Arrancar `sh` bajo un binario
-  de test enlazado con cgo puede tardar cientos de ms; un drain de 200 ms hizo fallar cuatro
-  tests contra código que funcionaba.
+- **The mutex Go needs creates reentrancy JavaScript did not have.** Electron's
+  `SessionController` called `io.startEngine()` from inside a method and received the
+  provider's failure synchronously back in `engineEvent()`. Without a lock that works; with
+  a lock it is a deadlock. **Rule: decide under the lock, run effects outside.**
+- **macOS has a case-insensitive filesystem.** `Loqui` and `loqui` are the same directory
+  (verified by inode), so "I capitalised it to separate them" separates nothing.
+- **The port's hangs leave no log.** The two previous bugs were found with
+  `GOTRACEBACK=all` + `kill -QUIT`. When something goes still, dumping goroutines is the
+  first step, not the last.
+- **`BackgroundType` does NOTHING on macOS.** It appears zero times in Wails' darwin code;
+  transparency and translucency come from `Mac.Backdrop`. The overlay ended up drawn over
+  an opaque white rectangle because of this, and it **looked perfectly configured from
+  Go** — only the pixels disagreed. Hence `macos.WindowOpacity`, which reads the real
+  `NSWindow` state: when the config and the screen can disagree, read the screen.
+- **Relative paths do not work in a `.app`.** An app launched from Finder has its cwd at
+  `/`, so `helpers/bin/...` resolves to nothing. Every resource lookup goes through
+  `app.HelperPath`, which looks inside the bundle first. It is the same mistake as cgo's
+  relative `-I` flags, in another disguise.
+- **A silence watchdog is armed on STOP, not from the last output.** A helper prints
+  nothing while it is listening, so measuring from its last line spends the whole grace
+  period before the user releases the key, and kills the flush that grace was protecting.
+- **Tests with child processes need generous waits.** Starting `sh` under a test binary
+  linked with cgo can take hundreds of ms; a 200 ms drain made four tests fail against code
+  that worked.
 
-## Riesgos abiertos
+## Open risks
 
-1. **Firma ad-hoc en desarrollo — CONFIRMADO Y PEOR DE LO ESPERADO.** No sólo revoca
-   Accesibilidad e Input Monitoring en cada build: **cuelga el Keychain**.
-   `SecItemCopyMatching` nunca retorna cuando macOS no reconoce el binario, porque quiere
-   pedir autorización y el prompt no se puede presentar. `GetKey` ahora tiene timeout de
-   3 s (`ErrKeychainTimeout`) para que falle diagnosticable en vez de congelarse, pero eso
-   no lo resuelve: **sin identidad estable la app no puede leer su propia clave, así que no
-   puede dictar.** Es el siguiente paso del proyecto, no un detalle de comodidad.
-2. **`triggerKey` ya no puede hablar de acceleradores de Electron.** El formato
-   (`"CommandOrControl+Shift+D"`) es de Electron y no hay `globalShortcut` en Go. Habrá
-   que elegir librería (`golang.design/x/hotkey`) o registrar un `NSEvent` global
-   monitor por cgo, y mapear el formato guardado. Los settings ya persistidos deben
-   seguir cargando.
-3. **Wails v3 es alpha.** La API puede moverse entre alphas. Fijar la versión en
-   `go.mod` y subirla deliberadamente.
-4. **Sin cross-compilación.** cgo obligatorio (Azure, AppKit, malgo) → el build de
-   macOS se hace en macOS. Ya era así por los helpers Swift.
-5. **El motor de Apple está bloqueado y no hay causa identificada.** Standalone llega a
-   `started`; lanzado desde el `.app` se detiene justo antes, tras elegir `es-CL`. No falla
-   —no emite `canceled`, no escribe a stderr— está bloqueado en un `await`. Micrófono y
-   reconocimiento de voz concedidos y no cambia. Los `await` candidatos son
-   `SpeechTranscriber.installedLocales`, `AssetInventory.assetInstallationRequest` y
-   `SpeechAnalyzer.bestAvailableAudioFormat`. **Siguiente paso: instrumentar el Swift con
-   prints entre cada await, o reintentar con firma estable. No inventar la causa.**
-6. **Dos warts de whisper, ninguno del pipeline.** `language` guarda el ajuste (`"auto"`) en
-   vez del idioma detectado, porque el helper no lo reporta aunque whisper.cpp lo sabe — el
-   proyecto Electron guarda lo mismo. Y el helper abre el **dispositivo por defecto de SDL**,
-   ignorando `inputDeviceId`, así que el selector de micrófono no le aplica.
-7. **La key de Azure está expuesta y pendiente de regenerar** (viene de `loqui`).
-   La transcripción real no se puede verificar hasta tener una nueva.
+1. **Ad-hoc signing in development — CONFIRMED AND WORSE THAN EXPECTED.** It does not just
+   revoke Accessibility and Input Monitoring on every build: **it hangs the Keychain.**
+   `SecItemCopyMatching` never returns when macOS does not recognise the binary, because it
+   wants to ask for authorisation and the prompt cannot be presented. `GetKey` now has a
+   3 s timeout (`ErrKeychainTimeout`) so it fails diagnosably instead of freezing, but that
+   does not resolve it: **without a stable identity the app cannot read its own key, so it
+   cannot dictate.** It is the project's next step, not a matter of convenience.
+2. **`triggerKey` can no longer talk about Electron accelerators.** The format
+   (`"CommandOrControl+Shift+D"`) is Electron's and there is no `globalShortcut` in Go. A
+   library will have to be chosen (`golang.design/x/hotkey`) or a global `NSEvent` monitor
+   registered through cgo, and the stored format mapped. Settings already persisted must
+   keep loading.
+3. **Wails v3 is alpha.** The API can move between alphas. Pin the version in `go.mod` and
+   raise it deliberately.
+4. **No cross-compilation.** cgo is mandatory (Azure, AppKit, malgo) → the macOS build is
+   done on macOS. That was already the case because of the Swift helpers.
+5. **Apple's engine is blocked and no cause has been identified.** Standalone it reaches
+   `started`; launched from the `.app` it stops just before, after choosing `es-CL`. It does
+   not fail —it emits no `canceled`, it writes nothing to stderr— it is blocked on an
+   `await`. Microphone and speech recognition are granted and it makes no difference. The
+   candidate `await`s are `SpeechTranscriber.installedLocales`,
+   `AssetInventory.assetInstallationRequest` and `SpeechAnalyzer.bestAvailableAudioFormat`.
+   **Next step: instrument the Swift with prints between each await, or retry with a stable
+   signature. Do not invent the cause.**
+6. **Two whisper warts, neither from the pipeline.** `language` stores the setting
+   (`"auto"`) instead of the detected language, because the helper does not report it even
+   though whisper.cpp knows it — the Electron project stores the same. And the helper opens
+   **SDL's default device**, ignoring `inputDeviceId`, so the microphone picker does not
+   apply to it.
+7. **The Azure key is exposed and pending regeneration** (it comes from `loqui`).
+   Real transcription cannot be verified until there is a new one.

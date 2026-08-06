@@ -4,145 +4,145 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
-## El motor que no puede dictar ya no se queda puesto — 2026-08-02
+## The engine that cannot dictate no longer stays selected — 2026-08-02
 
-- **Al arrancar, la app se mueve al motor por defecto (Whisper) si el activo no puede dictar**, y lo
-  dice: `✓ Azure no está listo para dictar: se cambió a Whisper`. Antes se quedaba en un motor sin
-  configurar y el fallo aparecía al pulsar el atajo, lejos de lo que lo causó. Lo mismo al borrar la
-  clave del motor en uso, que es el momento exacto en que deja de servir.
-- **Dos casos en los que NO se mueve, y son la mitad del arreglo:** si el Keychain no respondió, la
-  app no pudo COMPROBAR la clave — y en esta build eso es lo habitual, así que cambiar de motor sobre
-  un timeout de tres segundos le quitaría al usuario una configuración que funciona. Y si Whisper
-  tampoco puede funcionar (le falta su modelo, algo que el estado de conexión no conoce), no se
-  cambia: sustituir un fallo silencioso por otro no es un fallback.
-- **Ninguna frase sobrevive a la pantalla que describe.** La línea de estado del home era la única que
-  no pertenecía a ninguna acción, así que cambiar de motor desde un card de Conexiones dejaba
-  `✓ … se cambió a Whisper` bajo un selector que ya decía otra cosa. Ahora la limpia el siguiente
-  repintado. El precio, declarado: el aviso del chequeo desaparece en la siguiente acción del usuario
-  — preferible a que contradiga lo que hay en pantalla.
-- **Y el chequeo se calla si el mundo se mueve mientras decide.** Si mientras comprueba tu clave
-  terminas de pegarla, retira la frase y vuelve a decidir en vez de anunciar un problema que ya
-  arreglaste.
-- **El bloque de título del hero estaba 2 px bajo.** Flexbox centra la caja, y la tinta de ese bloque
-  no es simétrica: el título reserva interlínea arriba y el subtítulo espacio de descendentes abajo,
-  así que el par acababa alineado con el borde inferior del logo. Medido, no ajustado a ojo.
+- **At launch, the app moves to the default engine (Whisper) if the active one cannot dictate**, and
+  it says so: `✓ Azure no está listo para dictar: se cambió a Whisper`. Before, it stayed on an
+  unconfigured engine and the failure showed up when the shortcut was pressed, far from whatever
+  caused it. The same on deleting the key of the engine in use, which is the exact moment it stops
+  being usable.
+- **Two cases where it does NOT move, and they are half the fix:** if the Keychain did not answer,
+  the app could not CHECK the key — and on this build that is the common case, so switching engines
+  over a three-second timeout would take a working configuration away from the user. And if Whisper
+  cannot work either (its model is missing, something the connection state knows nothing about), it
+  does not switch: replacing one silent failure with another is not a fallback.
+- **No sentence outlives the screen it describes.** The home status line was the only one that
+  belonged to no action, so switching engines from a Connections card left
+  `✓ … se cambió a Whisper` under a picker that already said something else. The next repaint now
+  clears it. The price, declared: the check's notice disappears on the user's next action — better
+  than contradicting what is on screen.
+- **And the check goes quiet if the world moves while it decides.** If you finish pasting your key
+  while it is checking it, it withdraws the sentence and decides again instead of announcing a
+  problem you have already fixed.
+- **The hero's title block sat 2 px low.** Flexbox centres the box, and that block's ink is not
+  symmetric: the title reserves leading above and the subtitle descender space below, so the pair
+  ended up aligned with the logo's bottom edge. Measured, not eyeballed.
 
-## Las acciones del card de conexión: decir lo que pasa — 2026-08-01
+## The connection card's actions: saying what happens — 2026-08-01
 
-- **"Probar conexión" existe por fin.** `azure.TestConnection` llevaba desde el port escrita y
-  testeada sin que nadie la llamara: ahora hay método bindeado (`Settings.TestConnection`) y handler.
-  Valida región y clave antes de salir a la red, distingue los tres resultados de una lectura de
-  Keychain, y solo acepta slots que de verdad tienen prueba — `IsAvailableKeySlot` es true para Grok,
-  y usarla habría mandado una clave de Grok al endpoint de Azure.
-- **Un éxito se dice.** Los setters devuelven `Notice` además de `Error`, y la página pinta
-  `✓`/`✗` con las clases que la CSS ya tenía. Antes el `…` se sustituía por una cadena vacía, así que
-  un guardado correcto y un clic perdido se veían igual — y **"Borrar clave" destruyó una credencial
-  en silencio** durante la validación. El aviso de borrado es una postcondición ("La clave ya no está
-  guardada"), porque borrar un slot vacío también es éxito.
-- **Un botón apagado se ve apagado** (`button.btn:disabled`), y la validación señala el input que
-  falta con borde rojo, desde el campo `Field` que decide Go. El mensaje ocupa su propia línea encima
-  de los botones: al lado quedaba en una columna de 60 px partiendo palabras.
-- **"Usar este motor" solo se habilita con la conexión guardada**, y "Borrar clave" solo con una
-  clave que exista. Los motores locales (`available`) siguen habilitados: no llevan credencial.
-- **Los repintados se ordenan.** `SettingsPayload.Revision` los sella al empezar a construirse, y la
-  página descarta el que llegue con revisión menor: varios productores repintan la ventana entera sin
-  encolarse entre sí, así que el último en llegar no es el más nuevo.
-- **Arreglado de paso, encontrado por este trabajo:** el tutorial comparaba el estado de la clave con
-  `"configured"`, valor que no existe, así que a quien ya tenía clave se le decía "Pega tu clave"; y
-  `TestUnportedProviderIsReported` usaba ElevenLabs, que ya está portado, pasando por la razón
-  equivocada. Ver `docs/solutions/el-exito-silencioso-es-un-bug.md`.
+- **"Test connection" finally exists.** `azure.TestConnection` had been written and tested since the
+  port with nobody calling it: there is now a bound method (`Settings.TestConnection`) and a handler.
+  It validates region and key before going to the network, distinguishes the three outcomes of a
+  Keychain read, and only accepts slots that really have a test — `IsAvailableKeySlot` is true for
+  Grok, and using it would have sent a Grok key to the Azure endpoint.
+- **A success is stated.** The setters return `Notice` as well as `Error`, and the page paints
+  `✓`/`✗` with the classes the CSS already had. Before, the `…` was replaced by an empty string, so a
+  correct save and a lost click looked identical — and **"Delete key" destroyed a credential in
+  silence** during validation. The deletion notice is a postcondition ("La clave ya no está
+  guardada"), because deleting an empty slot is also a success.
+- **A disabled button looks disabled** (`button.btn:disabled`), and validation points at the missing
+  input with a red border, from the `Field` value Go decides. The message takes its own line above
+  the buttons: beside them it sat in a 60 px column breaking words apart.
+- **"Use this engine" is only enabled with the connection saved**, and "Delete key" only with a key
+  that exists. Local engines (`available`) stay enabled: they carry no credential.
+- **Repaints are ordered.** `SettingsPayload.Revision` stamps them as they start being built, and the
+  page discards any arriving with a lower revision: several producers repaint the whole window
+  without queueing against each other, so the last to arrive is not the newest.
+- **Fixed along the way, found by this work:** the tutorial compared the key state against
+  `"configured"`, a value that does not exist, so anyone who already had a key was told "Paste your
+  key"; and `TestUnportedProviderIsReported` used ElevenLabs, which is already ported, passing for
+  the wrong reason. See `docs/solutions/silent-success-is-a-bug.md`.
 
-## Fidelidad al maquetado original, y la UI que no respondía — 2026-07-29
+## Fidelity to the original layout, and the UI that did not respond — 2026-07-29
 
-- **La navegación del sidebar no estaba cableada**, y como todos los controles de Ajustes viven dentro
-  de esa vista, la app no respondía a nada. Cableadas también las pestañas de Ajustes, el botón de
-  grabar y los enlaces del pie.
-- **Historial** portado fiel: filas `.hrow` con expandir y copiar, el chevron sólo donde el texto está
-  cortado, estados vacíos con sus dos variantes, y actividad reciente con tiempo relativo. La CSS
-  heredada espera esas clases; un primer intento inventó otras y las filas salían sin estilo.
-- **Conexiones** con el modelo real portado (`connectionStatus.ts`): cinco estados, Azure como dos
-  servicios con dos keys y dos campos requeridos, y `unsupported` por plataforma/OS/helper.
-- **Selectores de idioma** por capacidad: chips con una-locale-por-idioma-base para Azure, locales
-  completos para Apple, base + "Detección automática" para los de hint opcional.
-- **Pestaña Sistema**: atajo con captura de teclas, apariencia (que necesitó cgo porque Wails sólo la
-  aplica al construir la ventana), modo, dispositivo e idioma de interfaz.
-- **Pestaña Permisos** con estado de tres vías: lo que macOS no deja consultar es "sin verificar", no
-  "falta".
-- **Los medidores de audio no medían nada con los motores locales** — los helpers abren el micrófono
-  ellos mismos, así que Go nunca veía niveles. Ahora whisper los reporta. Y el pulso de reposo, que
-  parecía habla continua, se sustituyó por una línea plana: tres estados distinguibles y ninguno que
-  afirme audio inexistente.
-- **La píldora**: sombra recortada contra el borde de la ventana, luego un halo demasiado fuerte sobre
-  fondo claro, y el borde de medio píxel fuera.
-
-
-## La app se configura desde la interfaz (fase 4) — 2026-07-28
-
-- Setters en el servicio de Ajustes (`SetProvider`, `SetRegion`, `SetKey`, `DeleteKey`,
-  `SaveConnection`) y el DOM del selector de motor, los campos de key y el dropdown de regiones.
-  Cierra el lazo: hasta ahora había que editar `settings.json` a mano para probar un proveedor.
-- Los setters devuelven `WriteResult{payload, error}` y **no** un error de Go: Wails descarta el
-  resultado de un método que además devuelve error, y la página necesita el payload justo cuando la
-  escritura falla.
-- **Keychain:** la escritura y el borrado ya están acotados (colgaban la ventana), el reemplazo usa
-  `SecItemUpdate` en vez de delete-then-add (perdía la key vieja si el add fallaba) y las
-  operaciones se serializan por slot.
-- **Guardar ya no borra ajustes:** `Settings` es un subconjunto declarado del modelo y Ajustes
-  reescribe el archivo entero, así que la escritura fusiona sobre el JSON crudo. Un `settings.json`
-  con `null` hacía panic en todas las escrituras.
-- **Azure:** elegir el subservicio OpenAI y guardar sobrescribía la credencial de Speech, y un
-  guardado de sólo región podía mover el endpoint en vivo. Ambas cerradas en backend y UI.
-- Los motores no portados ya no son seleccionables, con un test de contrato que falla si la lista de
-  disponibles y el switch de `buildProvider` divergen.
-- `logging.go` redacta los argumentos de los bindings: Wails los loguea y uno recibe una API key.
+- **The sidebar navigation was not wired**, and since every Settings control lives inside that view,
+  the app responded to nothing. Also wired: the Settings tabs, the record button and the footer
+  links.
+- **History** ported faithfully: `.hrow` rows with expand and copy, the chevron only where the text
+  is truncated, empty states in both variants, and recent activity with relative time. The inherited
+  CSS expects those classes; a first attempt invented others and the rows came out unstyled.
+- **Connections** with the real model ported (`connectionStatus.ts`): five states, Azure as two
+  services with two keys and two required fields, and `unsupported` by platform/OS/helper.
+- **Language pickers** by capability: chips with one-locale-per-base-language for Azure, full locales
+  for Apple, base + "Automatic detection" for those with an optional hint.
+- **System tab**: shortcut with key capture, appearance (which needed cgo because Wails only applies
+  it when constructing the window), mode, device and interface language.
+- **Permissions tab** with three-way state: what macOS does not allow querying is "unverified", not
+  "missing".
+- **The audio meters measured nothing with the local engines** — the helpers open the microphone
+  themselves, so Go never saw levels. Whisper now reports them. And the idle pulse, which looked like
+  continuous speech, was replaced with a flat line: three distinguishable states and none of them
+  claiming audio that does not exist.
+- **The pill**: shadow clipped against the window edge, then a halo too strong on a light background,
+  and the half-pixel border removed.
 
 
-## Payload de bootstrap de Ajustes (fase 4) — 2026-07-28
+## The app can be configured from the interface (phase 4) — 2026-07-28
 
-- `Settings.Load()`, un servicio Wails que devuelve en **una** llamada todo lo que la página de
-  Ajustes necesita para pintarse. Hasta ahora la app **no se podía configurar por la interfaz**:
-  había que editar `settings.json` a mano y pasar las keys por variable de entorno.
-- La presencia de keys pasa a **tres estados** (`store.KeyStatus`: present / absent /
-  unreadable). `HasKey` colapsaba `ErrKeychainTimeout` en `false`, así que en un build ad-hoc un
-  slot que sí tenía key se reportaba vacío — y eso manda al usuario a reescribir una credencial
-  que ya estaba ahí.
-- Los slots resueltos por `LOQUI_*_KEY` no se consultan y los demás se leen en paralelo: en serie
-  eran 15s (5 × 3s de timeout) con la página en blanco.
-- Idiomas normalizados por slot (`store.AllLanguageSlots`, `store.LanguagesIn`). Cuatro slots de
-  nube caían al último recurso `en-US`, que fija un motor de nube a inglés en vez de dejarlo
-  autodetectar.
-- `.task/` deja de estar trackeado: es caché de Taskfile.
+- Setters in the Settings service (`SetProvider`, `SetRegion`, `SetKey`, `DeleteKey`,
+  `SaveConnection`) and the DOM for the engine picker, the key fields and the regions dropdown.
+  It closes the loop: until now you had to edit `settings.json` by hand to try a provider.
+- The setters return `WriteResult{payload, error}` and **not** a Go error: Wails discards the result
+  of a method that also returns an error, and the page needs the payload exactly when the write
+  fails.
+- **Keychain:** writing and deleting are now bounded (they used to hang the window), replacement uses
+  `SecItemUpdate` instead of delete-then-add (which lost the old key if the add failed) and
+  operations are serialised per slot.
+- **Saving no longer deletes settings:** `Settings` is a declared subset of the model and Settings
+  rewrites the whole file, so the write merges over the raw JSON. A `settings.json` with `null` made
+  every write panic.
+- **Azure:** choosing the OpenAI subservice and saving overwrote the Speech credential, and a
+  region-only save could move the live endpoint. Both closed in backend and UI.
+- Unported engines are no longer selectable, with a contract test that fails if the available list
+  and `buildProvider`'s switch diverge.
+- `logging.go` redacts binding arguments: Wails logs them and you end up with an API key in the log.
+
+
+## Settings bootstrap payload (phase 4) — 2026-07-28
+
+- `Settings.Load()`, a Wails service that returns in **one** call everything the Settings page needs
+  to paint itself. Until now the app **could not be configured through the interface**: you had to
+  edit `settings.json` by hand and pass keys through environment variables.
+- Key presence becomes **three states** (`store.KeyStatus`: present / absent / unreadable).
+  `HasKey` collapsed `ErrKeychainTimeout` into `false`, so on an ad-hoc build a slot that did have a
+  key was reported empty — and that sends the user off to retype a credential that was already
+  there.
+- Slots resolved by `LOQUI_*_KEY` are not queried and the rest are read in parallel: in series it was
+  15s (5 × 3s of timeout) with the page blank.
+- Languages normalised per slot (`store.AllLanguageSlots`, `store.LanguagesIn`). Four cloud slots
+  fell through to the `en-US` last resort, which pins a cloud engine to English instead of letting it
+  auto-detect.
+- `.task/` stops being tracked: it is Taskfile cache.
 
 
 ## Unreleased
 
-### Proveedor Grok (xAI) STT — fase 3 del port
+### Grok (xAI) STT provider — phase 3 of the port
 
-- **`internal/stt/grok`**: proveedor de dictado por streaming contra `wss://api.x.ai/v1/stt`,
-  sobre el contrato `stt.Provider`. Frames PCM16 binarios, auth por header, `audio.done` para
-  cerrar. Cableado en `buildProvider` y disponible en `cmd/stt-probe -provider grok`.
-- **No se portó el parseo de eventos de Electron verbatim, porque pierde el texto.**
-  `grokStt.ts` toma el final sólo de `transcript.done`, e ignora las banderas `is_final` /
-  `speech_final`. El ejemplo oficial de `transcript.done` trae `text: ""` tras 6.43 s de audio
-  ⇒ ese mapeo puede entregar un dictado **vacío**. El proveedor ahora ensambla una línea de
-  tiempo de palabras y emite **un** final al terminar, lo que además absorbe los re-envíos
-  "stitched" y las correcciones del servidor sin duplicar. Dos reglas de reemplazo, según lo que
-  el protocolo dice de cada evento: un final de trozo es **incremental** (por palabra), mientras
-  que un final de enunciado (`speech_final`) y `transcript.done` son **autoritativos** para su
-  tramo — que es lo que permite que una retractación borre de verdad.
-- **Los docs de xAI están mal sobre el fallo de auth**: una key inválida devuelve **400**, no el
-  401 documentado. Se lee el cuerpo del rechazo para reportarlo como problema de key en vez de
-  "petición inválida". Verificado contra el servicio real.
-- **Escotilla de Keychain por proveedor**: `keyReaderFor` era Azure-only, así que una key de otro
-  proveedor se ignoraba en silencio. Ahora hay una variable por slot (`LOQUI_GROK_KEY`, …) y una
-  no satisface la lectura de otra.
-- `store.DefaultSettings()` gana el slot de idioma `grok` (`auto`), y `store.NewAt` para que los
-  tests de otros paquetes no escriban en `~/Library/Application Support`.
-- Diseño, alternativas y las cuatro rondas de revisión: `docs/plans/grok-stt-provider.md`.
-  Verificación de la API: `docs/research/2026-07-28-xai-stt-streaming.md`. La lección
-  transferible a los dos proveedores que faltan:
-  `docs/solutions/no-portar-proveedores-stt-verbatim.md`.
-- **Pendiente**: transcripción real (necesita una key de xAI). Y la revisión destapó **dos bugs
-  preexistentes** en `internal/session` + `internal/app` que afectan a Azure hoy — presupuesto de
-  reintentos que no acota si la conexión llega a abrir, y fuga de la captura en la reconexión.
-  Documentados al final del plan; van en su propio cambio.
+- **`internal/stt/grok`**: streaming dictation provider against `wss://api.x.ai/v1/stt`, over the
+  `stt.Provider` contract. Binary PCM16 frames, header auth, `audio.done` to close. Wired into
+  `buildProvider` and available as `cmd/stt-probe -provider grok`.
+- **Electron's event parsing was NOT ported verbatim, because it loses text.**
+  `grokStt.ts` takes the final only from `transcript.done`, and ignores the `is_final` /
+  `speech_final` flags. The official `transcript.done` example carries `text: ""` after 6.43 s of
+  audio ⇒ that mapping can deliver an **empty** dictation. The provider now assembles a word
+  timeline and emits **one** final when it ends, which also absorbs "stitched" resends and server
+  corrections without duplicating. Two replacement rules, according to what the protocol says about
+  each event: a chunk final is **incremental** (per word), while an utterance final (`speech_final`)
+  and `transcript.done` are **authoritative** for their span — which is what lets a retraction
+  actually erase.
+- **xAI's docs are wrong about the auth failure**: an invalid key returns **400**, not the documented
+  401. The rejection body is read so it can be reported as a key problem rather than "invalid
+  request". Verified against the real service.
+- **Per-provider Keychain escape hatch**: `keyReaderFor` was Azure-only, so another provider's key
+  was silently ignored. There is now one variable per slot (`LOQUI_GROK_KEY`, …) and one does not
+  satisfy another's read.
+- `store.DefaultSettings()` gains the `grok` language slot (`auto`), and `store.NewAt` so that other
+  packages' tests do not write into `~/Library/Application Support`.
+- Design, alternatives and the four review rounds: `docs/plans/grok-stt-provider.md`.
+  API verification: `docs/research/2026-07-28-xai-stt-streaming.md`. The lesson transferable to the
+  two remaining providers: `docs/solutions/do-not-port-stt-providers-verbatim.md`.
+- **Outstanding**: real transcription (needs an xAI key). And the review uncovered **two pre-existing
+  bugs** in `internal/session` + `internal/app` that affect Azure today — a retry budget that does
+  not bound anything if the connection does open, and a capture leak on reconnection. Documented at
+  the end of the plan; they go in their own change.

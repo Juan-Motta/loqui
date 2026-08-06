@@ -3,142 +3,142 @@
 > The first thing to read on a new session (auto-loaded via `CLAUDE.md` / `AGENTS.md`).
 > Keep it current and SMALL; refresh it with the `checkpoint` skill before closing a session.
 
-- **Focus:** port de **Loqui** (Electron/TS, en `../loqui`) a **Go + Wails v3**, sólo macOS arm64.
-  Fases 0-3 hechas salvo dos proveedores. **Fase 4 (la UI) casi cerrada:** la app se navega, se
-  configura y se usa. El usuario la probó y dice que "se ve bien todo"; quedan detalles menores de
-  UI que él pulirá.
+- **Focus:** port of **Loqui** (Electron/TS, in `../loqui`) to **Go + Wails v3**, macOS arm64 only.
+  Phases 0-3 done except two providers. **Phase 4 (the UI) nearly closed:** the app can be
+  navigated, configured and used. The user tried it and says "it all looks good"; some minor UI
+  details are left, which he will polish himself.
 
-- **Next step:** **portar "Probar conexión" a OpenAI, Grok y ElevenLabs** — pedido por el usuario el
-  2026-08-01 y declarado fuera del cambio anterior. Los tres son WebSocket con handshakes distintos
-  (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
-  `wss://api.elevenlabs.io/v1/speech-to-text/realtime`), así que no comparten prueba con el
-  intercambio de token HTTP de Azure: cada uno necesita la suya, reusando el dial de su paquete. El
-  molde está en `internal/app/settings_probe.go` (allowlist `slotsWithProbe`, preflight antes de la
-  red, tres resultados distintos de la lectura de credencial) y el card ya tiene el botón cableado.
-  **Falta también verificar el camino verde de Azure**: `✓ Conexión correcta` no se ha ejecutado
-  nunca porque no hay clave válida en la máquina — la borró el propio bug (ver abajo).
+- **Next step:** **port "Test connection" to OpenAI, Grok and ElevenLabs** — asked for by the user on
+  2026-08-01 and declared out of scope for the previous change. All three are WebSocket with
+  different handshakes (`wss://api.openai.com/v1/realtime`, `wss://api.x.ai/v1/stt`,
+  `wss://api.elevenlabs.io/v1/speech-to-text/realtime`), so they do not share a test with Azure's
+  HTTP token exchange: each needs its own, reusing the dial from its package. The mould is in
+  `internal/app/settings_probe.go` (the `slotsWithProbe` allowlist, preflight before the network,
+  three distinct outcomes from reading the credential) and the card already has the button wired.
+  **The green path for Azure still needs verifying too**: `✓ Conexión correcta` has never been
+  executed because there is no valid key on the machine — the bug itself deleted it (see below).
 
-- **Después:** **portar la fila del modelo de whisper**, lo único que falta del encargo de
-  fidelidad (el trabajo de la sesión anterior ya está mergeado en `main`, hasta `a83b2f5`). Empezar
-     por el test rojo de `modelSpec` en Go: portar `../loqui/src/shared/modelSpec.ts` a
-     `internal/store/model.go` (nombre del archivo, tamaño esperado, URL de descarga) con tests, y
-     sólo después el servicio de descarga con progreso y el DOM de `renderModelInto` en `#modelRow`.
-     Es **load-bearing**: sin `ggml-small.bin` whisper no arranca, y hoy sólo existe bajarlo con
-     `./scripts/build-whisper-stt.sh`.
+- **After that:** **port the whisper model row**, the only thing left from the fidelity assignment
+  (the previous session's work is already merged into `main`, up to `a83b2f5`). Start with the red
+  `modelSpec` test in Go: port `../loqui/src/shared/modelSpec.ts` to `internal/store/model.go`
+  (file name, expected size, download URL) with tests, and only then the download service with
+  progress and the DOM of `renderModelInto` in `#modelRow`. It is **load-bearing**: without
+  `ggml-small.bin` whisper does not start, and today the only way to get it is
+  `./scripts/build-whisper-stt.sh`.
 
 - **Blockers:**
-  1. **Sin remoto.** `git remote -v` vacío: no hay copia fuera de esta máquina. El usuario dijo que
-     lo configura después. Cuando toque: el module path dice `github.com/Juan-Motta/loqui-go` pero
-     `gh` está autenticado como `Juan-Andres-LM`, y crear el repo publicaría el código → hace falta
-     elegir owner + público/privado.
-  2. **Firma ad-hoc.** Implicada en tres síntomas: el Keychain no responde (de ahí las escotillas
-     `LOQUI_*_KEY`), los permisos se revocan en cada rebuild, y probablemente el motor de Apple.
-     Arreglarla haría desaparecer también el residuo declarado del Keychain. Decisión pendiente:
-     self-signed fijo vs Developer ID.
-  3. **Keys de nube.** La de Azure está marcada como expuesta; de xAI no hay ninguna. Sin ellas no
-     se verifica transcripción real por esas rutas.
+  1. **No remote.** `git remote -v` is empty: there is no copy off this machine. The user said he
+     would set it up later. When the time comes: the module path says
+     `github.com/Juan-Motta/loqui-go` but `gh` is authenticated as `Juan-Andres-LM`, and creating
+     the repo would publish the code → an owner and public/private have to be chosen.
+  2. **Ad-hoc signing.** Implicated in three symptoms: the Keychain does not answer (hence the
+     `LOQUI_*_KEY` escape hatches), permissions are revoked on every rebuild, and probably Apple's
+     engine. Fixing it would also make the declared Keychain residual disappear. Pending decision:
+     a fixed self-signed identity vs a Developer ID.
+  3. **Cloud keys.** The Azure one is marked as exposed; there is no xAI one at all. Without them,
+     real transcription through those routes cannot be verified.
 
-- **El bug de anoche borró la clave de Azure del usuario.** "Borrar clave" funcionaba y no decía
-  nada, así que la credencial desapareció del Keychain sin aviso. Ya está arreglado (el card habla
-  ahora), pero **el slot `azure-speech` está vacío**: cualquier verificación del camino verde necesita
-  que el usuario pegue una clave nueva.
+- **Last night's bug deleted the user's Azure key.** "Delete key" worked and said nothing, so the
+  credential vanished from the Keychain without a word. It is fixed now (the card speaks), but **the
+  `azure-speech` slot is empty**: any verification of the green path needs the user to paste a new
+  key.
 
-- **Deuda, sin dueño: el frontend no comprueba tipos.** `typescript@^4.9.3` contra un `tsconfig.json`
-  con opciones de TS5, así que `tsc` no puede leer la config y vite borra los tipos sin validarlos.
-  Ya se escribieron ~1500 líneas de TS sin red. **Subir typescript antes de escribir más.**
+- **Debt, unowned: the frontend does not type-check.** `typescript@^4.9.3` against a `tsconfig.json`
+  with TS5 options, so `tsc` cannot read the config and vite strips the types without validating
+  them. Around 1500 lines of TS have already been written with no safety net. **Upgrade typescript
+  before writing more.**
 
-- **Deuda conocida, con dueño:** dos bugs preexistentes en `internal/session` que afectan a Azure
-  **hoy** — el presupuesto de reintentos no acota nada si la conexión abre (bucle de gasto contra un
-  servicio que factura por hora) y la reconexión filtra la captura anterior. Con `file:line` al final
-  de `docs/plans/grok-stt-provider.md`. Van en su propio cambio.
+- **Known debt, owned:** two pre-existing bugs in `internal/session` that affect Azure **today** —
+  the retry budget bounds nothing if the connection opens (a spend loop against a service that bills
+  by the hour) and reconnection leaks the previous capture. With `file:line` at the end of
+  `docs/plans/grok-stt-provider.md`. They go in their own change.
 
-- **Active workflow:** ninguno. El último cerrado (los setters de Ajustes) está en
-  `.workflow/state.md` — **gitignored**, así que un clon nuevo no lo tiene.
+- **Active workflow:** none. The last one closed (the Settings setters) is in `.workflow/state.md` —
+  **gitignored**, so a fresh clone does not have it.
 - **Updated:** 2026-08-01
 
 ## Handoff notes
 
-1. **La UI funciona y está portada FIEL al maquetado original.** `frontend/index.html` sigue siendo
-   el markup de Electron casi verbatim, y la CSS es la suya — por eso **lo que la página emite tiene
-   que coincidir con las clases que esa CSS espera**. Un primer intento inventó `.hist-item`/
-   `.hist-meta` y produjo filas sin estilo. Portado ya, con sus clases: Historial (`.hrow`, expandir,
-   copiar, estados vacíos), Conexiones (`.conn-state` con el estado COMO CLASE, que es lo que colorea
-   el punto), idiomas (chips/select según capacidad), Sistema (atajo, apariencia, modo, dispositivo) y
-   Permisos (`.prow` con estado de tres vías).
+1. **The UI works and is ported FAITHFULLY to the original layout.** `frontend/index.html` is still
+   the Electron markup almost verbatim, and the CSS is its own — which is why **what the page emits
+   has to match the classes that CSS expects**. A first attempt invented `.hist-item`/`.hist-meta`
+   and produced unstyled rows. Now ported, with their classes: History (`.hrow`, expand, copy, empty
+   states), Connections (`.conn-state` with the state AS A CLASS, which is what colours the dot),
+   languages (chips/select depending on capability), System (shortcut, appearance, mode, device) and
+   Permissions (`.prow` with three-way state).
 
-   Los módulos TS están partidos por vista: `settings.ts` (shell + conexiones), `history.ts`,
-   `language.ts`, `system.ts`, `permissions.ts`. Las **reglas** viven todas en Go
+   The TS modules are split per view: `settings.ts` (shell + connections), `history.ts`,
+   `language.ts`, `system.ts`, `permissions.ts`. The **rules** all live in Go
    (`internal/store/{connection,language,language_catalog,trigger}.go`,
-   `internal/app/permission_rows.go`) con tests; la página no decide nada.
+   `internal/app/permission_rows.go`) with tests; the page decides nothing.
 
-2. **Tres cosas que "sólo persistir" NO cubre, y que ya morderon una vez cada una.** Cualquier
-   ajuste nuevo tiene que comprobarlas:
-   - **El modo** se lee una vez al construir el motor → hay que empujarlo al controlador vivo
+2. **Three things that "just persist it" does NOT cover, and each has already bitten once.** Any new
+   setting has to check them:
+   - **The mode** is read once when the engine is built → it has to be pushed to the live controller
      (`LiveHooks.ModeChanged`).
-   - **El atajo** vive en un proceso hijo lanzado al arrancar → hay que reiniciar el listener
-     (`LiveHooks.TriggerChanged`), o el nuevo queda guardado y el viejo sigue funcionando.
-   - **La apariencia** la aplica Wails una sola vez y no expone cómo cambiarla → cgo en
+   - **The shortcut** lives in a child process launched at startup → the listener has to be
+     restarted (`LiveHooks.TriggerChanged`), or the new one is saved and the old one keeps working.
+   - **The appearance** is applied by Wails exactly once and it exposes no way to change it → cgo in
      `internal/macos/appearance_darwin.go`.
 
-   Y los hooks se pasan en el **constructor**, no por métodos: Wails bindea todos los métodos
-   exportados de un servicio al webview.
+   And the hooks are passed in the **constructor**, not through methods: Wails binds every exported
+   method of a service to the webview.
 
-3. **Para probar la UI sin ratón** — un `<select>` dentro de un webview de Wails no se puede clicar
-   desde un script, así que hay sondas por variable de entorno, todas gateadas:
-   `LOQUI_DEBUG_NAVIGATE=<vista>`, `LOQUI_DEBUG_RECORD_CLICK=1`, `LOQUI_DEBUG_SET_PROVIDER=<motor>`,
-   `LOQUI_DEBUG_APPEARANCE=<modo>`, `LOQUI_DEBUG_HISTORY_EVENT=1`, `LOQUI_DEBUG_OVERLAY=1`,
-   `LOQUI_DEBUG_DICTATE=<segundos>`. Cada una reporta al log de Go (`UI-NAV`, `CONN`, `LANG`, `SYS`,
-   `PERMS`, `HIST-SHAPE`…), **nunca texto de transcripciones**. `./scripts/capture-overlay.sh` captura
-   la píldora a resolución nativa.
+3. **To test the UI without a mouse** — a `<select>` inside a Wails webview cannot be clicked from a
+   script, so there are environment-variable probes, all gated:
+   `LOQUI_DEBUG_NAVIGATE=<view>`, `LOQUI_DEBUG_RECORD_CLICK=1`, `LOQUI_DEBUG_SET_PROVIDER=<engine>`,
+   `LOQUI_DEBUG_APPEARANCE=<mode>`, `LOQUI_DEBUG_HISTORY_EVENT=1`, `LOQUI_DEBUG_OVERLAY=1`,
+   `LOQUI_DEBUG_DICTATE=<seconds>`. Each reports to the Go log (`UI-NAV`, `CONN`, `LANG`, `SYS`,
+   `PERMS`, `HIST-SHAPE`…), **never transcription text**. `./scripts/capture-overlay.sh` captures the
+   pill at native resolution.
 
-4. **Un test en verde no prueba que pruebe algo.** En esta sesión **cuatro** tests propios no
-   probaban lo que su nombre decía, y los cuatro los encontró **mutar el código de producción**, no
-   la suite: uno metía el secreto en un seam que la función nunca llamaba, uno comprobaba sólo "no
-   vacío" y bendijo un default incorrecto, uno aceptaba cualquier error donde dos comprobaciones se
-   solapaban, y uno afirmaba sobre un código presente en las dos listas que debía distinguir.
-   **Verificar cada test nuevo rompiendo a propósito lo que dice cubrir.**
+4. **A passing test does not prove it tests anything.** In this session **four** of my own tests did
+   not test what their names claimed, and all four were found by **mutating the production code**,
+   not by the suite: one put the secret in a seam the function never called, one checked only "not
+   empty" and blessed an incorrect default, one accepted any error where two checks overlapped, and
+   one asserted on a code present in both of the lists it was supposed to distinguish. **Verify every
+   new test by deliberately breaking what it says it covers.**
 
-5. **Lo que sigue inerte** (medido, no de memoria): la fila del modelo (`#modelRow`), el `#save` de
-   Sistema — que puede ser redundante por diseño, porque
-   aquí cada control ya persiste al cambiar —, `#engineHint`, los campos de subservicios sin portar
-   (`azureOpenAiResource`, `azureOpenAiDeployment`, `openaiModel`), los enlaces del pie
-   (`#openDonate`, `#openTutorial`), las vistas **About** y **reporte**, y los 17 elementos `wiz*`
-   del **onboarding**.
+5. **What is still inert** (measured, not from memory): the model row (`#modelRow`), System's
+   `#save` — which may be redundant by design, because here every control already persists on
+   change —, `#engineHint`, the fields for unported subservices (`azureOpenAiResource`,
+   `azureOpenAiDeployment`, `openaiModel`), the footer links (`#openDonate`, `#openTutorial`), the
+   **About** and **report** views, and the 17 `wiz*` elements of the **onboarding**.
 
-6. **Leer el README antes de correr nada.** Dos trampas de entorno: `go` a secas no compila (los
-   flags de cgo del Speech SDK salen del entorno → `./scripts/go.sh`) y `wails3` no está en el PATH
-   (→ `./scripts/task.sh`). Al añadir campos o métodos a un servicio hay que **regenerar bindings**:
-   `./scripts/task.sh common:generate:bindings` (la tarea `generate:bindings` a secas no existe;
-   `package` ya la corre).
+6. **Read the README before running anything.** Two environment traps: bare `go` does not compile
+   (the Speech SDK's cgo flags come from the environment → `./scripts/go.sh`) and `wails3` is not on
+   the PATH (→ `./scripts/task.sh`). When adding fields or methods to a service, **regenerate the
+   bindings**: `./scripts/task.sh common:generate:bindings` (a bare `generate:bindings` task does not
+   exist; `package` already runs it).
 
-## Estado del código
+## State of the code
 
-Trece paquetes de tests en verde con `-race -count=1` (`./scripts/task.sh test`), `vet` y `gofmt`
-limpios. Cinco servicios Wails: `Settings`, `History`, `Clipboard`, `Dictation`, `Permissions`.
+Thirteen test packages green with `-race -count=1` (`./scripts/task.sh test`), `vet` and `gofmt`
+clean. Five Wails services: `Settings`, `History`, `Clipboard`, `Dictation`, `Permissions`.
 
-- `main.go`, `wiring.go` — app Wails: 2 ventanas, tray, hotkey `fn`, permisos, y los `LiveHooks` que
-  conectan los ajustes con el motor y el listener en marcha. El **store se abre en `main`** y se
-  comparte con el motor.
-- `internal/app` — el payload de Ajustes (`bootstrap.go`), los setters (`settings_write.go`), y los
-  servicios de historial, portapapeles, dictado y permisos. Todos los setters devuelven
-  `WriteResult{payload, error}` y **no** un error de Go: Wails descarta el resultado de un método que
-  también devuelve error, y la página necesita el payload precisamente cuando falla.
-- `internal/store` — persistencia **y** las reglas portadas de los módulos puros de Electron:
-  conexiones, capacidad de idioma, catálogo, atajo. `UpdateSettings` es transaccional; nunca
+- `main.go`, `wiring.go` — the Wails app: 2 windows, tray, `fn` hotkey, permissions, and the
+  `LiveHooks` that connect settings to the running engine and listener. The **store is opened in
+  `main`** and shared with the engine.
+- `internal/app` — the Settings payload (`bootstrap.go`), the setters (`settings_write.go`), and the
+  history, clipboard, dictation and permissions services. Every setter returns
+  `WriteResult{payload, error}` and **not** a Go error: Wails discards the result of a method that
+  also returns an error, and the page needs the payload precisely when it fails.
+- `internal/store` — persistence **and** the rules ported from Electron's pure modules: connections,
+  language capability, catalogue, shortcut. `UpdateSettings` is transactional; never
   Load-then-Save.
-- `internal/session` — el controlador de dictado (decisiones puras, suite portada de Electron).
-- `internal/stt` — contrato sin red. `azure` (llega al 401 real), `helper` (whisper ✅ y ahora
-  **reporta niveles de micrófono**, Apple ⛔), `grok` (✅ 71 tests).
-- `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — captura, paste,
-  historial + filtro, protocolo `fn`, TCC, glue AppKit, validación de región.
-- `frontend/` — `index.html` markup de Electron casi verbatim (se le añadieron botones de borrar
-  clave y una línea de estado); cinco módulos TS por vista; `overlay.html` la píldora.
-- `cmd/stt-probe` — dictado desde la CLI, para aislar fallos sin el app.
+- `internal/session` — the dictation controller (pure decisions, suite ported from Electron).
+- `internal/stt` — network-free contract. `azure` (reaches a real 401), `helper` (whisper ✅ and now
+  **reports microphone levels**, Apple ⛔), `grok` (✅ 71 tests).
+- `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — capture, paste,
+  history + filter, `fn` protocol, TCC, AppKit glue, region validation.
+- `frontend/` — `index.html` is the Electron markup almost verbatim (delete-key buttons and a status
+  line were added); five TS modules, one per view; `overlay.html` is the pill.
+- `cmd/stt-probe` — dictation from the CLI, to isolate failures without the app.
 
-## Proveedores: qué falta
+## Providers: what is left
 
-- ⬜ **elevenlabs** — mismo molde que Grok (WebSocket, header `xi-api-key`, JSON con base64 en vez de
-  frames binarios). Momento de **extraer el ciclo de vida del socket** de `internal/stt/grok`, con dos
-  implementaciones reales delante y no deducido de una.
-- ⬜ **openai realtime** — **no** encaja en ese molde (mensaje de setup, otro ciclo de vida): paquete
-  aparte.
+- ⬜ **elevenlabs** — the same mould as Grok (WebSocket, `xi-api-key` header, JSON with base64
+  instead of binary frames). The moment to **extract the socket lifecycle** out of
+  `internal/stt/grok`, with two real implementations in front of us rather than deduced from one.
+- ⬜ **openai realtime** — does **not** fit that mould (setup message, different lifecycle): its own
+  package.
