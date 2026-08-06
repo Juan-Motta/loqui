@@ -96,13 +96,20 @@ var AllLanguageSlots = []string{
 	"elevenlabs",
 }
 
+// DefaultProvider is the engine the app falls back to.
+//
+// Whisper, and not because it happens to be first in the list: it is the only one that needs neither a
+// credential nor a network, so choosing it for the user commits them to nothing. Named here so the
+// fallback and the defaults cannot drift apart.
+const DefaultProvider = "whisper"
+
 // DefaultSettings mirrors the Electron defaults.
 //
 // The default provider is local whisper, not Azure: it needs no account, no key and no
 // network, so a fresh install can dictate before the user has configured anything.
 func DefaultSettings() Settings {
 	return Settings{
-		Provider: "whisper",
+		Provider: DefaultProvider,
 		Region:   "",
 		LanguageBySlot: map[string][]string{
 			"azure-speech": {"es-CO", "en-US"},

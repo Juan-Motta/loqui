@@ -77,6 +77,10 @@ func testService(t *testing.T, st *store.Store) (*SettingsService, *testVault) {
 			// payload depend on the macOS version and the helpers present on whoever runs the suite.
 			caps: func() store.HostCapabilities { return store.HostCapabilities{} },
 		},
+		// The fallback engine is assumed able to run: whether a 465 MB model file happens to be on the
+		// developer's disk is not what any of these cases are about, and the tests that DO care set
+		// this themselves.
+		defaultProblem: func() error { return nil },
 		getSecret: func(slot store.KeySlot) (string, error) {
 			if secret, ok := vault.get(slot); ok {
 				return secret, nil

@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -104,7 +105,7 @@ var settingsUI *ui
 // application-construction time, and both must be the SAME instance — two Stores over one
 // directory each hold their own lock, so a settings write from the UI could interleave with
 // one from the engine.
-func startDictation(wailsApp *application.App, tray *application.SystemTray, st *store.Store) error {
+func startDictation(wailsApp *application.App, tray *application.SystemTray, st *store.Store, settingsSvc *app.SettingsService) error {
 	u := &ui{wails: wailsApp, tray: tray}
 	settingsUI = u
 	dictation = app.NewDictation(st, u)
@@ -267,6 +268,58 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 			wailsApp.Event.Emit("debug:set-appearance", a)
 		}()
 	}
+
+	// The engine in use is checked once the page is up, and the page is told if it had to change.
+	//
+	// AFTER ui:painted, not before the windows exist, for two reasons. The check reads the Keychain,
+	// which on this build can take its full three seconds — in front of the first paint that is three
+	// seconds of nothing. And the outcome has somewhere to go: the page repaints from the payload and
+	// shows the sentence, so the user learns their engine moved instead of finding out at the next
+	// dictation.
+	// ONCE PER LAUNCH, and that is a limitation rather than a design. ui:painted is emitted from the
+	// page's bootstrap (frontend/src/settings.ts), not from paint(), and the Settings window is created
+	// once — closing it only hides it (newSettingsWindow) — so the webview never reloads and this fires
+	// exactly once. Reopening Ajustes does not look again.
+	//
+	// What carries the weight instead is the retry inside EnsureUsableEngine: a check can legitimately
+	// reach no conclusion (the user was mid-save, or a Keychain call was abandoned and may yet land),
+	// and with only one run there is no later paint to fall back on. Deleting the key of the engine in
+	// use is the other moment it gets re-decided, inside DeleteKey itself.
+	//
+	// The flag is insurance, not load-bearing: it costs nothing and keeps a second paint — should the
+	// page ever gain a reason to re-emit — from deciding off a payload this one is already acting on.
+	var engineChecking atomic.Bool
+	wailsApp.Event.On("ui:painted", func(*application.CustomEvent) {
+		go func() {
+			if !engineChecking.CompareAndSwap(false, true) {
+				return
+			}
+			defer engineChecking.Store(false)
+
+			res := settingsSvc.EnsureUsableEngine()
+			switch {
+			case res.Error != "":
+				// Shown, not just logged: the engine is still unusable and the app has just failed to
+				// do anything about it. Nobody reads the terminal of a packaged app.
+				u.Log("ENGINE-CHECK", "no se pudo comprobar el motor: "+res.Error)
+				failed := res
+				failed.Notice = "No se pudo cambiar a un motor utilizable: " + res.Error
+				wailsApp.Event.Emit("engine:blocked", failed)
+			case res.Changed:
+				u.Log("ENGINE-CHECK", res.Notice)
+				// The WHOLE result travels, payload included. Sending the sentence alone made the page
+				// fetch its own snapshot, and between the two the user can act: the page would then
+				// paint the newer state and print a sentence describing the older one — macOS active
+				// under the words "se cambió a Whisper".
+				wailsApp.Event.Emit("engine:changed", res)
+			case res.Notice != "":
+				// Nothing moved, and the reason is worth saying — but not with a tick in front of it:
+				// "no se pudo comprobar la clave" is not an accomplishment.
+				u.Log("ENGINE-CHECK", res.Notice)
+				wailsApp.Event.Emit("engine:blocked", res)
+			}
+		}()
+	})
 
 	// Dev affordance: drive the buttons of a connection card and report what the card looks like.
 	//

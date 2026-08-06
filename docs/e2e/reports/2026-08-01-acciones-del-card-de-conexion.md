@@ -122,6 +122,71 @@ Y en disco, después: `region = eastus`.
 - Tras el repintado, el selector **sigue** en `westeurope`: la elección sin guardar sobrevive.
 - El disco no se movió: un probe no escribe nada.
 
+## UC-7 — el motor que no puede dictar no se queda puesto: PASS
+
+Pedido por el usuario el 2026-08-02: "si el motor no está configurado debería cambiar al motor por
+defecto que es whisper". El estado de partida es el que dejó el bug: `provider=azure` sin clave.
+
+```
+(disco antes)  provider = azure
+CONN           rows:whisper=available macos=available azure=unconfigured ...
+UI-PAINT       view rendered: map[provider:azure]
+ENGINE-CHECK   Azure no está listo para dictar: se cambió a Whisper
+CONN           rows:whisper=active  macos=available azure=unconfigured ...
+(disco después) provider = whisper
+```
+
+En pantalla, comprobado por captura: el selector pasa a "Whisper — local (offline)", el aviso naranja
+de "este motor necesita configuración" desaparece, y bajo la tarjeta queda en verde
+`✓ Azure no está listo para dictar: se cambió a Whisper`.
+
+- El orden importa y se ve en el log: la página pinta Azure primero y el chequeo repinta después. Es
+  deliberado — el chequeo lee el Keychain, y ponerlo antes del primer pintado serían hasta tres
+  segundos de ventana vacía.
+- **No es silencioso.** Algo que el usuario eligió deja de estar en efecto; enterarse por ver otro
+  nombre en el desplegable sería peor que que te lo digan.
+
+Los dos casos que NO deben mover nada están fijados por tests de Go, no por E2E, porque provocarlos en
+la app real exige un Keychain que no responda y un Whisper sin modelo: `TestAnUnreadableKeychainNever
+ChangesTheEngine` y `TestNoFallbackWhenTheDefaultEngineCannotRunEither`.
+
+## Alineación del hero: PASS (medido en píxeles)
+
+El usuario reportó que la descripción no se veía centrada verticalmente. Medido sobre la app
+empaquetada, antes: tile del logo `y=55..100` (centro 77.5), select `60..94` (centro 77), tinta del
+bloque de texto `59..100` (centro **79.5**) — 2 px por debajo, con el subtítulo acabando justo a la
+altura del borde inferior del tile, que es lo que lo hacía leer como pegado abajo.
+
+Después: tile centro **76.5**, tinta **77.0**, select **76.0** — todo dentro de medio píxel.
+
+## UC-8 — el camino de "no pude comprobarlo": PASS (corrida del 2026-08-06)
+
+Añadido al cerrar el incremento, y es el caso que **no debe mover nada**. Es el que la máquina produce
+sola: la firma ad-hoc hace que el Keychain no responda, así que este es el camino habitual en esta
+build, no el raro.
+
+```
+10:15:15 UI-PAINT       view rendered: map[provider:azure]
+10:15:18 ENGINE-CHECK   No se pudo comprobar la clave de Azure: el Keychain no respondió, así que el motor no se ha cambiado
+10:15:21 CONN-CARD      ... engineStatus:✗ No se pudo comprobar la clave de Azure: ... homeEngine:azure ... provider:azure
+(disco antes y después) provider = azure
+```
+
+- **Tres segundos exactos** entre el pintado y el chequeo — el timeout del Keychain, que es la razón
+  documentada de que el chequeo corra después del primer pintado y no antes.
+- **`✗`, no `✓`.** Viaja por `engine:blocked`, así que "no se pudo comprobar" no lleva tick verde.
+- **`homeEngine: azure` y el disco intacto:** un timeout no le quita al usuario una configuración que
+  funciona.
+- El reporter de debug ahora incluye `engineStatus` y `homeEngine` — sin eso, una frase huérfana en la
+  línea del home es invisible a un informe por card.
+
+Segunda corrida, con una acción de card en vuelo (`azure:test`): el card muestra su propio
+`Probando la conexión…` mientras `engineStatus` mantiene la frase del chequeo. **Compromiso declarado:**
+`paint()` ahora limpia `engineStatus`, así que al completarse esa acción la frase del chequeo
+desaparece. Se pierde información útil ("no pude verificar tu clave") en la siguiente acción del
+usuario; la alternativa era dejarla y que contradijera la pantalla, que es peor. Las demás líneas de
+estado de la página ya se comportan así — pertenecen a una acción y se reescriben con ella.
+
 ---
 
 ## Lo que este informe NO cubre
@@ -138,3 +203,15 @@ Y en disco, después: `region = eastus`.
 4. **Que la página aplique el payload del probe** — hueco declarado en el plan: su única causa real
    es una escritura de Keychain que agota su plazo y aterriza tarde, y provocarla a voluntad exigiría
    meter en producción un hook que finja el timeout de una escritura de credenciales.
+5. **La frase huérfana en sí** — el bug que arregla la limpieza de `engineStatus` en `paint()`.
+   Reproducirlo exige que la frase del chequeo esté en pantalla **y luego** una acción de card, y el
+   afordance `LOQUI_DEBUG_CONN_CLICK` dispara en el primer `ui:painted`, es decir **antes** de que el
+   chequeo llegue a hablar (tarda los tres segundos del Keychain). Secuenciarlo pediría un retardo en
+   ese afordance. Lo que sí está verificado en vivo es el mecanismo: la frase aparece, se pinta con la
+   clase correcta y sobrevive a su propio repintado (UC-8). El arreglo en sí se sostiene en lectura del
+   código: `run()` llama a `paint()` antes de su propio `say()`, y `isCurrent(null, …)` es siempre
+   verdadero, así que ningún camino que escriba ahí se queda en blanco.
+6. **La ventana de `confirmNotice`** — el hueco entre la comprobación de arriba de `repairEngine` y la
+   frase. En la app real son microsegundos (una lectura de ajustes y un `stat`), así que no se provoca
+   a mano; va fijado por `TestANoticeIsWithdrawnWhenTheWorldMovesUnderIt`, con el seam inyectado donde
+   está el hueco de verdad.

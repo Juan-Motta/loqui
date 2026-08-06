@@ -388,6 +388,26 @@ type SettingsService struct {
 	probeClient  azure.Doer
 	probeTimeout time.Duration
 
+	// readinessMu serialises everything that can change whether an engine is usable, and the decision
+	// that acts on it.
+	//
+	// A COUNTER IS NOT ENOUGH, which is worth stating because a counter was tried: bumping on the way
+	// in and out cannot express two setters overlapping — two entries leave it even again, reading as
+	// "nothing is happening" while both are half done. And no counter closes the gap between the last
+	// comparison and the write itself. A lock held across decide-and-commit closes both.
+	//
+	// Setters can block for the Keychain's ten seconds while holding this. That is the intended cost:
+	// they already serialise per slot inside the store, and the alternative is a launch check that
+	// silently reverts a configuration the user finished half a second ago.
+	readinessMu sync.Mutex
+	// readiness counts completed readiness changes. Guarded by readinessMu, so a plain integer says
+	// what an atomic one could not: the count can only move while somebody holds the lock.
+	readiness uint64
+
+	// defaultProblem overrides the check for whether the fallback engine can run. Only the tests set
+	// it: the real one looks for a 465 MB model file on disk.
+	defaultProblem func() error
+
 	// log records diagnostic lines, nil when nothing wired one. It exists so a probe can report
 	// which configuration it used: a button inside a Wails webview cannot be driven from a script,
 	// so without this there is no way to verify that from outside. NEVER called with a secret.

@@ -350,6 +350,21 @@ function paint(p: SettingsPayload): boolean {
   }
   if (p.revision > paintedRevision) paintedRevision = p.revision;
 
+  // The engine-check sentence is cleared by whatever paints next, and nothing else would clear it.
+  // Every other status line belongs to an action that rewrites it; this one is written from an event,
+  // outside run(), so no later action owns it. Choosing an engine from a Conexiones card puts its
+  // feedback in the CARD's status and leaves this one alone — so the picker would read "macOS" with
+  // "✓ Azure no está listo para dictar: se cambió a Whisper" still underneath it. Same failure the
+  // revision arbitration exists for, one step later: there the payload was stale, here the sentence is.
+  //
+  // Safe for the paths that DO write here: run() calls paint() before its own say(), and the engine
+  // check re-says its sentence right after the paint it triggers.
+  const engineLine = $<HTMLElement>("engineStatus");
+  if (engineLine) {
+    engineLine.className = "status";
+    engineLine.textContent = "";
+  }
+
   const statusBySlot = new Map((p.keys ?? []).map((k) => [k.slot, k]));
 
   // The engine picker. Options come from Go rather than the hardcoded markup list, so an engine
@@ -1027,6 +1042,31 @@ Settings.Load().then(
   },
 );
 
+// The engine moved because the app could not use the one that was selected.
+//
+// Announced rather than done quietly: something the user chose is no longer in effect, and finding
+// that out by noticing a different name in the picker is worse than being told. Go stays the one
+// place that computes state — the event carries the snapshot its sentence describes, and paint()
+// drops it if a newer one has already landed.
+// The check reports its own snapshot alongside its sentence, so the two cannot come apart.
+type EngineCheckEvent = { payload?: SettingsPayload; notice?: string };
+
+const engineNews = (kind: "ok" | "err") => (e: { data: unknown }) => {
+  const arg = (Array.isArray(e.data) ? e.data[0] : e.data) as EngineCheckEvent | null;
+  const notice = arg?.notice ?? "";
+  const payload = arg?.payload;
+  if (notice === "" || !payload) return;
+  // The sentence is painted only if ITS OWN payload was the one applied. Fetching a fresh snapshot
+  // here instead would let the two describe different moments: the page would draw whatever the user
+  // did in between and then explain a decision about the state before it.
+  if (paint(payload)) say($<HTMLElement>("engineStatus"), kind, notice);
+};
+
+// Two events, two tones. A tick belongs to a change that happened; "could not check your key" is not
+// something that went well, and dressing it as success is how a warning gets read as noise.
+Events.On("engine:changed", engineNews("ok"));
+Events.On("engine:blocked", engineNews("err"));
+
 // Dev affordance: drive one real write through the binding, on command from Go.
 //
 // It exists for the same reason LOQUI_DEBUG_DICTATE does — the real trigger cannot be scripted.
@@ -1183,12 +1223,18 @@ function reportCard(provider: string): Record<string, unknown> {
     return `${b.style.display === "none" ? "hidden" : "shown"}/${b.disabled ? "disabled" : "enabled"}`;
   };
   const status = card.querySelector<HTMLElement>(".status");
+  // The HOME status line, not this card's: it is where the engine check speaks, and it is the one
+  // line no action owns — so a sentence left stranded there is invisible to a per-card report. This
+  // is the only way to see from outside whether the picker and the line beneath it agree.
+  const engine = $<HTMLElement>("engineStatus");
   return {
     provider,
     badge: card.querySelector<HTMLElement>(".conn-state")?.textContent ?? "",
     badgeClass: card.querySelector<HTMLElement>(".conn-state")?.className ?? "",
     status: status?.textContent ?? "",
     statusClass: status?.className ?? "",
+    engineStatus: engine?.textContent ?? "",
+    homeEngine: $<HTMLSelectElement>("homeEngine")?.value ?? "",
     keyState: card.querySelector<HTMLElement>(".key-state")?.textContent ?? "",
     region: $<HTMLSelectElement>("region")?.value ?? "",
     test: button(".conn-test"),

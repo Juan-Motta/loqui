@@ -129,6 +129,20 @@ func keySlotOrEmpty(provider, azureService string) string {
 	return ""
 }
 
+// RuntimeKeySlotFor is the slot the DICTATION path actually reads for an engine.
+//
+// It differs from KeySlotFor in exactly one place, and that difference is a fact about this build
+// rather than a design: Azure's settings row follows the selected sub-service, while the engine that
+// gets built always opens Speech (app.(*Dictation).buildProvider). Until the realtime sub-service is
+// ported, a configuration naming it describes something nothing will run — and the two functions
+// disagreeing is how that goes unnoticed. They converge again when it is ported.
+func RuntimeKeySlotFor(provider string) (KeySlot, bool) {
+	if provider == "azure" {
+		return SlotAzureSpeech, true
+	}
+	return KeySlotFor(provider, "")
+}
+
 // KeySlotFor is the slot a provider's key lives in, and whether it needs one at all.
 //
 // Azure Speech and Azure OpenAI are separate resources with separate keys, hence separate slots.
@@ -173,6 +187,13 @@ func IsAvailableOn(provider string, caps HostCapabilities) bool {
 	}
 	return true
 }
+
+// HasNonSecretConfig reports whether everything an engine needs BESIDES its credential is in place.
+//
+// Exported because "the Keychain did not answer" only justifies leaving an engine alone when the key
+// is the ONLY thing unconfirmed. Azure without a region cannot dictate whatever its key turns out to
+// be, so an unreadable Keychain must not shield that case.
+func HasNonSecretConfig(provider string, s Settings) bool { return hasRequiredConfig(provider, s) }
 
 // hasRequiredConfig is everything an engine needs BESIDES its key. Azure is the only one with extra
 // required fields, and which field depends on the sub-service: the realtime endpoint is addressed by

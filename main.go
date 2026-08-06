@@ -80,6 +80,12 @@ func main() {
 	// the app itself — the browser opener for the donation link. The closure runs when the user
 	// clicks, long after this assignment, so capturing the variable is enough; referring to it inside
 	// its own initialiser would not compile.
+	// The settings service is held in a variable, not built inline in the Services list, because the
+	// launch check that moves the app off an unusable engine needs the SAME instance the page talks to
+	// — a second one over the same store would work, but two services of one kind is an invitation to
+	// wire the next thing to the wrong one.
+	var settingsSvc *app.SettingsService
+
 	var wailsApp *application.App
 	wailsApp = application.New(application.Options{
 		Name:        "Loqui",
@@ -96,7 +102,7 @@ func main() {
 		Services: []application.Service{
 			// The hooks connect the RUNNING engine and listener. Passed at construction rather than
 			// through setters because Wails binds every exported method of a service to the webview.
-			application.NewService(app.NewSettingsService(st, app.LiveHooks{
+			application.NewService(newSettingsService(st, &settingsSvc, app.LiveHooks{
 				ModeChanged: func(mode string) {
 					if dictation != nil {
 						dictation.Controller().SetMode(session.Mode(mode))
@@ -175,7 +181,7 @@ func main() {
 	tray := newTray(wailsApp)
 
 	// The engine needs the windows and the tray to already exist, since it drives both.
-	if err := startDictation(wailsApp, tray, st); err != nil {
+	if err := startDictation(wailsApp, tray, st, settingsSvc); err != nil {
 		log.Fatal("cannot start the dictation engine: ", err)
 	}
 	defer stopDictation()
@@ -393,4 +399,14 @@ func macAppearance(setting string) application.MacAppearanceType {
 	default:
 		return application.DefaultAppearance
 	}
+}
+
+// newSettingsService builds the service and hands the same pointer back through out.
+//
+// It exists so the instance registered with Wails and the one the launch check uses are provably the
+// one instance, without splitting the hooks literal away from the Services list where it reads.
+func newSettingsService(st *store.Store, out **app.SettingsService, hooks app.LiveHooks) *app.SettingsService {
+	svc := app.NewSettingsService(st, hooks)
+	*out = svc
+	return svc
 }

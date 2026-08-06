@@ -73,6 +73,7 @@ func (s *SettingsService) invalid(field string, format string, args ...any) Writ
 
 // SetProvider switches the active engine. Bound as Settings.SetProvider().
 func (s *SettingsService) SetProvider(provider string) WriteResult {
+	defer s.beginReadinessChange()()
 	if !store.IsKnownProvider(provider) {
 		return s.failed("motor desconocido: %q", provider)
 	}
@@ -90,11 +91,25 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 	if err != nil {
 		return s.failed("no se pudo guardar el motor: %v", err)
 	}
+	s.readinessChanged()
 	// The payload is computed once and the notice read OUT of it, rather than recomputing the
 	// readiness rule here: store.ConnectionRows already owns it, and a second copy would be free to
 	// disagree with the badge the user is looking at.
 	p := s.bootstrap.Payload()
-	return WriteResult{Payload: p, Notice: providerNotice(p, provider)}
+	notice := providerNotice(p, provider)
+	// The connection model cannot see Whisper's model file, so its row reads "Disponible" with or
+	// without one and this is the only place the difference can be told. Chosen and unable to dictate
+	// is exactly the silence this whole change is about.
+	//
+	// It reports rather than refuses: rejecting the selection would leave the user on whatever engine
+	// they were escaping from, and the row they clicked would go on claiming to be available. Making
+	// the model part of that row's state belongs with the model download, still to be ported.
+	if provider == store.DefaultProvider {
+		if problem := s.defaultEngineProblem(); problem != nil {
+			notice = fmt.Sprintf("Motor guardado, pero %s no puede dictar: %v", provider, problem)
+		}
+	}
+	return WriteResult{Payload: p, Notice: notice}
 }
 
 // providerNotice says whether the engine just chosen can actually dictate.
@@ -160,6 +175,7 @@ func keyStateIn(p SettingsPayload, slot string) KeyState {
 // Azure endpoint needs the id ("eastus2"). settings.NormalizeRegion already owns that rule and is
 // tested; doing it in the webview too would be the same rule in two languages.
 func (s *SettingsService) SetRegion(region string) WriteResult {
+	defer s.beginReadinessChange()()
 	id, err := settings.NormalizeRegion(region)
 	if err != nil {
 		return s.failed("%v", err)
@@ -170,6 +186,7 @@ func (s *SettingsService) SetRegion(region string) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar la región: %v", err)
 	}
+	s.readinessChanged()
 	return s.ok("")
 }
 
@@ -356,6 +373,7 @@ func (s *SettingsService) SetLanguages(slot string, values []string) WriteResult
 //
 // The secret is never logged and never echoed back: the payload carries presence only.
 func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
+	defer s.beginReadinessChange()()
 	keySlot, ok := knownKeySlot(slot)
 	if !ok {
 		return s.failed("ranura de clave desconocida: %q", slot)
@@ -373,8 +391,12 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 			"guardar aquí no cambiaría la clave que se usa", name)
 	}
 	if err := s.secretWriter()(keySlot, secret); err != nil {
+		if errors.Is(err, store.ErrKeychainTimeout) {
+			s.readinessChanged() // may yet land; see DeleteKey
+		}
 		return s.failed("%s", keychainMessage(err))
 	}
+	s.readinessChanged()
 	return s.ok("")
 }
 
@@ -386,6 +408,7 @@ func (s *SettingsService) SetKey(slot string, secret string) WriteResult {
 // using, so the slot would still read as configured afterwards and the deletion would look like it
 // did nothing. Whatever is in the Keychain underneath is not what the user is looking at.
 func (s *SettingsService) DeleteKey(slot string) WriteResult {
+	defer s.beginReadinessChange()()
 	keySlot, ok := knownKeySlot(slot)
 	if !ok {
 		return s.failed("ranura de clave desconocida: %q", slot)
@@ -394,12 +417,37 @@ func (s *SettingsService) DeleteKey(slot string) WriteResult {
 		return s.failed("esta clave viene de la variable de entorno %s — quítala del entorno en vez de borrarla aquí", name)
 	}
 	if err := s.secretDeleter()(keySlot); err != nil {
+		// A TIMEOUT IS NOT A REJECTION. The cgo call was abandoned, not cancelled, so the deletion may
+		// still land — which means readiness may still change. Counting it keeps the launch check from
+		// concluding "all healthy" from a snapshot taken just before a credential vanished.
+		if errors.Is(err, store.ErrKeychainTimeout) {
+			s.readinessChanged()
+		}
 		return s.failed("%s", keychainMessage(err))
 	}
+	s.readinessChanged()
 	// A POSTCONDITION, not an account of what happened: store.DeleteKey treats an absent item as
 	// success, and this method never learns whether there was one. "Clave borrada" would be false
 	// exactly when the user pressed the button on an empty slot.
-	return s.ok("La clave ya no está guardada")
+	notice := "La clave ya no está guardada"
+
+	// Deleting the credential of the engine IN USE is the moment that engine stops working, and the
+	// user is watching right now. Leaving it selected would move the discovery to the next dictation:
+	// a key press that transcribes nothing, with no visible cause.
+	p := s.bootstrap.Payload()
+	if row := providerRow(p, p.Provider); row.KeySlot == string(keySlot) {
+		// The delete is the evidence. Without it the repair would consult the payload computed just
+		// now, and if THAT read came back "unreadable" it would refuse to act — leaving the engine
+		// selected with a credential this method has already removed.
+		out, err := s.repairEngine(p, repairEvidence{deletedSlot: keySlot})
+		if err != nil {
+			return s.failed("la clave ya no está guardada, pero %v", err)
+		}
+		if out.notice != "" {
+			return WriteResult{Payload: s.bootstrap.Payload(), Notice: notice + ". " + out.notice}
+		}
+	}
+	return s.ok(notice)
 }
 
 // SaveConnection stores a provider's region and key together, as ONE operation.
@@ -421,6 +469,7 @@ func (s *SettingsService) DeleteKey(slot string) WriteResult {
 // An empty secret means "leave the stored key alone", which is how the form behaves when the user
 // only wants to change the region. An empty region means the same for the region.
 func (s *SettingsService) SaveConnection(slot string, region string, secret string) WriteResult {
+	defer s.beginReadinessChange()()
 	keySlot, ok := knownKeySlot(slot)
 	if !ok {
 		return s.failed("ranura de clave desconocida: %q", slot)
@@ -485,8 +534,14 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 	// was never saved against.
 	if writeKey {
 		if err := s.secretWriter()(keySlot, secret); err != nil {
+			if errors.Is(err, store.ErrKeychainTimeout) {
+				s.readinessChanged() // may yet land; see DeleteKey
+			}
 			return s.failed("%s", keychainMessage(err))
 		}
+		// Counted here, not at the end: the region write below can fail, and the credential has
+		// already landed by then.
+		s.readinessChanged()
 	}
 	if regionID != "" {
 		if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
@@ -500,6 +555,7 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 			}
 			return s.failed("no se pudo guardar la región: %v", err)
 		}
+		s.readinessChanged()
 	}
 	return s.ok(saveNotice(writeKey, regionID != ""))
 }
@@ -547,6 +603,32 @@ func saveNotice(wroteKey, wroteRegion bool) string {
 	default:
 		return "Región guardada"
 	}
+}
+
+// beginReadinessChange takes the readiness lock for a whole setter; the returned function releases it.
+//
+// Deferred at the TOP of every setter that can make an engine usable or unusable, so validation, the
+// Keychain and the disk are covered together. Anything narrower leaves the window this exists to
+// close: a change that has begun but not finished must not read as "nothing is happening".
+//
+// IT DOES NOT COUNT ANYTHING. The count is bumped where something actually landed — see
+// readinessChanged. Counting on the way out would make a REJECTED save look like a change, and the
+// launch check treats a change as a reason to start over: three refused saves in a row would use up
+// its retries and leave the app on an unusable engine for the rest of the session.
+func (s *SettingsService) beginReadinessChange() func() {
+	s.readinessMu.Lock()
+	return func() { s.readinessMu.Unlock() }
+}
+
+// readinessChanged records that something affecting engine readiness has just landed. Only ever
+// called with the lock held, by the setter that did it.
+func (s *SettingsService) readinessChanged() { s.readiness++ }
+
+// readinessNow is the completed-change count, taken safely.
+func (s *SettingsService) readinessNow() uint64 {
+	s.readinessMu.Lock()
+	defer s.readinessMu.Unlock()
+	return s.readiness
 }
 
 // envOverrideFor reports the LOQUI_*_KEY variable currently supplying a slot's credential, or "".

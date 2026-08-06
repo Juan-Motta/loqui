@@ -121,6 +121,14 @@
       .hero-logo { width: 46px; height: 46px; flex: none; border-radius: 13px; display: flex; align-items: center; justify-content: center; gap: 2.5px;
         background: linear-gradient(45deg, #6e6cf0, #4b48d6); box-shadow: 0 3px 8px color-mix(in srgb, var(--accent) 45%, transparent); }
       .hero-logo span { width: 2.6px; background: #fff; border-radius: 2px; }
+      /* Nudged up by the 2px its own leading pushes it down.
+         Flexbox centres the BOX, and this box is not symmetric around its ink: the title's line box
+         reserves leading above the capitals while the subtitle's reserves descender space below. So a
+         perfectly centred box leaves the visible text sitting low — the subtitle's baseline area ends
+         level with the tile's bottom edge, which reads as bottom-aligned rather than centred.
+         Measured on the packaged app, not guessed: tile y=55..100 (centre 77.5), text ink y=59..100
+         (centre 79.5), engine picker y=60..94 (centre 77). */
+      .hero-titles { margin-top: -2px; }
       .hero-name { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; color: var(--text); }
       .hero-sub { font-size: 13px; color: var(--text-2); margin-top: 2px; }
       /* The declarations up to `color` are the original's, verbatim — and under
@@ -834,7 +842,7 @@
                 <div class="hero-logo">
                   <span style="height:10px"></span><span style="height:18px"></span><span style="height:26px"></span><span style="height:18px"></span><span style="height:10px"></span>
                 </div>
-                <div>
+                <div class="hero-titles">
                   <div class="hero-name">Loqui</div>
                   <div class="hero-sub" data-i18n>Dictado multilingüe en tiempo real</div>
                 </div>

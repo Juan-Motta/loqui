@@ -4,6 +4,29 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## El motor que no puede dictar ya no se queda puesto — 2026-08-02
+
+- **Al arrancar, la app se mueve al motor por defecto (Whisper) si el activo no puede dictar**, y lo
+  dice: `✓ Azure no está listo para dictar: se cambió a Whisper`. Antes se quedaba en un motor sin
+  configurar y el fallo aparecía al pulsar el atajo, lejos de lo que lo causó. Lo mismo al borrar la
+  clave del motor en uso, que es el momento exacto en que deja de servir.
+- **Dos casos en los que NO se mueve, y son la mitad del arreglo:** si el Keychain no respondió, la
+  app no pudo COMPROBAR la clave — y en esta build eso es lo habitual, así que cambiar de motor sobre
+  un timeout de tres segundos le quitaría al usuario una configuración que funciona. Y si Whisper
+  tampoco puede funcionar (le falta su modelo, algo que el estado de conexión no conoce), no se
+  cambia: sustituir un fallo silencioso por otro no es un fallback.
+- **Ninguna frase sobrevive a la pantalla que describe.** La línea de estado del home era la única que
+  no pertenecía a ninguna acción, así que cambiar de motor desde un card de Conexiones dejaba
+  `✓ … se cambió a Whisper` bajo un selector que ya decía otra cosa. Ahora la limpia el siguiente
+  repintado. El precio, declarado: el aviso del chequeo desaparece en la siguiente acción del usuario
+  — preferible a que contradiga lo que hay en pantalla.
+- **Y el chequeo se calla si el mundo se mueve mientras decide.** Si mientras comprueba tu clave
+  terminas de pegarla, retira la frase y vuelve a decidir en vez de anunciar un problema que ya
+  arreglaste.
+- **El bloque de título del hero estaba 2 px bajo.** Flexbox centra la caja, y la tinta de ese bloque
+  no es simétrica: el título reserva interlínea arriba y el subtítulo espacio de descendentes abajo,
+  así que el par acababa alineado con el borde inferior del logo. Medido, no ajustado a ojo.
+
 ## Las acciones del card de conexión: decir lo que pasa — 2026-08-01
 
 - **"Probar conexión" existe por fin.** `azure.TestConnection` llevaba desde el port escrita y
