@@ -483,7 +483,7 @@ func (p *Provider) dial(ctx context.Context, key string) (*websocket.Conn, *dial
 		HTTPHeader: http.Header{APIKeyHeader: []string{key}},
 	})
 	if err != nil {
-		code, message := handshakeFailure(resp)
+		code, message := handshakeFailure(resp, key)
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode

@@ -53,7 +53,10 @@ const (
 // (internal/session/policy.go:36), and both outcomes here — AuthenticationFailure and
 // BadRequest — are non-retryable, so reading the body changes the MESSAGE only, never the
 // behaviour. That is the invariant to preserve if this is ever extended.
-func handshakeFailure(resp *http.Response) (code, message string) {
+// SECRET is taken so the message can be built without it. See redactSecret: a rejection body can
+// contain the credential — measured, not hypothetical
+// (docs/research/2026-08-06-where-realtime-stt-auth-fails.md).
+func handshakeFailure(resp *http.Response, secret string) (code, message string) {
 	code = handshakeCode(resp)
 	if resp == nil {
 		return code, describeHandshake(code, 0, "")
@@ -62,9 +65,11 @@ func handshakeFailure(resp *http.Response) (code, message string) {
 	reason := readReason(resp)
 	// The one case the status alone gets wrong.
 	if resp.StatusCode == http.StatusBadRequest && mentionsAPIKey(reason) {
-		return codeAuth, "xAI rechazó la API key — revísala en Ajustes"
+		return codeAuth, "xAI rechazó la API key — revísala en Ajustes" // OUR wording: see redactSecret
 	}
-	return code, describeHandshake(code, resp.StatusCode, reason)
+	// The provider's prose IS the useful part for a non-auth failure — a 5xx says what broke — so it is
+	// passed through, with the credential taken out of it.
+	return code, describeHandshake(code, resp.StatusCode, redactSecret(reason, secret))
 }
 
 // readReason pulls the human-readable reason out of the rejection body. The library documents
@@ -147,4 +152,23 @@ func describeHandshake(code string, status int, reason string) string {
 		return base + ": " + reason
 	}
 	return base
+}
+
+// redactSecret removes the credential from text the SERVER wrote.
+//
+// The exact secret is what can be removed reliably, and it is the realistic leak on a non-auth path.
+// What it deliberately does NOT try to catch is a partially masked echo — the real OpenAI rejection
+// carries "sk-proj-********************ueba", which is not the exact secret and would survive any
+// substring rule that did not also match innocent text.
+//
+// THAT CASE IS HANDLED BY NOT USING THE SERVER'S PROSE AT ALL for an authentication failure, which is
+// the only outcome where these services were measured echoing key material. The wording there is ours.
+// The residual, stated: a provider that echoed a partial key inside a 5xx body would still put those
+// characters on screen. No service is known to; if one does, the fix is to stop passing that body
+// through, not to invent a smarter filter.
+func redactSecret(text, secret string) string {
+	if secret == "" || text == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, secret, "«clave redactada»")
 }

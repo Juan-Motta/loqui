@@ -203,3 +203,51 @@ func TestDeltasAreFragmentsThatConcatenate(t *testing.T) {
 		t.Errorf("los deltas concatenados dan %q", built.String())
 	}
 }
+
+// THE MACHINE-READABLE CODE MUST SURVIVE DECODING.
+//
+// wireError kept only `message`, throwing away `type` and `code`. The real service returns
+// `code: "invalid_api_key"` (measured — docs/research/2026-08-06-where-realtime-stt-auth-fails.md), and
+// discarding it leaves only prose to classify from, which is the failure internal/session/policy.go:36
+// documents. It also means the probe has nothing short and non-prose to show the user.
+func TestAnErrorEventKeepsItsCodeAndType(t *testing.T) {
+	raw := `{"type":"error","error":{"type":"invalid_request_error","code":"invalid_api_key",` +
+		`"message":"Incorrect API key provided: sk-proj-****ueba"}}`
+
+	out := Decode([]byte(raw))
+
+	if out.Kind != Error {
+		t.Fatalf("Kind = %v, want Error", out.Kind)
+	}
+	if out.Code != "invalid_api_key" {
+		t.Errorf("Code = %q, want invalid_api_key — the machine-readable signal was dropped", out.Code)
+	}
+	if out.Error == "" {
+		t.Error("the prose was dropped too; it is still wanted for the log")
+	}
+}
+
+// An error with a TYPE but no CODE falls back to the type, and this case exists because a mutation
+// showed the fallback was unreachable from the suite: the "no code" test below also had no type, so
+// deleting the fallback changed nothing. OpenAI documents families like "server_error" that arrive
+// without a specific code, and the family is still worth showing.
+func TestAnErrorEventFallsBackToItsTypeWhenThereIsNoCode(t *testing.T) {
+	out := Decode([]byte(`{"type":"error","error":{"type":"server_error","message":"algo pasó"}}`))
+	if out.Kind != Error {
+		t.Fatalf("Kind = %v, want Error", out.Kind)
+	}
+	if out.Code != "server_error" {
+		t.Errorf("Code = %q, want server_error — the family is the only signal there was", out.Code)
+	}
+}
+
+// An error with no code still decodes, and says so rather than inventing one.
+func TestAnErrorEventWithoutACodeIsStillAnError(t *testing.T) {
+	out := Decode([]byte(`{"type":"error","error":{"message":"algo pasó"}}`))
+	if out.Kind != Error {
+		t.Fatalf("Kind = %v, want Error", out.Kind)
+	}
+	if out.Code != "" {
+		t.Errorf("Code = %q, want empty — nothing was reported", out.Code)
+	}
+}

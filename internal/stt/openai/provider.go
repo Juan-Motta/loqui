@@ -509,7 +509,7 @@ func (p *Provider) dial(ctx context.Context, key string) (*websocket.Conn, *dial
 		Subprotocols: BuildSubprotocols(key),
 	})
 	if err != nil {
-		code, message := handshakeFailure(resp)
+		code, message := handshakeFailure(resp, key)
 		status := 0
 		if resp != nil {
 			status = resp.StatusCode

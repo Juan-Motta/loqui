@@ -115,9 +115,14 @@ func (k OutcomeKind) String() string {
 
 // Outcome is a decoded server message.
 type Outcome struct {
-	Kind  OutcomeKind
-	Text  string
+	Kind OutcomeKind
+	Text string
+	// Error is the server's prose. Useful for a log, never for classifying — see Code.
 	Error string
+	// Code is the event NAME for an error, which is this service's machine-readable signal:
+	// auth_error, quota_exceeded, unaccepted_terms and the rest. Without it a caller cannot tell
+	// "out of credit" from "terms not accepted", which need different things from the user.
+	Code string
 }
 
 // wireEvent is the subset of the server's schema that matters.
@@ -154,13 +159,37 @@ func Decode(raw []byte) Outcome {
 	// check would drop the final and the dictation would end with only its partials.
 	case name == "final_transcript" || strings.HasPrefix(name, "committed_transcript"):
 		return Outcome{Kind: Final, Text: ev.Text}
-	case strings.Contains(name, "error"):
+	case isErrorEvent(name):
 		msg := ev.Error
 		if msg == "" {
 			msg = "error de elevenlabs stt"
 		}
-		return Outcome{Kind: Error, Error: msg}
+		return Outcome{Kind: Error, Error: msg, Code: name}
 	default:
 		return Outcome{Kind: Ignore}
 	}
+}
+
+// errorEvents are the documented failures that do NOT have "error" in their name.
+//
+// THEY WERE ALL BEING IGNORED. Decode matched an error only when the name contained "error", so every
+// name below fell through to Ignore — and the session then reported whatever came next, usually the
+// socket closing, as a generic connection loss. The specific cause was lost, which is the difference
+// between telling a user "no se pudo conectar" and telling them their credit ran out.
+var errorEvents = map[string]bool{
+	"quota_exceeded":              true,
+	"unaccepted_terms":            true,
+	"rate_limited":                true,
+	"queue_overflow":              true,
+	"resource_exhausted":          true,
+	"commit_throttled":            true,
+	"session_time_limit_exceeded": true,
+	"chunk_size_exceeded":         true,
+	"insufficient_audio_activity": true,
+}
+
+// isErrorEvent keeps the substring rule — which catches auth_error, transcriber_error and any future
+// *_error — and adds the documented names that do not contain it.
+func isErrorEvent(name string) bool {
+	return strings.Contains(name, "error") || errorEvents[name]
 }

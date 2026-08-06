@@ -169,3 +169,46 @@ func TestDecodeGivesAnErrorAFallbackMessage(t *testing.T) {
 		t.Error("un error sin mensaje llegó vacío")
 	}
 }
+
+// THE DOCUMENTED ERROR EVENTS THAT WERE FALLING THROUGH TO Ignore.
+//
+// Decode only treated a name as an error when it contained "error" (the old `strings.Contains`), so
+// every event below was ignored: the session then reported whatever happened next — usually the socket
+// closing — as a generic connection loss, and the specific cause was gone.
+//
+// Code carries the event NAME, because that is the machine-readable signal. Without it a caller cannot
+// tell "you are out of credit" from "you have not accepted the terms", which are different things for
+// the user to do.
+func TestTheDocumentedErrorEventsAreRecognisedAndNamed(t *testing.T) {
+	for _, name := range []string{
+		"auth_error", "quota_exceeded", "unaccepted_terms", "rate_limited",
+		"queue_overflow", "resource_exhausted", "commit_throttled",
+		"transcriber_error", "session_time_limit_exceeded", "chunk_size_exceeded",
+	} {
+		t.Run(name, func(t *testing.T) {
+			out := Decode([]byte(`{"message_type":"` + name + `","error":"lo que sea"}`))
+			if out.Kind != Error {
+				t.Errorf("Kind = %v, want Error — this event was being ignored", out.Kind)
+			}
+			if out.Code != name {
+				t.Errorf("Code = %q, want %q — the machine-readable signal was dropped", out.Code, name)
+			}
+		})
+	}
+}
+
+// A readiness event must NOT be mistaken for an error just because the list above grew.
+func TestReadinessAndTranscriptsAreNotSweptUpAsErrors(t *testing.T) {
+	for _, c := range []struct {
+		raw  string
+		kind OutcomeKind
+	}{
+		{`{"message_type":"session_started"}`, Ready},
+		{`{"message_type":"partial_transcript","text":"hola"}`, Partial},
+		{`{"message_type":"final_transcript","text":"hola"}`, Final},
+	} {
+		if out := Decode([]byte(c.raw)); out.Kind != c.kind {
+			t.Errorf("%s → %v, want %v", c.raw, out.Kind, c.kind)
+		}
+	}
+}

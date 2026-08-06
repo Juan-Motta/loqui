@@ -114,11 +114,20 @@ type Outcome struct {
 	Kind  OutcomeKind
 	Delta string
 	Text  string
+	// Error is the server's prose. For a log, never for classifying — see Code.
 	Error string
+	// Code is error.code, falling back to error.type: "invalid_api_key", "insufficient_quota",
+	// "server_error". Short, non-prose, and exactly what a user would search for.
+	Code string
 }
 
 type wireError struct {
 	Message string `json:"message"`
+	// Type and Code are this service's machine-readable signal — code is "invalid_api_key" for a
+	// rejected credential (measured 2026-08-06). Keeping only Message left prose as the sole thing to
+	// classify from, which is the failure internal/session/policy.go:36 documents.
+	Type string `json:"type"`
+	Code string `json:"code"`
 }
 
 type wireEvent struct {
@@ -149,7 +158,13 @@ func Decode(raw []byte) Outcome {
 		if msg == "" {
 			msg = "error de openai realtime"
 		}
-		return Outcome{Kind: Error, Error: msg}
+		// code first, type as the fallback: code is the specific one ("invalid_api_key"), type the
+		// family ("invalid_request_error"). Empty when the service reported neither.
+		code := ev.Error.Code
+		if code == "" {
+			code = ev.Error.Type
+		}
+		return Outcome{Kind: Error, Error: msg, Code: code}
 	case strings.HasSuffix(ev.Type, "transcription.delta"):
 		return Outcome{Kind: PartialDelta, Delta: ev.Delta}
 	case strings.HasSuffix(ev.Type, "transcription.completed"):
