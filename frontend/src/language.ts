@@ -4,7 +4,7 @@
 // honour, and the three shapes are not cosmetic — they are three different VALUE SPACES:
 //
 //	multi         toggleable locale chips for Azure Speech's continuous LID
-//	auto-or-one   a select of base codes plus "Detección automática"
+//	auto-or-one   a select of base codes plus t("Detección automática")
 //	one-required  a select of full locales for Apple's engine, which cannot detect
 //
 // WHAT THIS FILE DOES NOT DECIDE: which shape, which options, or whether a value is valid. All of
@@ -12,6 +12,7 @@
 // validates again on the way in. The page draws and reports; a second opinion here is exactly how a
 // picker ends up offering "es" to an engine that needs "es-CO".
 import { Events } from "@wailsio/runtime";
+import { t } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   LanguageControl,
@@ -95,7 +96,7 @@ export function renderLanguageInto(
           // Refused here rather than sent: an empty list is the one edit whose failure the user
           // cannot interpret, because nothing on screen changed.
           status.className = "lang-status err";
-          status.textContent = "✗ Deja al menos un idioma";
+          status.textContent = t("✗ Deja al menos un idioma");
           return;
         }
         void persist(control.slot, next, status);
@@ -112,7 +113,7 @@ export function renderLanguageInto(
     // the provider deduce it from the audio, which is better than forcing the first configured one.
     const auto = document.createElement("option");
     auto.value = "auto";
-    auto.textContent = "Detección automática";
+    auto.textContent = t("Detección automática");
     sel.appendChild(auto);
   }
   for (const opt of options) {

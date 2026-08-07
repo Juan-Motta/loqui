@@ -369,7 +369,9 @@ func newTray(app *application.App) *application.SystemTray {
 	tray := app.SystemTray.New()
 	tray.SetTemplateIcon(assets.TrayTemplate)
 	trayRef, trayApp = tray, app
-	tray.SetMenu(buildTrayMenu(app, trayLocale()))
+	trayLocaleShown = trayLocale()
+	trayMenu = buildTrayMenu(app, trayLocaleShown)
+	tray.SetMenu(trayMenu)
 	return tray
 }
 
@@ -441,6 +443,11 @@ func newSettingsService(st *store.Store, out **app.SettingsService, hooks app.Li
 var (
 	trayRef *application.SystemTray
 	trayApp *application.App
+	// trayMenu is the menu currently installed, kept so it can be freed when replaced.
+	trayMenu *application.Menu
+	// trayLocaleShown is the language the installed menu is in, so an unchanged language rebuilds
+	// nothing.
+	trayLocaleShown i18n.Locale
 )
 
 // trayStore is where the tray reads the language from. Package-level because the tray is built
@@ -467,7 +474,27 @@ func relabelTray(locale i18n.Locale) {
 		logLine("TRAY", "relabel skipped: no tray yet")
 		return
 	}
-	trayRef.SetMenu(buildTrayMenu(trayApp, locale))
+	// SKIPPED when the language did not actually move. Every save of the Sistema panel used to arrive
+	// here, so choosing the same language twice — or saving any other setting that reports a locale —
+	// rebuilt a native menu for nothing.
+	if trayLocaleShown == locale {
+		return
+	}
+	previous := trayMenu
+	trayMenu = buildTrayMenu(trayApp, locale)
+	trayLocaleShown = locale
+	trayRef.SetMenu(trayMenu)
+	// DESTROYED AFTER the replacement is installed, never before: the old menu is what the tray is
+	// showing until SetMenu returns, and freeing an NSMenu that is still attached is how a native
+	// crash gets introduced.
+	//
+	// Without this the items stay rooted in Wails' global callback map and the native menu is never
+	// released, so every language switch leaked a menu and three handlers. Found by a cross-engine
+	// review, which checked the lifecycle against the pinned Wails source; `Menu.Destroy` walks its
+	// items and drops them, which is exactly what was missing.
+	if previous != nil {
+		previous.Destroy()
+	}
 	// LOGGED because a native menu is the one surface no page report can reach: NSMenuItem titles are
 	// not in any DOM, so without this line "the tray followed the language" is unverifiable from
 	// outside. The labels are UI copy, never user data.

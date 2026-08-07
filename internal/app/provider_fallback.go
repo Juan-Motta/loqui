@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
 
@@ -139,7 +140,7 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 	// alone: nothing in the app validates a provider read off disk, so a settings file from another
 	// version — or edited by hand — would never dictate again and never say why.
 	if active.ID == "" {
-		return s.moveToDefault(p, ev, fmt.Sprintf("El motor guardado (%q) no existe en esta versión", p.Provider))
+		return s.moveToDefault(p, ev, s.note(p.Locale, "El motor guardado (%q) no existe en esta versión", p.Provider))
 	}
 	// The row's verdict is about the credential the SETTINGS model associates with this engine, which
 	// is not always the one dictation will read: Azure's row follows the selected sub-service, while
@@ -147,8 +148,7 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 	// is not the one about to run — and a settings file naming the unported sub-service produces
 	// exactly that.
 	if runtime, ok := store.RuntimeKeySlotFor(active.ID); ok && string(runtime) != active.KeySlot {
-		return s.moveToDefault(p, ev, fmt.Sprintf("%s está configurado para un servicio que esta "+
-			"versión no puede usar", active.Name))
+		return s.moveToDefault(p, ev, s.note(p.Locale, "%s está configurado para un servicio que esta versión no puede usar", active.Name))
 	}
 	if active.State == store.ConnActive {
 		// An active DEFAULT engine is not automatically a working one: Whisper's row says "Activo" as
@@ -156,9 +156,8 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 		// install that is the whole state of the app — nothing dictates, and nothing says why. There is
 		// nowhere to fall back to from the fallback, so this reports and changes nothing.
 		if active.ID == store.DefaultProvider {
-			if problem := s.defaultEngineProblem(); problem != nil {
-				return s.confirmNotice(ev, fmt.Sprintf("%s no puede dictar: %v. Descárgalo o elige otro "+
-					"motor en Ajustes", active.Name, problem)), nil
+			if problem := s.defaultEngineProblem(p.Locale); problem != nil {
+				return s.confirmNotice(ev, s.note(p.Locale, "%s no puede dictar: %v. Descárgalo o elige otro motor en Ajustes", active.Name, problem)), nil
 			}
 		}
 		return engineRepair{}, nil
@@ -172,11 +171,10 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 	// hide a requirement that is already, definitely, missing.
 	onlyTheKeyIsUnknown := store.HasNonSecretConfig(active.ID, s.store().LoadSettings())
 	if !proven && onlyTheKeyIsUnknown && keyStateIn(p, active.KeySlot).Status == store.KeyUnreadable {
-		return s.confirmNotice(ev, fmt.Sprintf("No se pudo comprobar la clave de %s: no se pudieron leer "+
-			"las claves guardadas, así que el motor no se ha cambiado", active.Name)), nil
+		return s.confirmNotice(ev, s.note(p.Locale, "No se pudo comprobar la clave de %s: no se pudieron leer las claves guardadas, así que el motor no se ha cambiado", active.Name)), nil
 	}
 
-	return s.moveToDefault(p, ev, fmt.Sprintf("%s no está listo para dictar", active.Name))
+	return s.moveToDefault(p, ev, s.note(p.Locale, "%s no está listo para dictar", active.Name))
 }
 
 // moveToDefault switches to the default engine when it can take over, and explains itself when it
@@ -187,12 +185,10 @@ func (s *SettingsService) moveToDefault(p SettingsPayload, ev repairEvidence, be
 		return engineRepair{}, nil
 	}
 	if fallback.State == store.ConnUnsupported {
-		return s.confirmNotice(ev, fmt.Sprintf("%s, y %s tampoco funciona en este sistema — "+
-			"configura un motor en Ajustes", because, fallback.Name)), nil
+		return s.confirmNotice(ev, s.note(p.Locale, "%s, y %s tampoco funciona en este sistema — configura un motor en Ajustes", because, fallback.Name)), nil
 	}
-	if problem := s.defaultEngineProblem(); problem != nil {
-		return s.confirmNotice(ev, fmt.Sprintf("%s, y %s no puede sustituirlo: %v. "+
-			"Configura un motor en Ajustes", because, fallback.Name, problem)), nil
+	if problem := s.defaultEngineProblem(p.Locale); problem != nil {
+		return s.confirmNotice(ev, s.note(p.Locale, "%s, y %s no puede sustituirlo: %v. Configura un motor en Ajustes", because, fallback.Name, problem)), nil
 	}
 
 	// CONDITIONAL. The payload this decision rests on takes several reads to build, and the user is in
@@ -218,7 +214,7 @@ func (s *SettingsService) moveToDefault(p SettingsPayload, ev repairEvidence, be
 		moved = true
 		return nil
 	}); err != nil {
-		return engineRepair{}, fmt.Errorf("no se pudo cambiar de motor: %w", err)
+		return engineRepair{}, fmt.Errorf(i18n.T(i18n.Locale(p.Locale), "no se pudo cambiar de motor: %w", nil), err)
 	}
 	if !moved {
 		return engineRepair{}, nil
@@ -299,7 +295,10 @@ func providerRow(p SettingsPayload, id string) store.ConnectionRow {
 // It exists because "available" in the connection model means the platform and the helper are there,
 // which is not the whole story for Whisper: without its model file the helper starts and immediately
 // gives up. A unit test must not depend on whether the developer happens to have downloaded 465 MB.
-func (s *SettingsService) defaultEngineProblem() error {
+// The LOCALE is a parameter because this error is not for a log — it is embedded as the reason inside
+// a sentence the user reads ("%s no puede dictar: %v"). Left untranslated it produced half a sentence
+// in each language, which is worse than either one alone. Found by the widened coverage scan.
+func (s *SettingsService) defaultEngineProblem(locale string) error {
 	if s.defaultProblem != nil {
 		return s.defaultProblem()
 	}
@@ -309,7 +308,7 @@ func (s *SettingsService) defaultEngineProblem() error {
 		if errors.Is(err, os.ErrNotExist) {
 			return errors.New("falta su modelo")
 		}
-		return fmt.Errorf("no se pudo leer su modelo: %w", err)
+		return fmt.Errorf(i18n.T(i18n.Locale(locale), "no se pudo leer su modelo: %w", nil), err)
 	}
 	// Existing is not the same as usable. A directory at that path, or a download that stopped
 	// halfway, would send the app onto an engine that fails when the helper tries to load it — a
@@ -322,8 +321,17 @@ func (s *SettingsService) defaultEngineProblem() error {
 	// altogether — a mirror serving the medium model, say. Neither loads, and the point of this check
 	// is not to hand the app a second engine that fails.
 	if info.Size() != WhisperModelBytes {
-		return fmt.Errorf("su modelo no es el esperado (%d de %d MB)",
+		return fmt.Errorf(i18n.T(i18n.Locale(locale), "su modelo no es el esperado (%d de %d MB)", nil),
 			info.Size()/(1024*1024), int64(WhisperModelBytes)/(1024*1024))
 	}
 	return nil
+}
+
+// note is this file's phrase(): translate the FORMAT, then fill in the values.
+//
+// It exists because these sentences embed engine names and error text, so the finished string can
+// never be a catalogue key — only the format can. Same reasoning as SettingsService.phrase, and the
+// reason it is not simply that function is that the notices here are built before any WriteResult.
+func (s *SettingsService) note(locale string, format string, args ...any) string {
+	return fmt.Sprintf(i18n.T(i18n.Locale(locale), format, nil), args...)
 }

@@ -10,6 +10,7 @@
 import * as Permissions from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/permissionsservice.js";
 import type { PermissionsPage } from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/models.js";
 import { Events } from "@wailsio/runtime";
+import { t } from "./i18n.js";
 
 const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
@@ -91,7 +92,7 @@ function paintInto(mountId: string, page: PermissionsPage): void {
     chip.innerHTML = svg(CHIP_ICONS[r.state] ?? "") + esc(r.label);
     // The one state the app cannot read — say WHY rather than imply a problem.
     if (r.state === "unknown") {
-      chip.title = "macOS no permite consultar este permiso desde la app";
+      chip.title = t("macOS no permite consultar este permiso desde la app");
     }
     row.appendChild(chip);
 
@@ -141,7 +142,7 @@ function paintInto(mountId: string, page: PermissionsPage): void {
     const missing = page.missing ?? [];
     status.className = "status " + (page.allReady ? "ok" : "err");
     status.textContent = page.allReady
-      ? "✓ Todos los permisos requeridos están concedidos"
+      ? t("✓ Todos los permisos requeridos están concedidos")
       : "Faltan permisos requeridos: " + missing.join(", ");
   }
 
@@ -158,7 +159,7 @@ export async function refreshPermissions(): Promise<void> {
     const status = $<HTMLElement>("permsStatus");
     if (status) {
       status.className = "status err";
-      status.textContent = "No se pudieron leer los permisos: " + String(err);
+      status.textContent = t("No se pudieron leer los permisos: ") + String(err);
     }
   }
 }

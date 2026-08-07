@@ -196,3 +196,83 @@ No se tocan aquí, y ninguno es una fuga ni deja la app peor de lo que estaba:
    Wails, no ejecutado.
 6. **La cobertura sigue sin ver** prosa suelta en TypeScript, campos del payload, `AboutService` ni
    los `WriteResult` construidos a mano. Es el hueco que decide si el resto se termina.
+
+---
+
+## Los seis puntos declarados, cerrados — 2026-08-07, más tarde
+
+Se cerraron **empezando por el sexto**, y el orden fue la decisión que lo hizo tratable: ensanchar el
+guardián primero, para que dijera exactamente qué faltaba en los otros cinco en vez de adivinarlo.
+
+### 6 → primero: dos barridos nuevos, y van al revés que los anteriores
+
+Los seis barridos existentes sólo veían una cadena que alguien **ya había enrutado** — un elemento
+marcado, una llamada a `t()`, un mensaje entregado a un constructor conocido. Eso protege contra
+olvidar traducir lo que te acordaste de enrutar. Es ciego al fallo real de una migración a medias:
+**prosa que nunca se enrutó**.
+
+Los dos nuevos buscan prosa española en las fuentes de la página y en los servicios de Go, y fallan
+ante lo que no esté demostrablemente atendido. Encontraron **35**: 18 en la página, 17 en Go.
+
+Verificados por mutación (una constante en español en `permissions.ts`, una fila renombrada en
+`about.go`); cada uno muere en su hueco.
+
+Una decisión que merece constar: **`no` está deliberadamente fuera** de la lista de palabras
+españolas, aunque lo sea. También es inglesa, y las cadenas de diagnóstico de estos archivos son
+inglesas (`no such card`, `no language select`). Un guardián que grita en falso se acaba silenciando,
+y eso es peor que un hueco.
+
+### Y de paso destapó un fallo latente que nadie había pedido buscar
+
+`settings.ts` decidía si ya había añadido el sufijo "— no disponible aún" preguntando si el texto
+visible **contenía esa frase en español**. En cuanto la etiqueta se traduce eso deja de funcionar: una
+opción en inglés recibiría el sufijo otra vez en cada repintado, alargando el nombre cada vez. Es
+exactamente el bug que el comentario de `ENGINE_LABELS` documenta, reintroducido por la puerta de
+atrás. Ahora la marca es un flag de datos, no una subcadena.
+
+### 1 — `AboutService`: PASS
+
+`BuildAbout` recibe el idioma como **parámetro** en vez de traducirse en la frontera, y la razón es
+concreta: `"Versión {v}"` interpola un valor, así que su forma final no puede ser clave de catálogo.
+Sigue siendo una función pura de sus entradas, que es lo que la hace testable sin store ni máquina.
+
+**Los VALORES no se traducen nunca** — versión de macOS, arquitectura, rutas, código de locale.
+Traducirlos corrompería justamente los datos que este panel existe para que se copien a un reporte.
+
+```
+arrancando en inglés:  ABOUT  version:Version 0.1.0
+```
+
+### 2 — la prosa que arman permisos, historial y onboarding: PASS
+
+Enrutada por `t()`. Las filas de permisos ya pasaban por el traductor desde la rama anterior — lo que
+faltaba eran las entradas, así que se traducían a sí mismas y nadie lo notaba.
+
+### 3 — `ProviderHint` y los controles de idioma: PASS
+
+`ProviderHint` es la frase bajo el selector de motor: la que explica por qué el motor elegido no puede
+dictar. Era **el aviso más importante de esa pantalla** y salía en español. También los `label`,
+`desc` y las etiquetas de opción de los controles de idioma de dictado — nombres de idioma, que son
+copia; los **códigos** de al lado no se tocan.
+
+### 4 — cambiar el idioma desde el onboarding: PASS
+
+Sólo escribía. En una instalación nueva, elegir inglés actualizaba Go, el overlay y la bandeja
+mientras el tutorial que el usuario estaba mirando seguía en español hasta reiniciar — y ése es el
+único momento en que se forma una primera impresión. Ahora sigue los tres pasos: escribir → traer →
+repintar.
+
+### 5 — la fuga de menús de la bandeja: PASS
+
+`Menu.Destroy()` **sí existe** en la versión de Wails fijada; Codex tenía razón en que no se llamaba.
+Dos cambios, y el segundo importa tanto como el primero:
+
+- **Se libera el menú anterior DESPUÉS de instalar el nuevo**, nunca antes: hasta que `SetMenu`
+  retorna, el menú viejo es lo que la bandeja está mostrando, y liberar un `NSMenu` todavía adjunto
+  es como se introduce un crash nativo.
+- **No se reconstruye si el idioma no se movió.** Antes llegaba aquí cada guardado del panel Sistema.
+
+```
+cambio real   en → es :  rebuilds: 1
+mismo idioma  es → es :  rebuilds: 0   (y el hook sí se disparó)
+```

@@ -43,6 +43,21 @@ func translatePayload(p *SettingsPayload) {
 	}
 	// ProviderOption carries no prose — the picker's labels come from the markup and are translated
 	// by the page's own pass. Left out deliberately rather than forgotten.
+	// ProviderHint is the sentence under the engine picker — the one that explains why a chosen engine
+	// cannot dictate. It was missed by the first version of this function, so an English page showed
+	// its most important warning in Spanish. Found by a cross-engine review.
+	p.ProviderHint = tr(p.ProviderHint)
+	for i := range p.LanguageControls {
+		c := &p.LanguageControls[i]
+		c.Label = tr(c.Label)
+		c.Desc = tr(c.Desc)
+		// The OPTION labels are language names — "Español (España)", "Inglés (EE. UU.)" — and they are
+		// copy: an English UI naming its languages in Spanish is the same bug as any other. The CODES
+		// beside them are identifiers and are never touched.
+		for j := range c.Options {
+			c.Options[j].Label = tr(c.Options[j].Label)
+		}
+	}
 	p.Trigger.Label = tr(p.Trigger.Label)
 	p.Trigger.Note = tr(p.Trigger.Note)
 	p.Trigger.ResetLabel = tr(p.Trigger.ResetLabel)

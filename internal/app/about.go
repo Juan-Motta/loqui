@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"regexp"
 	"strings"
 )
@@ -86,16 +87,17 @@ func dash(v string) string {
 // alone says everything. A packaged app that cannot read its own plist is genuinely broken, and
 // saying "Versión —" would understate that. The badge itself can never appear in a release build:
 // it is derived from the bundle, not from a flag someone could forget to flip.
-func versionLabel(f AboutFacts) string {
+func versionLabel(locale i18n.Locale, f AboutFacts) string {
+	t := func(key string, args map[string]string) string { return i18n.T(locale, key, args) }
 	switch {
 	case f.Version == "" && f.Packaged:
-		return "No se pudo leer la información de la app"
+		return t("No se pudo leer la información de la app", nil)
 	case f.Version == "":
-		return "desarrollo"
+		return t("desarrollo", nil)
 	case f.Packaged:
-		return "Versión " + f.Version
+		return t("Versión {v}", map[string]string{"v": f.Version})
 	default:
-		return "Versión " + f.Version + "  ·  desarrollo"
+		return t("Versión {v}", map[string]string{"v": f.Version}) + "  ·  desarrollo"
 	}
 }
 
@@ -104,19 +106,24 @@ func versionLabel(f AboutFacts) string {
 // The rows are FIXED and ordered even when their values are unknown: this is what someone pastes
 // into a bug report, and a list whose length depends on the machine makes two reports impossible to
 // compare line by line.
-func BuildAbout(f AboutFacts) AboutInfo {
+// The LOCALE is a parameter, not read from anywhere: this stays a pure function of its inputs, which
+// is what makes it testable without a store or a machine. The wording genuinely depends on the
+// language — "Versión {v}" interpolates a value, so the finished string can never be a catalogue key
+// and the lookup has to happen here rather than at a boundary downstream.
+func BuildAbout(locale i18n.Locale, f AboutFacts) AboutInfo {
+	t := func(key string) string { return i18n.T(locale, key, nil) }
 	return AboutInfo{
-		VersionLabel: versionLabel(f),
+		VersionLabel: versionLabel(locale, f),
 		System: []AboutRow{
-			{Key: "Sistema operativo", Value: dash(f.OSName) + " " + dash(f.OSVersion) + " (" + dash(f.Arch) + ")"},
-			{Key: "Idioma del sistema", Value: dash(f.Locale)},
+			{Key: t("Sistema operativo"), Value: dash(f.OSName) + " " + dash(f.OSVersion) + " (" + dash(f.Arch) + ")"},
+			{Key: t("Idioma del sistema"), Value: dash(f.Locale)},
 			{Key: "Go", Value: dash(f.GoVersion)},
 			{Key: "Wails", Value: dash(f.WailsVersion)},
 		},
 		Paths: []AboutRow{
-			{Key: "Carpeta de datos", Value: dash(f.DataDir)},
-			{Key: "Ajustes", Value: dash(f.SettingsFile)},
-			{Key: "Historial", Value: dash(f.HistoryFile)},
+			{Key: t("Carpeta de datos"), Value: dash(f.DataDir)},
+			{Key: t("Ajustes"), Value: dash(f.SettingsFile)},
+			{Key: t("Historial"), Value: dash(f.HistoryFile)},
 		},
 	}
 }

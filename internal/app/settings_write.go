@@ -129,7 +129,7 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 	// they were escaping from, and the row they clicked would go on claiming to be available. Making
 	// the model part of that row's state belongs with the model download, still to be ported.
 	if provider == store.DefaultProvider {
-		if problem := s.defaultEngineProblem(); problem != nil {
+		if problem := s.defaultEngineProblem(p.Locale); problem != nil {
 			notice = i18n.T(i18n.Locale(p.Locale), "Motor guardado, pero {engine} no puede dictar: {reason}",
 				map[string]string{"engine": provider, "reason": problem.Error()})
 		}

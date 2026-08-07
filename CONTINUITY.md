@@ -8,21 +8,21 @@
   outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
   (the UI) nearly closed: the app is navigated, configured and used.
 
-- **El riesgo del i18n está CERRADO (2026-08-07).** Se mergeó con `check-gates` en 3/6 y las tres
-  cosas que quedaban sin verificar ya están ejecutadas, con evidencia en
-  `docs/e2e/reports/2026-08-07-interface-language.md`: el cambio de idioma en caliente (ida y vuelta,
-  más "seguir el sistema"), el relabelado de la bandeja nativa, y la revisión cruzada del diff.
+- **El i18n está terminado y sin puntos abiertos (2026-08-07).** Traduce en cinco superficies: markup
+  estático, el payload y los avisos que emite Go, la prosa que arma la página, el overlay, y el menú
+  nativo de la bandeja. Cambio en caliente verificado en las dos direcciones y con "seguir el
+  sistema". Evidencia: `docs/e2e/reports/2026-08-07-interface-language.md`.
 
-  **Verificar no fue un trámite: destapó seis defectos.** El que más importa, porque el guardián y el
-  fallo compartían punto ciego: Go une literales en compilación, yo había guardado los FRAGMENTOS en
-  el catálogo, así que nueve mensajes llegaban enteros en español **mientras el test de cobertura los
-  daba por cubiertos** — su regex también leía sólo el primer literal. Se arregló el test primero y
-  fue él quien dijo la verdad.
+  **Lo que hay que entender antes de tocarlo:** las claves del catálogo SON las cadenas en español, así
+  que editar una frase rompe su clave — y lo que sostiene todo esto son los **ocho barridos de
+  cobertura** de `internal/i18n`. Seis comprueban que lo enrutado tenga traducción; **los dos últimos
+  van al revés y buscan prosa española que nadie enrutó**, que es el fallo real de una migración a
+  medias. Sin ellos, i18n se pudre en silencio y el fallback a español hace que cada omisión parezca
+  intencionada. Si añades copia, corre `./scripts/go.sh test ./internal/i18n/` y te dirá qué falta.
 
-  **Quedan seis puntos declarados con file:line** al final de ese informe, ninguno una fuga:
-  `AboutService` sin idioma, la prosa que arman permisos/historial/onboarding, dos campos que
-  `translatePayload` no toca, el cambio de idioma desde el onboarding, la fuga de menús de
-  `relabelTray`, y la anchura de la cobertura — que es el que decide si el resto se termina.
+  Dos cosas quedan dichas y no son deudas: sólo hay `es` e `in`glés (el original declara pt/fr/it/de y
+  deliberadamente no los ofrece sin revisar), y **nadie ha revisado la calidad del inglés** — está
+  verificado que el mecanismo traduce, no que un nativo elegiría esas palabras.
 
 - **Older next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
   starts on a **fresh branch off `main`**: (1) the accordion **folds itself** after a successful save

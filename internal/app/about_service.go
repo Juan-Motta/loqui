@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"runtime/debug"
 
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
@@ -21,6 +22,18 @@ type AboutService struct {
 
 func NewAboutService(st *store.Store) *AboutService {
 	return &AboutService{store: st}
+}
+
+// aboutLocale is the language the row keys are shown in.
+//
+// Read on EVERY call, not captured: this view can be opened after a language change, and the About
+// panel is precisely where someone goes to copy details into a bug report — in whatever language they
+// are reading the app in. The store is the same instance the rest of the app uses.
+func (s *AboutService) aboutLocale() i18n.Locale {
+	if s.store == nil {
+		return i18n.Default
+	}
+	return i18n.ResolveLocale(s.store.LoadSettings().AppLanguage, macos.SystemLocale())
 }
 
 // bundleVersion reads CFBundleShortVersionString from the running app's own Info.plist, and reports
@@ -83,5 +96,10 @@ func (s *AboutService) Info() AboutInfo {
 		f.SettingsFile = s.store.SettingsPath()
 		f.HistoryFile = s.store.HistoryPath()
 	}
-	return BuildAbout(f)
+	// The locale goes IN rather than the rows being translated on the way out: the version label
+	// interpolates a value, so its finished form can never be a catalogue key.
+	//
+	// The VALUES are never translated — a macOS version, an architecture, file paths, a locale code.
+	// Translating those would corrupt the very details this panel exists to be copied from.
+	return BuildAbout(s.aboutLocale(), f)
 }
