@@ -47,6 +47,23 @@ type KeyState struct {
 	// the unported realtime one. Without this the settings page offers to store a key that nothing
 	// will use, and worse, its form would write it over the slot that IS in use.
 	Available bool `json:"available"`
+	// Stored is "THIS APP holds a credential here that it can read". It is what the key field asks
+	// before showing a mask, and it is deliberately NOT `Status == KeyPresent`.
+	//
+	// The gap is FromEnv, and it is the case that would lie. An env-var key is present, dictation
+	// will happily use it, and the app never stored it — so a mask there would say "I have your key"
+	// about a credential this app cannot read, cannot delete, and did not save. The comment on
+	// FromEnv above already promises the opposite: that the field looks empty precisely so the user
+	// can tell the two apart.
+	//
+	// Unreadable is excluded for the other half of that reasoning: "I could not check" is not "there
+	// is one", and masking on it would tell the user their key is safely stored at the exact moment
+	// the credentials file cannot be read.
+	//
+	// NOT reused for the "Borrar clave" button, whose condition only looks similar: that one keys off
+	// the CARD's availability (settings.ts:579), not the slot's. Collapsing them would change
+	// behaviour quietly.
+	Stored bool `json:"stored"`
 }
 
 // PermissionsState is the three grants dictation depends on. Statuses are passed through
@@ -510,6 +527,14 @@ func (b *Bootstrap) keyStates() []KeyState {
 	}
 
 	wg.Wait()
+
+	// Derived AFTER the fan-out, in one place, rather than inside each branch above. The env branch
+	// `continue`s and the stored branch finishes in a goroutine, so setting it per-branch would mean
+	// writing the same rule twice — and writing it inside the goroutine would be a race with this
+	// loop's read.
+	for i := range out {
+		out[i].Stored = out[i].Status == store.KeyPresent && !out[i].FromEnv
+	}
 	return out
 }
 

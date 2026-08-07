@@ -151,7 +151,13 @@ func TestAKeyStateCarriesPresenceAndNothingElse(t *testing.T) {
 	if len(wire.Keys) == 0 {
 		t.Fatal("the payload carried no key states")
 	}
-	allowed := map[string]bool{"slot": true, "status": true, "fromEnv": true, "available": true}
+	// Every one of these is a fact ABOUT the credential — is there one, where did it come from, would
+	// it be read, did we store it. None of them is derived from the value, so none of them can carry a
+	// byte of it. That is the property this list pins; adding a field is fine, adding a field computed
+	// from the secret is what must break here.
+	allowed := map[string]bool{
+		"slot": true, "status": true, "fromEnv": true, "available": true, "stored": true,
+	}
 	for _, k := range wire.Keys {
 		for field := range k {
 			if !allowed[field] {
@@ -464,4 +470,58 @@ func TestPayloadFallsBackToDefaultsWithNoSettingsFile(t *testing.T) {
 	if p.Onboarded {
 		t.Error("Onboarded = true on a fresh install")
 	}
+}
+
+// Stored answers "did THIS APP put a credential here that it can read" — the one question the key
+// field has to answer before it may show a mask.
+//
+// It is not the same as `status == present`, and the difference is the whole reason it exists in Go
+// instead of being worked out in the page: an env-var key IS present, dictation WILL use it, and the
+// app never stored it. Masking there would tell the user "I have your key" about a credential the app
+// cannot read, cannot delete, and did not save — while bootstrap.go:41-44 already promises that field
+// looks empty precisely so the user can tell the two apart.
+func TestStoredIsTrueOnlyForACredentialThisAppHolds(t *testing.T) {
+	t.Run("a key the app stored", func(t *testing.T) {
+		st := store.NewAt(t.TempDir())
+		b := testBootstrap(t, st)
+		b.keyStatus = func(store.KeySlot) store.KeyStatus { return store.KeyPresent }
+
+		if !keyStateFor(t, b.Payload(), store.SlotGrok).Stored {
+			t.Error("Stored = false for a credential this app has — the field would stay blank")
+		}
+	})
+
+	t.Run("an empty slot", func(t *testing.T) {
+		st := store.NewAt(t.TempDir())
+		b := testBootstrap(t, st)
+		b.keyStatus = func(store.KeySlot) store.KeyStatus { return store.KeyAbsent }
+
+		if keyStateFor(t, b.Payload(), store.SlotGrok).Stored {
+			t.Error("Stored = true for an empty slot — the field would claim a key that is not there")
+		}
+	})
+
+	t.Run("a key from the environment", func(t *testing.T) {
+		st := store.NewAt(t.TempDir())
+		b := testBootstrap(t, st)
+		t.Setenv("LOQUI_GROK_KEY", "xai-from-env")
+
+		grok := keyStateFor(t, b.Payload(), store.SlotGrok)
+		if grok.Status != store.KeyPresent {
+			t.Fatalf("precondition: status = %q, want present", grok.Status)
+		}
+		if grok.Stored {
+			t.Error("Stored = true for an env-var key — the app never stored it and cannot read it back")
+		}
+	})
+
+	t.Run("credentials that could not be read", func(t *testing.T) {
+		st := store.NewAt(t.TempDir())
+		b := testBootstrap(t, st)
+		b.keyStatus = func(store.KeySlot) store.KeyStatus { return store.KeyUnreadable }
+
+		if keyStateFor(t, b.Payload(), store.SlotGrok).Stored {
+			t.Error(`Stored = true for unreadable credentials — "I could not check" is not "there is one"`)
+		}
+	})
 }
