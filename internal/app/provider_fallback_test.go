@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
@@ -281,7 +282,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	svc, _ := testService(t, st)
 	svc.defaultProblem = nil // the real check, deliberately
 
-	if err := svc.defaultEngineProblem(); err == nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err == nil {
 		t.Fatal("no model on disk and no problem reported")
 	} else if !strings.Contains(err.Error(), "modelo") {
 		t.Errorf("problem = %v, want it to name the model", err)
@@ -297,7 +298,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	if err := os.WriteFile(model, []byte("descarga a medias"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.defaultEngineProblem(); err == nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err == nil {
 		t.Error("a truncated model passed as usable")
 	} else if !strings.Contains(err.Error(), "no es el esperado") {
 		t.Errorf("problem = %v, want it to say the file is not the expected model", err)
@@ -315,7 +316,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	if err := almost.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.defaultEngineProblem(); err == nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err == nil {
 		t.Error("a model one byte short passed as usable")
 	}
 
@@ -332,7 +333,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	if err := extra.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.defaultEngineProblem(); err == nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err == nil {
 		t.Error("a file larger than the model passed as the model")
 	}
 
@@ -343,7 +344,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	if err := os.MkdirAll(model, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.defaultEngineProblem(); err == nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err == nil {
 		t.Error("a directory passed as a model")
 	}
 	if err := os.Remove(model); err != nil {
@@ -361,7 +362,7 @@ func TestTheDefaultEngineProblemLooksForTheModelOnDisk(t *testing.T) {
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.defaultEngineProblem(); err != nil {
+	if err := svc.defaultEngineProblem(string(i18n.Spanish)); err != nil {
 		t.Errorf("the model is there and it still complains: %v", err)
 	}
 }

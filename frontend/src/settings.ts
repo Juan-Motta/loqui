@@ -121,7 +121,7 @@ function wireNavigation(): void {
           const status = $<HTMLElement>("inicioStatus");
           if (status) {
             status.className = "status err";
-            status.textContent = "No se pudo abrir el enlace: " + String(err);
+            status.textContent = t("No se pudo abrir el enlace: ") + String(err);
           }
         },
       );
@@ -580,7 +580,7 @@ function paint(p: SettingsPayload): boolean {
         hint.textContent = "No disponible en este sistema";
         hint.className = "engine-hint warn";
       } else if (state === "unconfigured") {
-        hint.textContent = "Este motor necesita configuración — ábrela en Ajustes";
+        hint.textContent = t("Este motor necesita configuración — ábrela en Ajustes");
         hint.className = "engine-hint warn";
       } else {
         hint.textContent = "";
@@ -645,8 +645,17 @@ function paint(p: SettingsPayload): boolean {
       const slot = AZURE_SERVICE_SLOT[option.value];
       const usable = slot ? (statusBySlot.get(slot)?.available ?? false) : true;
       option.disabled = !usable;
-      if (!usable && !option.textContent?.includes("no disponible")) {
-        option.textContent = `${option.textContent ?? option.value} — no disponible aún`;
+      // A DATA FLAG, not a substring of the visible text. The guard used to ask whether the label
+      // already contained "no disponible", which stops working the moment the label is translated —
+      // an English option would have the suffix appended again on every repaint, growing a longer
+      // name each time. That is the exact bug the ENGINE_LABELS comment describes, reintroduced
+      // through the back door.
+      if (!usable && option.dataset.suffixed !== "1") {
+        option.dataset.suffixed = "1";
+        option.dataset.i18nBase = option.textContent ?? option.value;
+      }
+      if (option.dataset.suffixed === "1") {
+        option.textContent = `${t(option.dataset.i18nBase ?? "")} ${t("— no disponible aún")}`;
       }
       // Never leave the unusable one selected, whatever the markup defaulted to.
       if (!usable && azureService.value === option.value)

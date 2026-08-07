@@ -9,7 +9,7 @@
 // mount the SAME components the Ajustes tabs use. That is deliberate: the wizard showing different
 // engine states from the Conexiones tab would be worse than no wizard.
 import { Events } from "@wailsio/runtime";
-import { setText } from "./i18n.js";
+import { loadTranslations, setText, t } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   SettingsPayload,
@@ -157,14 +157,14 @@ function renderConfig(p: SettingsPayload): void {
     : undefined;
   if (slot) {
     const label = document.createElement("label");
-    label.textContent = "Clave de API";
+    label.textContent = t("Clave de API");
     const input = document.createElement("input");
     input.type = "password";
     // "present" is the value store.KeyStatus carries. The vocabulary belongs to Go: a word invented
     // here would compare equal to nothing, and the placeholder would tell someone who already has a
     // key stored to paste one.
     input.placeholder =
-      slot.status === "present" ? "Ya configurada — escribe para reemplazarla" : "Pega tu clave";
+      slot.status === "present" ? t("Ya configurada — escribe para reemplazarla") : t("Pega tu clave");
     input.autocomplete = "off";
     // On change, not on every keystroke: a keystroke-by-keystroke write would store dozens of
     // truncated prefixes in the stored credentials.
@@ -196,7 +196,7 @@ function renderPrefs(p: SettingsPayload): void {
   box.innerHTML = "";
 
   const appearanceLabel = document.createElement("label");
-  appearanceLabel.textContent = "Apariencia de la aplicación";
+  appearanceLabel.textContent = t("Apariencia de la aplicación");
   const seg = document.createElement("div");
   seg.className = "seg";
   seg.setAttribute("role", "radiogroup");
@@ -224,18 +224,27 @@ function renderPrefs(p: SettingsPayload): void {
   box.append(appearanceLabel, seg);
 
   const langLabel = document.createElement("label");
-  langLabel.textContent = "Idioma de la interfaz";
+  langLabel.textContent = t("Idioma de la interfaz");
   const lang = document.createElement("select");
   lang.innerHTML =
-    `<option value="">Seguir el sistema</option>` +
-    `<option value="es">Español</option>` +
-    `<option value="en">Inglés</option>`;
+    `<option value="">${t("Seguir el sistema")}</option>` +
+    `<option value="es">${t("Español")}</option>` +
+    `<option value="en">${t("Inglés")}</option>`;
   lang.value = p.appLanguage;
-  lang.onchange = () => void run(() => Settings.SetAppLanguage(lang.value));
+  // WRITE → FETCH → REPAINT, the same three steps as the Sistema picker and for the same reasons.
+  // The first version only wrote: on a fresh install, choosing English updated Go, the overlay and the
+  // tray while the tutorial the user was looking at stayed Spanish until a restart — which is the one
+  // moment a first impression is being formed. Found in review.
+  lang.onchange = () =>
+    void run(() => Settings.SetAppLanguage(lang.value))
+      .then(() => loadTranslations())
+      .catch(() => {
+        /* stays in the previous language, which is still readable */
+      });
   box.append(langLabel, lang);
 
   const trigLabel = document.createElement("label");
-  trigLabel.textContent = "Atajo de teclado";
+  trigLabel.textContent = t("Atajo de teclado");
   const trig = document.createElement("div");
   trig.className = "trigger-box";
   box.append(trigLabel, trig);

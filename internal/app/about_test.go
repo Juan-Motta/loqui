@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
+)
 
 // fullFacts is a machine that answered every question, so each test can spoil exactly one thing.
 func fullFacts() AboutFacts {
@@ -33,7 +37,7 @@ func rowValue(t *testing.T, rows []AboutRow, key string) string {
 // The badge is the whole point of the packaged flag: it says "you are not looking at the shipped
 // app". If it leaked into a release it would be lying to a user who cannot check.
 func TestBuildAboutHidesDevBadgeWhenPackaged(t *testing.T) {
-	got := BuildAbout(fullFacts()).VersionLabel
+	got := BuildAbout(i18n.Spanish, fullFacts()).VersionLabel
 	if got != "Versión 0.1.0" {
 		t.Fatalf("etiqueta de versión = %q, quería %q", got, "Versión 0.1.0")
 	}
@@ -42,7 +46,7 @@ func TestBuildAboutHidesDevBadgeWhenPackaged(t *testing.T) {
 func TestBuildAboutMarksUnpackagedRunAsDevelopment(t *testing.T) {
 	f := fullFacts()
 	f.Packaged = false
-	got := BuildAbout(f).VersionLabel
+	got := BuildAbout(i18n.Spanish, f).VersionLabel
 	if got != "Versión 0.1.0  ·  desarrollo" {
 		t.Fatalf("etiqueta de versión = %q, quería la insignia de desarrollo", got)
 	}
@@ -54,7 +58,7 @@ func TestBuildAboutUnpackagedWithoutVersionSaysOnlyDevelopment(t *testing.T) {
 	f := fullFacts()
 	f.Packaged = false
 	f.Version = ""
-	got := BuildAbout(f).VersionLabel
+	got := BuildAbout(i18n.Spanish, f).VersionLabel
 	if got != "desarrollo" {
 		t.Fatalf("etiqueta de versión = %q, quería %q", got, "desarrollo")
 	}
@@ -64,14 +68,14 @@ func TestBuildAboutUnpackagedWithoutVersionSaysOnlyDevelopment(t *testing.T) {
 func TestBuildAboutPackagedWithoutVersionReportsFailure(t *testing.T) {
 	f := fullFacts()
 	f.Version = ""
-	got := BuildAbout(f).VersionLabel
+	got := BuildAbout(i18n.Spanish, f).VersionLabel
 	if got != "No se pudo leer la información de la app" {
 		t.Fatalf("etiqueta de versión = %q, quería el mensaje de fallo", got)
 	}
 }
 
 func TestBuildAboutFormatsTheOperatingSystemRow(t *testing.T) {
-	rows := BuildAbout(fullFacts()).System
+	rows := BuildAbout(i18n.Spanish, fullFacts()).System
 	if got := rowValue(t, rows, "Sistema operativo"); got != "macOS 26.5.2 (arm64)" {
 		t.Fatalf("fila de SO = %q", got)
 	}
@@ -86,7 +90,7 @@ func TestBuildAboutReplacesMissingFactsWithADash(t *testing.T) {
 	f.Locale = ""
 	f.WailsVersion = ""
 	f.DataDir = ""
-	info := BuildAbout(f)
+	info := BuildAbout(i18n.Spanish, f)
 
 	if got := rowValue(t, info.System, "Sistema operativo"); got != "macOS — (—)" {
 		t.Fatalf("fila de SO con datos ausentes = %q", got)
@@ -105,7 +109,7 @@ func TestBuildAboutReplacesMissingFactsWithADash(t *testing.T) {
 // The rows are fixed and ordered: this is a spec sheet someone reads top to bottom when reporting a
 // bug, and a row appearing or vanishing depending on the machine makes two reports incomparable.
 func TestBuildAboutKeepsRowsFixedAndOrdered(t *testing.T) {
-	info := BuildAbout(fullFacts())
+	info := BuildAbout(i18n.Spanish, fullFacts())
 
 	wantSystem := []string{"Sistema operativo", "Idioma del sistema", "Go", "Wails"}
 	if len(info.System) != len(wantSystem) {
@@ -185,7 +189,7 @@ func TestIsPackagedPathRecognisesABundleAndRejectsALooseBinary(t *testing.T) {
 // The values have to arrive intact — a test that only counted rows would pass with them swapped.
 func TestBuildAboutCarriesEachPathToItsOwnRow(t *testing.T) {
 	f := fullFacts()
-	info := BuildAbout(f)
+	info := BuildAbout(i18n.Spanish, f)
 	if got := rowValue(t, info.Paths, "Ajustes"); got != f.SettingsFile {
 		t.Fatalf("fila de ajustes = %q, quería %q", got, f.SettingsFile)
 	}

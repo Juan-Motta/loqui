@@ -8,6 +8,7 @@
 // unanswered question looks like all live in internal/app/about.go, where they are tested. Here the
 // rows arrive already resolved and are only turned into DOM.
 import { Events } from "@wailsio/runtime";
+import { t } from "./i18n.js";
 import * as About from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/aboutservice.js";
 import type { AboutRow } from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/models.js";
 
@@ -50,7 +51,7 @@ export async function paintAbout(): Promise<void> {
     // The view has to say something: this is where a user goes to read what went wrong, so a
     // silent empty panel is the one outcome that defeats its purpose.
     const version = $<HTMLElement>("aboutVersion");
-    if (version) version.textContent = "No se pudo leer la información de la app";
+    if (version) version.textContent = t("No se pudo leer la información de la app");
     Events.Emit("ui:about", { error: String(err) });
   }
 }

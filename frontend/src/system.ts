@@ -168,7 +168,7 @@ function startCapture(box: HTMLElement): void {
   if (p.change) p.change.textContent = "Cancelar";
   if (p.status) {
     p.status.className = "lang-status";
-    p.status.textContent = "Pulsa la combinación…";
+    p.status.textContent = t("Pulsa la combinación…");
   }
 }
 
@@ -288,7 +288,7 @@ export function paintSystem(p: SettingsPayload): void {
       if (status) {
         status.className = "status err";
         status.textContent =
-          "No se pudieron enumerar los micrófonos: " + p.devicesError;
+          t("No se pudieron enumerar los micrófonos: ") + p.devicesError;
       }
     }
   }
@@ -365,7 +365,7 @@ export function wireSystem(): void {
     //    rewrites marked static nodes, while the engine options, the key-state label and the busy
     //    lines are BUILT through t() during a paint. Without a repaint they keep the old language on
     //    an otherwise switched page. Review finding.
-    void run(status, "✓ idioma de la interfaz guardado", () =>
+    void run(status, t("✓ idioma de la interfaz guardado"), () =>
       Settings.SetAppLanguage(value),
     )
       .then(() => loadTranslations())
@@ -382,7 +382,7 @@ export function wireSystem(): void {
 
   $<HTMLSelectElement>("device")?.addEventListener("change", (e) => {
     const value = (e.target as HTMLSelectElement).value;
-    void run(status, "✓ micrófono guardado", () =>
+    void run(status, t("✓ micrófono guardado"), () =>
       Settings.SetInputDevice(value),
     );
   });
