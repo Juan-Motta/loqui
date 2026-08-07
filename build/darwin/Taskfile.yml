@@ -174,7 +174,26 @@ tasks:
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers"
       - |
         if [ -d helpers/bin ]; then
-          cp helpers/bin/* "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true
+          # THE MODEL IS EXCLUDED, and that is the whole point of the model row.
+          #
+          # ggml-small.bin is 465 MB. Copying it in takes the bundle from ~97 MB to ~590 MB, makes every
+          # update re-download all of it, and — worse for development — means WhisperModelPath always
+          # finds a bundled copy, so the downloader is never exercised by anyone. It is fetched on
+          # first use instead, which is what the row exists for.
+          #
+          # LOQUI_BUNDLE_MODEL=1 puts it back, for the one case that wants it: building a personal
+          # build for a machine that will never have the network to download it.
+          for f in helpers/bin/*; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in
+              ggml-*.bin)
+                if [ "${LOQUI_BUNDLE_MODEL:-0}" = "1" ]; then
+                  cp "$f" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true
+                fi
+                ;;
+              *) cp "$f" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true ;;
+            esac
+          done
         fi
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 

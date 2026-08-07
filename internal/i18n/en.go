@@ -12,6 +12,44 @@
 package i18n
 
 var englishCatalog = map[string]string{
+	// ---- the whisper model row ----
+	" · quedan {eta}": " · {eta} left",
+	"El modelo que vino con la app no es válido ({done} de {total})":                                             "The model that came with the app is not valid ({done} of {total})",
+	"el servidor mandó un tramo que no encaja con la descarga a medias — vuelve a intentarlo (pedimos desde %d)": "the server sent a chunk that does not line up with the partial download — try again (we asked from %d)",
+	"no se pudo instalar el modelo descargado: %w":                                                               "the downloaded model could not be installed: %w",
+	"{done} de {total}": "{done} of {total}",
+
+	"Descarga incompleta ({done} de {total}) — se reanudará": "Download incomplete ({done} of {total}) — it will resume",
+	"El modelo está dañado — hay que descargarlo de nuevo":   "The model is damaged — it has to be downloaded again",
+	"Falta el modelo ({size}, una sola vez)":                 "Model missing ({size}, one time only)",
+	"Modelo local (repositorio)":                             "Local model (repository)",
+
+	"Cancelar": "Cancel",
+	"Descarga incompleta ({done} de {total})": "Download incomplete ({done} of {total})",
+	"Descargando el modelo…":                  "Downloading the model…",
+	"Descargar modelo":                        "Download model",
+	"El modelo en disco no es válido":         "The model on disk is not valid",
+	"Eliminar":                                "Delete",
+	"Falta el modelo ({total})":               "Model missing ({total})",
+	"Modelo listo":                            "Model ready",
+	"Reanudar descarga":                       "Resume download",
+	"descarga cancelada":                      "download cancelled",
+	"el modelo descargado no coincide con el esperado — se descartó, vuelve a intentarlo": "the downloaded model does not match the expected one — it was discarded, try again",
+	"el modelo llegó incompleto (%s de %s)":                                               "the model arrived incomplete (%s of %s)",
+	"el servidor del modelo respondió %d":                                                 "the model server answered %d",
+	"este modelo vino con la aplicación — no se puede eliminar desde aquí":                "this model came with the app — it cannot be deleted from here",
+	"no se pudo cerrar el modelo: %w":                                                     "the model could not be closed: %w",
+	"no se pudo comprobar el modelo descargado: %w":                                       "the downloaded model could not be verified: %w",
+	"no se pudo crear la carpeta del modelo: %w":                                          "the model folder could not be created: %w",
+	"no se pudo descargar el modelo: %w":                                                  "the model could not be downloaded: %w",
+	"no se pudo descartar el modelo anterior: %w":                                         "the previous model could not be discarded: %w",
+	"no se pudo eliminar el modelo: %w":                                                   "the model could not be deleted: %w",
+	"no se pudo escribir el modelo: %w":                                                   "the model could not be written: %w",
+	"no se pudo leer el modelo descargado: %w":                                            "the downloaded model could not be read: %w",
+	"no se pudo preparar la descarga: %w":                                                 "the download could not be prepared: %w",
+	"se cortó la descarga del modelo: %w":                                                 "the model download was cut off: %w",
+	"ya hay una descarga en curso":                                                        "a download is already running",
+
 	"no hay ninguna clave guardada para este servicio":                       "there is no key stored for this service",
 	"no se pudieron leer las claves guardadas — revisa el archivo de claves": "the stored keys could not be read — check the keys file",
 
@@ -293,6 +331,10 @@ var englishCatalog = map[string]string{
 // terms and identifiers. Declared explicitly, because "no entry" would otherwise be
 // indistinguishable from a missed translation.
 var sameInEnglish = map[string]bool{
+	// A number and a unit: identical in both languages, and declared so the coverage test can tell
+	// that apart from a forgotten translation.
+	"{n} s":   true,
+	"{n} min": true,
 	"API key": true,
 	"Azure":   true,
 	"Azure OpenAI — realtime (gpt-realtime-whisper)": true,

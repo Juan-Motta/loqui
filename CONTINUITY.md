@@ -40,7 +40,21 @@
   services on a freshly packaged build, nine cases PASS, and **the three green paths ran for the
   first time**.
 
-- **After that:** **port the whisper model row**, the only thing left from the fidelity assignment.
+- **DONE 2026-08-07: the whisper model row is ported**, which closes the fidelity assignment. Status,
+  resumable download with progress, cancel and delete. Report:
+  `docs/e2e/reports/2026-08-07-whisper-model-row.md`.
+
+  **And the review of it found the thing that made the whole feature decorative:** packaging copied the
+  model into the bundle, so the `.app` was 497 MB and `WhisperModelPath` always found a bundled copy —
+  the downloader was never exercised, by anyone. Excluded → **32 MB**, with `LOQUI_BUNDLE_MODEL=1` as
+  an escape hatch for a personal build with no network.
+
+  **The design point to keep:** bytes land in `<path>.part` and the rename happens only after the
+  digest matches, so the canonical path never holds unverified bytes. That is what makes it safe for
+  `dictation.go` to judge the model by existence and for `status()` to skip hashing on every repaint —
+  both of which were unsound before.
+
+- **After that:** the port has no assignment left. The open items are the ones listed under Blockers.
   Start with the red
   `modelSpec` test in Go: port `../loqui/src/shared/modelSpec.ts` to `internal/store/model.go`
   (file name, expected size, download URL) with tests, and only then the download service with

@@ -154,6 +154,19 @@ func main() {
 			// Read-only: Acerca de reports the build and the machine, and takes the store only to
 			// name the files it writes.
 			application.NewService(app.NewAboutService(st)),
+			// The model download gets its OWN service: it runs for minutes, and Settings is the
+			// service the whole page serialises its writes through.
+			application.NewService(app.NewModelService(st.Dir(),
+				func(name string, data any) {
+					if a := wailsApp; a != nil {
+						a.Event.Emit(name, data)
+					}
+				},
+				logLine,
+				func() i18n.Locale {
+					return i18n.ResolveLocale(st.LoadSettings().AppLanguage, macos.SystemLocale())
+				},
+			)),
 			// The opener is injected so internal/app stays free of Wails. The URL itself lives in the
 			// service, not the page: a named action cannot be pointed at another site.
 			application.NewService(app.NewLinksService(func(url string) error {
