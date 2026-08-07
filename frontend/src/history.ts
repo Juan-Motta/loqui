@@ -14,6 +14,7 @@
 // list in memory. That is the port's whole premise — the rules live on one side — and it is why
 // there is no `historyItems` array in this file.
 import { Events } from "@wailsio/runtime";
+import { t } from "./i18n.js";
 import * as History from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/historyservice.js";
 import * as Clipboard from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/clipboardservice.js";
 import type { HistoryEntry } from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/models.js";
@@ -50,8 +51,19 @@ const EMPTY_SEARCH =
 // The interface language decides the format, not the OS: an English UI showing "25/7/2026" is the
 // same bug as an English UI showing "ahora". Carried over from the original's intlLocale().
 let appLocale = "es";
+
+// REPAINTS when the language actually moves, and that is not a nicety — it is the fix for a bug the
+// user reported: "hace 23h sigue apareciendo" on an English interface.
+//
+// Two orderings break without it, and they are the same bug from both ends. At startup the history
+// is wired and painted before the settings payload lands, so the first render formats in Spanish and
+// nothing ever redraws it. And when the user switches language later, these rows are not part of
+// what paint() rebuilds, so they would keep the old language until the next dictation.
 export function setHistoryLocale(locale: string): void {
-  appLocale = locale || "es";
+  const next = locale || "es";
+  if (next === appLocale) return;
+  appLocale = next;
+  void refreshHistory();
 }
 function intlLocale(): string {
   return appLocale === "en" ? "en-US" : "es-ES";
@@ -59,14 +71,29 @@ function intlLocale(): string {
 
 // relTime is what the Home card shows: recent transcripts read better as "hace 5 min" than as a
 // timestamp. The Historial itself uses the absolute date, because there you are looking things up.
+//
+// Intl.RelativeTimeFormat RATHER THAN CATALOGUE ENTRIES, and the reason is that these strings are
+// not really copy — they are a number and a unit, which every language pluralises and orders its own
+// way. A catalogue would need "hace {n} min", "hace {n} h" and their plurals per language, and would
+// go stale the moment a third language arrived.
+//
+// `narrow` is what keeps the Spanish EXACTLY as it was — "hace 5 min", "hace 23 h", "hace 3 d",
+// byte for byte — while English comes out as "5m ago", "23h ago". Checked against the runtime, not
+// assumed: the compact form matters because this sits in a narrow card.
 function relTime(at: number): string {
   const mins = Math.floor((Date.now() - at) / 60000);
-  if (mins < 1) return "ahora";
-  if (mins < 60) return `hace ${mins} min`;
+  // Under a minute is the one case Intl words differently from this app ("este minuto"), so it keeps
+  // its own wording and goes through the catalogue like any other sentence.
+  if (mins < 1) return t("ahora");
+  const rel = new Intl.RelativeTimeFormat(intlLocale(), {
+    numeric: "auto",
+    style: "narrow",
+  });
+  if (mins < 60) return rel.format(-mins, "minute");
   const h = Math.floor(mins / 60);
-  if (h < 24) return `hace ${h} h`;
+  if (h < 24) return rel.format(-h, "hour");
   const d = Math.floor(h / 24);
-  if (d < 7) return `hace ${d} d`;
+  if (d < 7) return rel.format(-d, "day");
   return new Date(at).toLocaleDateString(intlLocale());
 }
 
@@ -114,7 +141,7 @@ function emptyStateHTML(kind: "none" | "nomatch"): string {
   // no shortcut at all there is no key to press.
   const desc =
     triggerKey === ""
-      ? "Usa el ícono de la barra de menús o “Probar dictado” para crear la primera."
+      ? t("Usa el ícono de la barra de menús o “Probar dictado” para crear la primera.")
       : mode === "toggle"
         ? `Pulsa ${key} y habla para crear la primera.`
         : `Mantén ${key} y habla para crear la primera.`;
@@ -185,7 +212,7 @@ function historyRow(it: HistoryEntry): HTMLElement {
     } catch (e) {
       // Say what failed and what to do instead of a bare "error": the text is still on screen, so
       // selecting it by hand always works as a fallback.
-      if (label) label.textContent = "no se copió";
+      if (label) label.textContent = t("no se copió");
       copy.title = `No se pudo copiar: ${e instanceof Error ? e.message : String(e)}. Puedes seleccionar el texto y copiarlo a mano.`;
       copy.classList.add("copy-failed");
     }
@@ -260,8 +287,13 @@ function reportShape(
     : [];
   Events.Emit(event, {
     rows: box.querySelectorAll(rowSelector).length,
-    rowClass: row?.className ?? "(ninguna)",
+    // NOT translated: this is diagnostic output, and a debug report that changes wording with the
+    // interface language is harder to grep, not friendlier.
+    rowClass: row?.className ?? "(none)",
     childClasses: classes.join(" | "),
+    // The relative timestamp as rendered. A time, never transcript text — and the only way to see
+    // from outside that the language reached this formatter.
+    when: row?.querySelector(".hist-when,.hrow-when")?.textContent ?? "",
   });
 }
 

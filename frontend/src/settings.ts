@@ -23,7 +23,7 @@
 // key, appearance, the input device, the permission rows, About and the onboarding wizard. See
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
-import { applyTranslations, loadTranslations, setText, t } from "./i18n.js";
+import { applyTranslations, currentLocale, loadTranslations, setText, t } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
@@ -1370,7 +1370,14 @@ Dictation.Active().then(
 // the authored language and perfectly usable — far better than blocking the whole window on it.
 loadTranslations()
   .catch((err) => Events.Emit("ui:i18n-failed", { error: String(err) }))
-  .then(() => Settings.Load())
+  .then(() => {
+    // As EARLY as the locale is known, which is before the payload arrives. The history is wired and
+    // painted at module load, so telling it here is what stops the first render formatting in
+    // Spanish and flipping a moment later. setHistoryLocale repaints if it is already too late,
+    // which is the belt to this braces.
+    setHistoryLocale(currentLocale());
+    return Settings.Load();
+  })
   .then(
   (payload) => {
     Events.Emit("ui:bootstrap", {

@@ -10,6 +10,7 @@
 // browser concern. Even then the string is sent to Go to be validated and canonicalised.
 import { Events } from "@wailsio/runtime";
 import { loadTranslations, t } from "./i18n.js";
+import { setHistoryLocale } from "./history.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   SettingsPayload,
@@ -361,9 +362,16 @@ export function wireSystem(): void {
       // what the payload says; this one changes the TABLE the whole page is drawn through, and a
       // repaint alone would rewrite the same Spanish. It also covers "Seguir el sistema", where the
       // new language is one only Go can resolve.
-      loadTranslations().catch(() => {
-        /* stays in the previous language, which is still readable */
-      }),
+      loadTranslations()
+        .then(() => {
+          // The history formats its own timestamps and is not part of what paint() rebuilds, so it
+          // is told separately. Empty means "follow the system", which only Go can resolve — hence
+          // the payload's resolved locale rather than the value just saved.
+          void Settings.Load().then((p) => setHistoryLocale(p.locale || p.appLanguage));
+        })
+        .catch(() => {
+          /* stays in the previous language, which is still readable */
+        }),
     );
   });
 

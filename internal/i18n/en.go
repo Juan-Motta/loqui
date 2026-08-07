@@ -24,6 +24,10 @@ var englishCatalog = map[string]string{
 	"reconectando…":   "reconnecting…",
 
 	// ---- prose the PAGE builds at runtime ----
+	"Usa el ícono de la barra de menús o “Probar dictado” para crear la primera.": "Use the menu-bar icon or “Test dictation” to create the first one.",
+	"ahora":       "now",
+	"no se copió": "not copied",
+
 	// Not in the markup, so the coverage test cannot see these either: they are written by
 	// keyStateLabel, the busy lines and the button titles, and reach the catalogue through t().
 	"(definida por variable de entorno — no se puede borrar desde aquí)":                                   "(set by an environment variable — it cannot be deleted from here)",
