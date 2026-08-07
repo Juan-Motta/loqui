@@ -12,10 +12,8 @@
 package i18n
 
 var englishCatalog = map[string]string{
-	"esta ranura la controla la variable de entorno %s — la clave que se usa ": "this slot is controlled by the %s environment variable — the key in use ",
-	"no hay ninguna clave guardada para este servicio":                         "there is no key stored for this service",
-	"no se pudieron leer las claves guardadas — revisa el archivo de claves":   "the stored keys could not be read — check the keys file",
-	"viene de ahí, no de las guardadas":                                        "comes from there, not from the stored ones",
+	"no hay ninguna clave guardada para este servicio":                       "there is no key stored for this service",
+	"no se pudieron leer las claves guardadas — revisa el archivo de claves": "the stored keys could not be read — check the keys file",
 
 	// ---- the tray menu and the overlay pill, which are neither markup nor payload ----
 	"Ajustes…":        "Settings…",
@@ -24,6 +22,10 @@ var englishCatalog = map[string]string{
 	"reconectando…":   "reconnecting…",
 
 	// ---- prose the PAGE builds at runtime ----
+	"— no disponible aún":             "— not available yet",
+	"— no disponible en este sistema": "— not available on this system",
+	"— sin configurar":                "— not configured",
+
 	"Usa el ícono de la barra de menús o “Probar dictado” para crear la primera.": "Use the menu-bar icon or “Test dictation” to create the first one.",
 	"ahora":       "now",
 	"no se copió": "not copied",
@@ -49,31 +51,50 @@ var englishCatalog = map[string]string{
 	"Seguir el sistema":                                                        "Follow the system",
 	"Ver la clave":                                                             "Show the key",
 
+	// ---- engine notices, with {placeholders} because the engine name is a VALUE ----
+	"Motor activo: {engine}": "Active engine: {engine}",
+	"Motor guardado":         "Engine saved",
+	"Motor guardado, pero no puede funcionar en este sistema":                                                                        "Engine saved, but it cannot run on this system",
+	"Motor guardado, pero {engine} no puede dictar: {reason}":                                                                        "Engine saved, but {engine} cannot dictate: {reason}",
+	"Motor guardado: {engine}":                                                                                                       "Engine saved: {engine}",
+	"Motor seleccionado, pero le falta configuración — no podrá dictar hasta que la completes":                                       "Engine selected, but it is missing configuration — it will not dictate until you complete it",
+	"Motor seleccionado, pero no se pudieron leer las claves guardadas — no se puede confirmar si la suya está disponible":           "Engine selected, but the stored keys could not be read — whether its own is available cannot be confirmed",
+	"Motor seleccionado, pero su variable de entorno está definida y vacía — quítala del entorno para poder usar una clave guardada": "Engine selected, but its environment variable is set and empty — remove it from the environment to use a stored key",
+
 	// ---- notices, errors and probe verdicts (WriteResult / ProbeResult) ----
+	// Messages Go builds by concatenating literals across lines appear here JOINED, because that is
+	// the string phrase() looks up. Storing the fragments — which is what a first pass did — means
+	// every one of these misses and reaches the user in Spanish.
+	"No se pudo contactar con %s — comprueba tu conexión a internet. El detalle técnico está en el registro":                                              "Could not reach %s — check your internet connection. The technical detail is in the log",
+	"esta ranura la controla la variable de entorno %s — la clave que se usa viene de ahí, no de las guardadas":                                           "this slot is controlled by the %s environment variable — the key in use comes from there, not from the stored ones",
+	"esta ranura la controla la variable de entorno %s — mientras esté definida, guardar aquí no cambiaría la clave que se usa":                           "this slot is controlled by the %s environment variable — while it is set, saving here would not change the key in use",
+	"esta ranura la controla la variable de entorno %s — mientras esté definida, guardar la clave aquí no cambiaría la que se usa":                        "this slot is controlled by the %s environment variable — while it is set, saving the key here would not change the one in use",
+	"este servicio todavía no está disponible en esta versión — guardar una clave aquí no serviría de nada":                                               "this service is not available yet in this version — saving a key here would achieve nothing",
+	"la variable de entorno %s está definida pero vacía — mientras lo esté, es la clave que se usa, y no puede autenticar nada":                           "the %s environment variable is set but empty — while it is, that is the key in use, and it cannot authenticate anything",
+	"no se pudieron leer las claves guardadas, así que no se pudo comprobar si ya hay una — revisa el archivo de claves o bórralo para empezar de cero":   "the stored keys could not be read, so it was not possible to check whether one exists — check the keys file, or delete it to start over",
+	"no se pudieron leer las claves guardadas, así que no se pudo leer la de este motor — revisa el archivo de claves, o pasa la clave en %s para probar": "the stored keys could not be read, so this engine's key could not be read either — check the keys file, or pass the key in %s to test",
+
 	// The FORMAT STRING is the key, verbs and all — see SettingsService.phrase: it is translated
 	// before the arguments are filled in, so every call site keeps writing plain Spanish.
 	"%s no admite mantener: se guardó en modo Alternar":                "%s does not support hold: saved in Toggle mode",
 	"%s no respondió a tiempo (%s) — comprueba tu conexión a internet": "%s did not answer in time (%s) — check your internet connection",
 	"Clave guardada":           "Key saved",
 	"Clave y región guardadas": "Key and region saved",
-	"Conexión correcta: Azure aceptó la clave para esa región":         "Connection OK: Azure accepted the key for that region",
-	"Conexión correcta: ElevenLabs abrió la sesión con esa clave":      "Connection OK: ElevenLabs opened the session with that key",
-	"Conexión correcta: OpenAI abrió la sesión con esa clave":          "Connection OK: OpenAI opened the session with that key",
-	"Conexión correcta: xAI aceptó la clave":                           "Connection OK: xAI accepted the key",
-	"ElevenLabs rechazó la API key — revísala en Ajustes":              "ElevenLabs rejected the API key — check it in Settings",
-	"La clave ya no está guardada":                                     "The key is no longer stored",
-	"No se pudo contactar con %s — comprueba tu conexión a internet. ": "Could not reach %s — check your internet connection. ",
-	"OpenAI rechazó la API key — revísala en Ajustes":                  "OpenAI rejected the API key — check it in Settings",
+	"Conexión correcta: Azure aceptó la clave para esa región":    "Connection OK: Azure accepted the key for that region",
+	"Conexión correcta: ElevenLabs abrió la sesión con esa clave": "Connection OK: ElevenLabs opened the session with that key",
+	"Conexión correcta: OpenAI abrió la sesión con esa clave":     "Connection OK: OpenAI opened the session with that key",
+	"Conexión correcta: xAI aceptó la clave":                      "Connection OK: xAI accepted the key",
+	"ElevenLabs rechazó la API key — revísala en Ajustes":         "ElevenLabs rejected the API key — check it in Settings",
+	"La clave ya no está guardada":                                "The key is no longer stored",
+	"OpenAI rechazó la API key — revísala en Ajustes":             "OpenAI rejected the API key — check it in Settings",
 	"Región guardada":                                        "Region saved",
 	"apariencia desconocida: %q":                             "unknown appearance: %q",
 	"el atajo se guardó, pero no se pudo registrar: %v":      "the shortcut was saved but could not be registered: %v",
 	"el motor %q todavía no está disponible en esta versión": "the %q engine is not available yet in this version",
 	"elige una región antes de probar la conexión":           "pick a region before testing the connection",
 	"esta clave viene de la variable de entorno %s — quítala del entorno en vez de borrarla aquí": "this key comes from the %s environment variable — remove it from the environment rather than deleting it here",
-	"esta ranura la controla la variable de entorno %s — mientras esté definida, ":                "this slot is controlled by the %s environment variable — while it is set, ",
 	"este servicio no usa una región de Azure":                                                    "this service does not use an Azure region",
 	"este servicio todavía no está disponible en esta versión":                                    "this service is not available yet in this version",
-	"este servicio todavía no está disponible en esta versión — guardar una clave ":               "this service is not available yet in this version — saving a key ",
 	"este servicio todavía no tiene prueba de conexión":                                           "this service has no connection test yet",
 	"falta la clave: escríbela o guárdala antes de probar":                                        "the key is missing: type it or save it before testing",
 	"idioma de interfaz desconocido: %q":                                                          "unknown interface language: %q",
@@ -81,26 +102,22 @@ var englishCatalog = map[string]string{
 	"la clave está vacía — para borrarla usa el botón de eliminar":                                "the key is empty — use the delete button to remove it",
 	"la clave se guardó, pero no se pudo guardar la región: %v":                                   "the key was saved but the region could not be: %v",
 	"la clave ya no está guardada, pero %v":                                                       "the key is no longer stored, but %v",
-	"la variable de entorno %s está definida pero vacía — ":                                       "the %s environment variable is set but empty — ",
-	"la variable de entorno %s está definida pero vacía — mientras lo esté, ":                     "the %s environment variable is set but empty — while it is, ",
-	"modo desconocido: %q":    "unknown mode: %q",
-	"motor desconocido: %q":   "unknown engine: %q",
-	"no hay nada que guardar": "there is nothing to save",
-	"no se pudieron leer las claves guardadas, así que no se pudo ":                 "the stored keys could not be read, so it was not possible to ",
-	"no se pudieron leer las claves guardadas, así que no se pudo comprobar si ya ": "the stored keys could not be read, so it was not possible to check whether ",
-	"no se pudo comprobar la clave guardada: %v":                                    "the stored key could not be checked: %v",
-	"no se pudo guardar el atajo: %v":                                               "the shortcut could not be saved: %v",
-	"no se pudo guardar el dispositivo: %v":                                         "the device could not be saved: %v",
-	"no se pudo guardar el estado del tutorial: %v":                                 "the tutorial state could not be saved: %v",
-	"no se pudo guardar el idioma de la interfaz: %v":                               "the interface language could not be saved: %v",
-	"no se pudo guardar el idioma: %v":                                              "the language could not be saved: %v",
-	"no se pudo guardar el modo: %v":                                                "the mode could not be saved: %v",
-	"no se pudo guardar el motor: %v":                                               "the engine could not be saved: %v",
-	"no se pudo guardar la apariencia: %v":                                          "the appearance could not be saved: %v",
-	"no se pudo guardar la región: %v":                                              "the region could not be saved: %v",
-	"no se pudo leer la clave guardada: %v":                                         "the stored key could not be read: %v",
-	"ranura de clave desconocida: %q":                                               "unknown key slot: %q",
-	"xAI rechazó la API key — revísala en Ajustes":                                  "xAI rejected the API key — check it in Settings",
+	"modo desconocido: %q":                                                                        "unknown mode: %q",
+	"motor desconocido: %q":                                                                       "unknown engine: %q",
+	"no hay nada que guardar":                                                                     "there is nothing to save",
+	"no se pudo comprobar la clave guardada: %v":                                                  "the stored key could not be checked: %v",
+	"no se pudo guardar el atajo: %v":                                                             "the shortcut could not be saved: %v",
+	"no se pudo guardar el dispositivo: %v":                                                       "the device could not be saved: %v",
+	"no se pudo guardar el estado del tutorial: %v":                                               "the tutorial state could not be saved: %v",
+	"no se pudo guardar el idioma de la interfaz: %v":                                             "the interface language could not be saved: %v",
+	"no se pudo guardar el idioma: %v":                                                            "the language could not be saved: %v",
+	"no se pudo guardar el modo: %v":                                                              "the mode could not be saved: %v",
+	"no se pudo guardar el motor: %v":                                                             "the engine could not be saved: %v",
+	"no se pudo guardar la apariencia: %v":                                                        "the appearance could not be saved: %v",
+	"no se pudo guardar la región: %v":                                                            "the region could not be saved: %v",
+	"no se pudo leer la clave guardada: %v":                                                       "the stored key could not be read: %v",
+	"ranura de clave desconocida: %q":                                                             "unknown key slot: %q",
+	"xAI rechazó la API key — revísala en Ajustes":                                                "xAI rejected the API key — check it in Settings",
 
 	// ---- strings the Go services emit (badges, row descriptions, shortcut notes) ----
 	// These never appear in the markup, so the coverage test cannot see them; they are

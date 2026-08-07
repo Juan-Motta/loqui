@@ -88,14 +88,32 @@ func TestEveryPageLookupHasAnEntry(t *testing.T) {
 
 // Messages the Go services hand to the user. The format string IS the key — see
 // SettingsService.phrase — so an entry has to exist for the whole thing, verbs and all.
-var goMessage = regexp.MustCompile(`\b(?:failed|invalid|probeFailed|ok|revealFailed)\(\s*(?:"[^"]*",\s*)?"((?:[^"\\]|\\.)*)"`)
+//
+// IT HAS TO FOLLOW GO'S CONCATENATION, and missing that was a real defect rather than a nicety. A
+// message written across two lines as `"…la clave que se usa " + "viene de ahí"` is ONE string by the
+// time phrase() looks it up, but the first version of this regex captured only the first literal —
+// so the catalogue held two fragments, every lookup missed, and the whole message reached the user in
+// Spanish while this very test reported it as covered. Found by a cross-engine review.
+var goMessage = regexp.MustCompile(
+	`\b(?:failed|invalid|probeFailed|ok|revealFailed)\(\s*(?:"[^"]*",\s*)?((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)`)
+
+// joinLiterals turns Go's `"a " + "b"` into `a b` — the string the runtime will actually build.
+var oneLiteral = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+
+func joinLiterals(expr string) string {
+	var b strings.Builder
+	for _, m := range oneLiteral.FindAllStringSubmatch(expr, -1) {
+		b.WriteString(strings.ReplaceAll(m[1], `\"`, `"`))
+	}
+	return b.String()
+}
 
 func TestEveryGoMessageHasAnEntry(t *testing.T) {
 	var missing []string
 	for _, name := range []string{"settings_write.go", "settings_probe.go", "settings_reveal.go"} {
 		src := read(t, "..", "app", name)
 		for _, m := range goMessage.FindAllStringSubmatch(src, -1) {
-			key := strings.ReplaceAll(m[1], `\"`, `"`)
+			key := joinLiterals(m[1])
 			// Pure format wrappers like "%s (%s)" carry no words of their own.
 			if !translatable(key) || covered(key) {
 				continue
