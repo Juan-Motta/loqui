@@ -76,6 +76,10 @@ func main() {
 	if err != nil {
 		log.Fatal("cannot open the data directory: ", err)
 	}
+	// The tray is built from this same instance — see the note above about not opening a second
+	// Store. Assigned here because the tray is constructed later and has nowhere else to read the
+	// interface language from.
+	trayStore = st
 
 	// Declared before New() rather than with `:=`, because one of the services below needs to reach
 	// the app itself — the browser opener for the donation link. The closure runs when the user
@@ -114,6 +118,15 @@ func main() {
 						return nil
 					}
 					return applyTriggerChange(settingsUI, trigger)
+				},
+				LanguageChanged: func(locale string) {
+					// The settings page retranslates itself; these two cannot. The overlay is a
+					// separate window created once, and the tray menu is native — neither is reached
+					// by the page's own pass.
+					if a := wailsApp; a != nil {
+						a.Event.Emit("settings:language", locale)
+					}
+					relabelTray(i18n.Locale(locale))
 				},
 				AppearanceChanged: func(appearance string) {
 					// Both windows: the pill is transparent, but its own appearance still decides how
@@ -353,11 +366,18 @@ func positionOverlay(app *application.App, win *application.WebviewWindow) {
 func newTray(app *application.App) *application.SystemTray {
 	tray := app.SystemTray.New()
 	tray.SetTemplateIcon(assets.TrayTemplate)
+	trayRef, trayApp = tray, app
+	tray.SetMenu(buildTrayMenu(app, trayLocale()))
+	return tray
+}
 
+// buildTrayMenu constructs the menu in one language. Separate from newTray so a language change can
+// rebuild it — see relabelTray for why rebuilding is the only option here.
+func buildTrayMenu(app *application.App, locale i18n.Locale) *application.Menu {
 	menu := app.Menu.New()
 	// The same toggle the trigger key performs, for when no shortcut is configured or
 	// the fn listener could not start.
-	menu.Add("Dictar (prueba)").OnClick(func(*application.Context) {
+	menu.Add(i18n.T(locale, "Dictar (prueba)", nil)).OnClick(func(*application.Context) {
 		if dictation == nil {
 			return
 		}
@@ -368,18 +388,17 @@ func newTray(app *application.App) *application.SystemTray {
 			c.Press()
 		}
 	})
-	menu.Add("Ajustes…").OnClick(func(*application.Context) {
+	menu.Add(i18n.T(locale, "Ajustes…", nil)).OnClick(func(*application.Context) {
 		if w := wins.settings; w != nil {
 			w.Show()
 			w.Focus()
 		}
 	})
 	menu.AddSeparator()
-	menu.Add("Salir").OnClick(func(*application.Context) {
+	menu.Add(i18n.T(locale, "Salir", nil)).OnClick(func(*application.Context) {
 		app.Quit()
 	})
-	tray.SetMenu(menu)
-	return tray
+	return menu
 }
 
 // appearanceSetting reads the stored appearance without needing the whole engine, because
@@ -414,4 +433,36 @@ func newSettingsService(st *store.Store, out **app.SettingsService, hooks app.Li
 	svc := app.NewSettingsService(st, hooks)
 	*out = svc
 	return svc
+}
+
+// trayRef and trayApp let a language change rebuild the menu after startup.
+var (
+	trayRef *application.SystemTray
+	trayApp *application.App
+)
+
+// trayStore is where the tray reads the language from. Package-level because the tray is built
+// before anything else has a reference to hand it, and it is only ever read.
+var trayStore *store.Store
+
+func trayLocale() i18n.Locale {
+	if trayStore == nil {
+		return i18n.Default
+	}
+	return i18n.ResolveLocale(trayStore.LoadSettings().AppLanguage, macos.SystemLocale())
+}
+
+// relabelTray rebuilds the menu in a new language.
+//
+// THE TRAY IS NATIVE AND BUILT ONCE, so unlike the settings page it cannot retranslate itself from a
+// catalogue: the labels were baked into NSMenuItems at startup. Rebuilding the whole menu is the
+// bluntest fix and the only one this Wails version offers — SystemTray has no per-item SetLabel.
+//
+// DECLARED LIMIT: the rebuild replaces the menu wholesale, so any state it held is reset. It holds
+// none today (three stateless actions), and this comment is here for whoever adds a checkbox to it.
+func relabelTray(locale i18n.Locale) {
+	if trayRef == nil || trayApp == nil {
+		return
+	}
+	trayRef.SetMenu(buildTrayMenu(trayApp, locale))
 }

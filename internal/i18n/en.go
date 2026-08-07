@@ -12,6 +12,17 @@
 package i18n
 
 var englishCatalog = map[string]string{
+	"esta ranura la controla la variable de entorno %s — la clave que se usa ": "this slot is controlled by the %s environment variable — the key in use ",
+	"no hay ninguna clave guardada para este servicio":                         "there is no key stored for this service",
+	"no se pudieron leer las claves guardadas — revisa el archivo de claves":   "the stored keys could not be read — check the keys file",
+	"viene de ahí, no de las guardadas":                                        "comes from there, not from the stored ones",
+
+	// ---- the tray menu and the overlay pill, which are neither markup nor payload ----
+	"Ajustes…":        "Settings…",
+	"Dictar (prueba)": "Dictate (test)",
+	"Salir":           "Quit",
+	"reconectando…":   "reconnecting…",
+
 	// ---- prose the PAGE builds at runtime ----
 	// Not in the markup, so the coverage test cannot see these either: they are written by
 	// keyStateLabel, the busy lines and the button titles, and reach the catalogue through t().

@@ -50,9 +50,16 @@ func markup(t *testing.T) string {
 	return body
 }
 
+// formatVerb strips printf placeholders before asking whether a string contains words. Without it
+// "%s" counts as prose, because it contains the letter s.
+var formatVerb = regexp.MustCompile(`%[#+\-0-9.]*[a-zA-Z]`)
+
 func translatable(s string) bool {
 	s = strings.TrimSpace(whitespace.ReplaceAllString(s, " "))
-	return s != "" && hasLetters.MatchString(s) && !neverTranslated.MatchString(s)
+	if s == "" || neverTranslated.MatchString(s) {
+		return false
+	}
+	return hasLetters.MatchString(formatVerb.ReplaceAllString(s, ""))
 }
 
 func covered(s string) bool {

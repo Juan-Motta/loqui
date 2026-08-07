@@ -460,6 +460,11 @@ type SettingsService struct {
 	// onAppearanceChanged repaints the live windows. Same reason again: the appearance is applied once
 	// at construction, so a persisted-only change waits for the next launch.
 	onAppearanceChanged func(appearance string)
+	// onLanguageChanged tells the parts of the app that are NOT the settings page. It is the same
+	// class of problem as the three above — a persisted-only change waits for the next launch — and
+	// it has two victims: the overlay is a separate window created once, and the tray menu is native
+	// and built at startup.
+	onLanguageChanged func(locale string)
 }
 
 // LiveHooks lets main connect the running engine and listener without this package importing Wails.
@@ -475,6 +480,8 @@ type LiveHooks struct {
 	TriggerChanged func(trigger string) error
 	// AppearanceChanged applies the light/dark preference to the open windows.
 	AppearanceChanged func(appearance string)
+	// LanguageChanged tells the overlay window and the tray that the interface language moved.
+	LanguageChanged func(locale string)
 	// Log records a diagnostic line. Passed in rather than reached for because this package must
 	// not decide how the app writes its log — and because a test wants it silent. NEVER called
 	// with a secret or with transcript text.
@@ -487,6 +494,7 @@ func NewSettingsService(st *store.Store, hooks LiveHooks) *SettingsService {
 		onModeChanged:       hooks.ModeChanged,
 		onTriggerChanged:    hooks.TriggerChanged,
 		onAppearanceChanged: hooks.AppearanceChanged,
+		onLanguageChanged:   hooks.LanguageChanged,
 		log:                 hooks.Log,
 	}
 }

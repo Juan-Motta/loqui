@@ -323,6 +323,11 @@ func (s *SettingsService) SetAppLanguage(language string) WriteResult {
 	}); err != nil {
 		return s.failed("no se pudo guardar el idioma de la interfaz: %v", err)
 	}
+	// The resolved locale, not the stored value: "" means follow the system, and the overlay and the
+	// tray need the answer rather than the instruction.
+	if s.onLanguageChanged != nil {
+		s.onLanguageChanged(string(s.bootstrap.locale(s.store().LoadSettings())))
+	}
 	return s.ok("")
 }
 
