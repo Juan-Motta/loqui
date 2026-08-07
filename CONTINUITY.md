@@ -8,16 +8,21 @@
   outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
   (the UI) nearly closed: the app is navigated, configured and used.
 
-- **Next step, and it is one concrete action:** **write
-  `docs/e2e/reports/2026-08-06-probe-remaining-providers.md`.** The branch
-  `feat/probe-remaining-providers` (4 commits, tree clean, **not merged, not pushed**) has the whole
-  feature working and verified against the real services — the evidence is already captured and pasted
-  in `.workflow/state.md`, it just has to be written up as a report. `check-gates.sh` correctly refuses
-  the branch today because the E2E box still points at the previous change's report, which is not fresh
-  here. After the report: run check-gates, merge fast-forward, push.
+- **Next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
+  starts on a **fresh branch off `main`**: (1) the accordion **folds itself** after a successful save
+  — show `✓ Clave guardada` for ~1.2 s, then collapse, so the fold is confirmation and not a
+  disappearance; (2) reopening a card whose key is stored shows a **fixed asterisk mask** in the
+  field, so "there is something here" is visible. Groundwork already measured: the secret never
+  leaves Go (`internal/app/bootstrap.go:29`) so the mask must **never** be the real key; the backend
+  already treats an empty secret as "leave the stored key alone" (`settings_write.go:466`) and an
+  empty typed key as "probe the stored one" (`settings_probe.go:242`), so the mask only has to be
+  guarded against ever being sent. The hazard to design around: `paint()` runs after every write, so
+  the mask must only ever land on an **empty** field or it will clobber what the user is typing. Do
+  not mask an env-supplied key (`fromEnv`) — the app never stored it.
 
-  Worth doing before merging, and not blocking: **a cross-engine review of the DIFF.** Codex reviewed
-  the plan three times; nobody has reviewed the code.
+- **Done 2026-08-07:** `feat/probe-remaining-providers` closed out. E2E rerun whole against the real
+  services on a freshly packaged build, nine cases PASS, and **the three green paths ran for the
+  first time**.
 
 - **After that:** **port the whisper model row**, the only thing left from the fidelity assignment.
   Start with the red
@@ -39,9 +44,10 @@
      accepted for a personal build. Signing is still the only thing that fixes the rest, and the only
      thing that would let the keys go back to being encrypted at rest. Pending decision: a fixed
      self-signed identity vs a Developer ID.
-  3. **Cloud keys — Azure is DONE, the rest are not.** A working Azure key is stored and has
-     transcribed for real (UC-9 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`). There is still no
-     xAI, OpenAI or ElevenLabs credential, so those three routes remain unverified end to end.
+  3. ~~**Cloud keys — Azure is DONE, the rest are not.**~~ **Closed 2026-08-07.** All four slots hold
+     a real credential and all four have been accepted by their real service. Azure has also
+     transcribed (UC-9 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`); the other three have been
+     authenticated but not yet used to transcribe.
 
 - **Credentials now live in a cleartext file**, `~/Library/Application Support/LoquiGo/secrets.json`,
   mode 0600 — not the Keychain, which hangs under ad-hoc signing. A deliberate trade the owner accepted
@@ -165,13 +171,22 @@ been done on 2026-07-30. Corrected here.
 | **whisper** | ✅ | ✅ 2026-07-28 | the model row — `ggml-small.bin` is downloaded by hand today |
 | **azure** | ✅ | ✅ **2026-08-06** | nothing |
 | **macos** (SpeechAnalyzer) | ✅ | ⛔ | blocked before `started`, cause unknown — risk 5 of the port plan |
-| **grok** (xAI) | ✅ | ⬜ | no xAI credential |
-| **openai realtime** | ✅ | ⬜ | no credential |
-| **elevenlabs** | ✅ | ⬜ | no credential |
+| **grok** (xAI) | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
+| **openai realtime** | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
+| **elevenlabs** | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
 
 All four cloud engines can now **store** a key and **test** it. Storing was fixed in `07c14a3`; testing
-is on the unmerged branch. What none of the three non-Azure ones has ever done is transcribe — that
-needs a credential, and there is none on this machine.
+is on this branch.
+
+**The credential blocker is CLOSED as of 2026-08-07** and it had gone stale in these notes: real keys
+for all three were already on disk (written 2026-08-06 17:16) while this file still said none existed.
+All three probes returned `ok=true` against the real services — see
+`docs/e2e/reports/2026-08-07-probe-remaining-providers.md`. That also settles risk 1 of the plan: the
+readiness event names had never been observed by anyone, and now all three have been.
+
+What none of the three has ever done is **transcribe**. A green probe proves the credential and that a
+session opens — not that audio goes out and text comes back. That run is now unblocked and is the
+cheapest big win left.
 
 **Still not done, and worth keeping visible:** the WebSocket lifecycle was never extracted out of
 `internal/stt/grok` into a shared package. Two real implementations now exist (grok and elevenlabs),
