@@ -15,10 +15,18 @@ real service.
 
 - **Feature:** a working "Probar conexión" on the three ported cloud cards that carry a credential
 - **Branch:** `feat/probe-remaining-providers`
-- **Run:** 2026-08-06T18:07-18:11-05:00 (rejection paths) and 2026-08-07T09:15-09:20-05:00
-  (green paths, settled states) — twelve app launches
+- **Run:** 2026-08-06T18:07-18:11-05:00 (rejection paths), 2026-08-07T09:15-09:20-05:00
+  (green paths, settled states), and 2026-08-07T09:38-09:41-05:00 (**full re-run after the review
+  fixes below**) — sixteen app launches
 - **Build:** `bin/loqui.app`, repackaged from this exact tree with `./scripts/task.sh package`,
-  ad-hoc signed. Suite green first: 14 packages with `-race -count=1`.
+  ad-hoc signed. Suite green first: 14 packages with `-race -count=1`, `vet` and `gofmt` clean.
+
+> **A cross-engine review of the diff landed mid-verification and found a real credential leak.** The
+> code was fixed, the app repackaged, and **every case below re-executed against the new binary** —
+> the evidence quoted here is from that final run, not from the build that had the bug. What the fix
+> had to prove it did *not* break is that the provider's own code still reaches the user, and it does:
+> `invalid_api_key`, `AuthenticationFailure` and `auth_error` all still appear. See "The review" at
+> the end.
 - **Stored state at the start:** `keys:azure-speech=present azure-openai=absent openai=present
   grok=present elevenlabs=present`, `provider=azure`, `region=eastus2`
 
@@ -222,8 +230,51 @@ ignores it for these slots).
 3. **Concurrency between a probe and a save.** `probe()` deliberately stays out of the write queue but
    waits for it. Provoking the overlap needs the `+` step grammar and belongs with the next change
    that touches that queue.
-4. **A cross-engine review of the diff.** Codex reviewed the *plan* three times; the code written
-   afterwards has not been reviewed by another engine. That is a ship-gate matter, not an E2E one, and
-   it is recorded in `.workflow/state.md`.
+4. **The stale-success race, and it is left open deliberately.** Pressing "Probar conexión", then
+   editing the key field while the request is in flight, still paints `✓ Conexión correcta` beside a
+   credential that was never tested — editing an input does not advance the card's epoch
+   (`frontend/src/settings.ts:657`). It is **pre-existing**: this branch does not touch
+   `frontend/src/settings.ts` at all, and the handler is the one Azure already used on `main`. What
+   this branch does is expose it on three cards instead of one. It is fixed in the next branch, which
+   edits that handler anyway. Recorded in `.workflow/state.md`.
 5. **Azure's own card.** Unchanged by this work and already covered by
    `2026-08-06-keys-in-a-file.md` UC-7.
+
+---
+
+## The review, and the leak it found
+
+A fourth Codex round — the first on the **diff** rather than the plan — returned 1 P0 and 2 P1. Each
+was verified against the code before being accepted; none was taken on the reviewer's word.
+
+**P0 — confirmed, fixed. A 401 put key material on screen.** `describeHandshake` appended the
+server's prose to our own wording for `codeAuth`/`codeForbidden`, in all three packages. Reproduced
+before touching anything:
+
+```
+OpenAI rechazó la API key — revísala en Ajustes: Incorrect API key provided: clave-****************jamas
+```
+
+Two things make this worth reading twice. First, the comment on `redactSecret` **asserted this case
+was handled** — "THAT CASE IS HANDLED BY NOT USING THE SERVER'S PROSE AT ALL for an authentication
+failure". It was handled for HTTP 400, which returns our wording early; a 401 or 403 fell through and
+appended the reason. Second, the test written to catch exactly this **passed vacuously**: it asserted
+that no *eight*-character suffix of the key survived, against a masked fixture that only preserves
+*five*. The one case the test existed for could never fail.
+
+Fix: the auth branch never appends the reason. The test now names, per case, the key material that
+particular body actually puts on the wire.
+
+**P1 — confirmed, fixed. The provider's code was unbounded.** `conn.Code` is written by the server
+and travelled verbatim into both the `PROBE-DONE` log and the user's message, under a comment
+claiming it was "short, non-prose, no key material". Reproduced: a server that returns the credential
+as its `code` put the whole key on screen. New `safeProviderCode` enforces a token shape, a length
+cap, and — the rule a charset check alone would miss — never anything containing the credential, because
+an Azure key is 32 hexadecimal characters and is a perfectly well-formed "token".
+
+**P1 — confirmed, deferred.** The stale-success race, item 4 above. Pre-existing; fixed in the next
+branch.
+
+All four new tests were verified by **mutation**: each was made to fail by breaking exactly what it
+claims to cover, including the containment rule, which had no test until it was noticed that every
+other case was caught by the length cap first.

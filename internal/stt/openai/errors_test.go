@@ -24,13 +24,21 @@ func TestARejectionThatEchoesTheKeyDoesNotLeakIt(t *testing.T) {
 		name   string
 		status int
 		body   string
+		// leaked is the key material THIS body actually puts on the wire. For a verbatim echo that is
+		// the whole key; for the masked echo it is only the tail the mask leaves visible.
+		//
+		// Naming it per case is what stops this test being vacuous. It used to assert a fixed
+		// eight-character suffix of `key` against every case — and the masked fixture preserves five,
+		// so the one case the whole test exists for could never fail. A cross-engine review found it,
+		// and the leak it was hiding was real: a 401 appended the provider's prose to our wording.
+		leaked string
 	}{
-		{"401 echoing the key verbatim", http.StatusUnauthorized, body("Invalid API key " + key)},
-		{"400 echoing the key verbatim", http.StatusBadRequest, body("Incorrect API key provided: " + key)},
+		{"401 echoing the key verbatim", http.StatusUnauthorized, body("Invalid API key " + key), key},
+		{"400 echoing the key verbatim", http.StatusBadRequest, body("Incorrect API key provided: " + key), key},
 		{"401 echoing it partially masked, as the real service does", http.StatusUnauthorized,
-			body("Incorrect API key provided: clave-****************jamas")},
+			body("Incorrect API key provided: clave-****************jamas"), "jamas"},
 		{"500 echoing the key, where the body IS passed through", http.StatusInternalServerError,
-			body("upstream failed for " + key)},
+			body("upstream failed for " + key), key},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			resp := &http.Response{
@@ -42,10 +50,8 @@ func TestARejectionThatEchoesTheKeyDoesNotLeakIt(t *testing.T) {
 			if strings.Contains(message, key) {
 				t.Errorf("the message carries the key: %q", message)
 			}
-			// The last eight characters are enough to prove a suffix survived, and short enough not to
-			// collide with ordinary Spanish words in our own wording.
-			if suffix := key[len(key)-8:]; strings.Contains(message, suffix) {
-				t.Errorf("the message carries a suffix of the key (%q): %q", suffix, message)
+			if strings.Contains(message, c.leaked) {
+				t.Errorf("the message carries key material (%q): %q", c.leaked, message)
 			}
 		})
 	}
