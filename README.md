@@ -61,6 +61,8 @@ echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc && exec zsh
 ./scripts/task.sh dev            # hot reload
 ./scripts/task.sh test
 ./scripts/task.sh vet
+./scripts/task.sh typecheck      # los tipos del frontend, con el TypeScript del propio repo
+./scripts/task.sh check          # las tres de arriba, que es lo que hay que correr antes de subir
 
 ./scripts/task.sh probe:devices  # lists microphones
 ./scripts/task.sh probe:mic      # microphone level, without touching the network

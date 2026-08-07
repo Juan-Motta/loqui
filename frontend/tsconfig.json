@@ -1,5 +1,18 @@
 {
+  // NOTE: tsconfig allows comments and trailing commas; this is not plain JSON.
   "compilerOptions": {
+    // TARGET IS NOT OPTIONAL HERE, and leaving it out was the whole bug.
+    //
+    // Without it tsc defaults to ES3/ES5, and that produces around twenty-five errors that are pure
+    // noise: TS2802 on every `for…of` over a DOM collection (DOM.Iterable needs a downlevel iterator),
+    // TS2347 on generics, and complaints about `??`, optional chaining and top-level await — all of
+    // which this app uses and WebKit has supported for years.
+    //
+    // It has to match what vite emits, or the type-check is checking a language the build does not
+    // produce. es2022 is also what the Go side pins: see docs and the task `frontend:typecheck`.
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+
     "allowJs": true,
 
     "noEmit": true,
