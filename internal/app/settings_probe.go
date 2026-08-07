@@ -172,7 +172,8 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", keySlot, conn.OK, shownCode))
 
 	if conn.OK {
-		return ProbeResult{OK: true, Message: conn.Message, Payload: s.bootstrap.Payload()}
+		p := s.bootstrap.Payload()
+		return ProbeResult{OK: true, Message: s.phrase(p.Locale, conn.Message), Payload: p}
 	}
 	// A deadline that ran out is NOT a rejected credential, and saying so would send the user to
 	// re-copy a key that may be perfectly good.
@@ -194,10 +195,15 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	//
 	// `shownCode`, not `conn.Code`: see safeProviderCode. "No key material" used to be an assertion in
 	// this comment and nothing more.
+	// conn.Message is translated FIRST and then embedded: it is the provider package's own Spanish
+	// sentence, and therefore its own catalogue key. Passing it as an argument to "%s (%s)" would
+	// look up the wrapper and leave the sentence inside it Spanish.
+	locale := s.bootstrap.Payload().Locale
+	message := s.phrase(locale, conn.Message)
 	if shownCode != "" {
-		return s.probeFailed("", "%s (%s)", conn.Message, shownCode)
+		return s.probeFailed("", "%s (%s)", message, shownCode)
 	}
-	return s.probeFailed("", "%s", conn.Message)
+	return s.probeFailed("", "%s", message)
 }
 
 // proberFor is the registry lookup, overridable per SERVICE INSTANCE for tests.
@@ -281,10 +287,11 @@ func (s *SettingsService) resolveKey(slot store.KeySlot, typed string) (string, 
 // probeFailed wraps a refused or failed probe. The payload is computed either way, so a page that
 // repaints from it shows what is actually stored rather than what the attempt assumed.
 func (s *SettingsService) probeFailed(field string, format string, args ...any) ProbeResult {
+	p := s.bootstrap.Payload()
 	return ProbeResult{
-		Error:   fmt.Sprintf(format, args...),
+		Error:   s.phrase(p.Locale, format, args...),
 		Field:   field,
-		Payload: s.bootstrap.Payload(),
+		Payload: p,
 	}
 }
 

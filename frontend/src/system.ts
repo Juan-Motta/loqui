@@ -9,7 +9,7 @@
 // The only DOM-specific piece is turning a keydown into an accelerator string, which is inherently a
 // browser concern. Even then the string is sent to Go to be validated and canonicalised.
 import { Events } from "@wailsio/runtime";
-import { loadTranslations } from "./i18n.js";
+import { loadTranslations, t } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   SettingsPayload,
@@ -254,9 +254,9 @@ export function paintSystem(p: SettingsPayload): void {
   const appLang = $<HTMLSelectElement>("appLanguage");
   if (appLang) {
     appLang.innerHTML =
-      `<option value="">Seguir el sistema</option>` +
-      `<option value="es">Español</option>` +
-      `<option value="en">Inglés</option>`;
+      `<option value="">${t("Seguir el sistema")}</option>` +
+      `<option value="es">${t("Español")}</option>` +
+      `<option value="en">${t("Inglés")}</option>`;
     appLang.value = p.appLanguage;
   }
 
