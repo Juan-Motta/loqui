@@ -51,6 +51,24 @@ tasks:
     cmds:
       - ./scripts/go.sh vet ./...
 
+  typecheck:
+    summary: Type-checks the frontend with the project's own TypeScript
+    # A TASK, not just an npm script, because until this existed the frontend was never type-checked
+    # by anything: vite STRIPS types without validating them, so a type error reached the packaged app
+    # silently. Around 1500 lines of TS were written that way.
+    #
+    # It runs the TypeScript the repo pins — not one passed on a command line — which is the whole
+    # point: a check that only works with an ad-hoc invocation is a check nobody runs.
+    cmds:
+      - cd frontend && npm run --silent typecheck
+
+  check:
+    summary: Everything that must pass before shipping — Go tests, vet, and the frontend types
+    cmds:
+      - task: test
+      - task: vet
+      - task: typecheck
+
   probe:
     summary: 'Run one dictation from the CLI. Needs SPEECH_KEY. Extra flags after --'
     cmds:

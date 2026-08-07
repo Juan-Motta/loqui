@@ -86,10 +86,16 @@
   still in the login Keychain (`security find-generic-password -s com.jualopezmo.loquigo -a
   azure-speech`) and nothing reads it — worth deleting so there is one copy, not two.
 
-- **Debt, unowned: the frontend does not type-check.** `typescript@^4.9.3` against a `tsconfig.json`
-  with TS5 options, so `tsc` cannot read the config and vite strips the types without validating
-  them. Around 1500 lines of TS have already been written with no safety net. **Upgrade typescript
-  before writing more.**
+- ~~**Debt, unowned: the frontend does not type-check.**~~ **FIXED AT THE ROOT 2026-08-07.**
+  `typescript` is now `^5.7.2` and `tsconfig.json` has the `"target": "ES2022"` it was missing — that
+  omission was the whole bug: tsc defaulted to ES5 and produced ~25 errors that were pure noise, so
+  nobody could tell a real error from the noise and the check was abandoned. Meanwhile vite strips
+  types without validating them, so a type error reached the packaged app in silence.
+
+  Run it with **`./scripts/task.sh typecheck`**, or `./scripts/task.sh check` for Go tests + vet +
+  types together. The old workaround —passing `--target es2022` on the command line— is obsolete and
+  should not be used: passing the target by hand is exactly what hid the fact that the config lacked
+  it. Verified by mutation: a wrong type is caught, and `for…of` over a DOM collection now compiles.
 
 - **Known debt, owned:** two pre-existing bugs in `internal/session` that affect Azure **today** —
   the retry budget bounds nothing if the connection opens (a spend loop against a service that bills
