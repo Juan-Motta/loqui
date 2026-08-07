@@ -148,7 +148,13 @@ func describeHandshake(code string, status int, reason string) string {
 	default:
 		base = "no se pudo conectar con xAI"
 	}
-	if reason != "" {
+	// NEVER the server's prose on an authentication failure — the wording above is ours and it stays
+	// alone. This is the P0, and it was open until a cross-engine review found it: the 400 path returns
+	// our wording early, but a 401/403 arrived here and appended the reason, putting the provider's
+	// text back on screen. A rejection can carry the key masked in the middle with its tail INTACT, so
+	// redactSecret — which can only remove the exact secret — does not catch it. The comment on
+	// redactSecret claimed this was already handled; it was handled for one status only.
+	if reason != "" && code != codeAuth && code != codeForbidden {
 		return base + ": " + reason
 	}
 	return base

@@ -728,3 +728,92 @@ func TestTheProvidersCodeIsShown(t *testing.T) {
 		t.Errorf("error = %q — the provider's code is what the user would search for", res.Error)
 	}
 }
+
+// THE PROVIDER'S CODE IS SERVER-CONTROLLED, so "short, non-prose, no key material" cannot be a
+// comment — it has to be a check.
+//
+// Found by a cross-engine review of the diff, in the same pass that found the 401 prose leak. The
+// code travels from error.code/error.type (OpenAI) or the event name (ElevenLabs) straight into the
+// user's message AND into the PROBE-DONE log line, with nothing bounding either. No service is known
+// to put credential material there — but that was exactly the unenforced claim redactSecret made
+// about authentication prose, and it was false.
+func TestAServerControlledCodeCannotCarryTheKey(t *testing.T) {
+	const key = "sk-proj-clave-secreta-que-no-debe-aparecer-jamas"
+
+	for _, c := range []struct {
+		name string
+		code string
+		want bool // shown?
+	}{
+		{"an ordinary code is shown", "insufficient_quota", true},
+		{"a dotted code is shown", "invalid_request_error.invalid_api_key", true},
+		{"the key itself is dropped", key, false},
+		{"a code carrying the key is dropped", "error_" + key, false},
+		{"prose is dropped", "Incorrect API key provided: sk-proj-****jamas", false},
+		{"an overlong token is dropped", strings.Repeat("a", 200), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := store.NewAt(t.TempDir())
+			svc, _, _, _ := probeService(t, st)
+			svc.probers = map[store.KeySlot]prober{
+				store.SlotOpenAI: {
+					name: "OpenAI",
+					probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+						return stt.ProbeResult{
+							Kind:    stt.ProbeFailed,
+							Message: "OpenAI rechazó la conexión",
+							Code:    c.code,
+						}
+					},
+				},
+			}
+
+			res := svc.TestConnection("openai", "", key)
+
+			if got := strings.Contains(res.Error, c.code); got != c.want {
+				t.Errorf("code %q shown = %v, want %v — message: %q", c.code, got, c.want, res.Error)
+			}
+			// Whatever the verdict on the code, the credential must never survive into the message.
+			if strings.Contains(res.Error, key) {
+				t.Errorf("the message carries the key: %q", res.Error)
+			}
+			if strings.Contains(res.Error, "jamas") {
+				t.Errorf("the message carries a tail of the key: %q", res.Error)
+			}
+		})
+	}
+}
+
+// The length-and-charset rule is not enough on its own, and this is the case that proves it: an Azure
+// key is 32 hexadecimal characters — short, and a perfectly well-formed "token". Nothing about its
+// SHAPE distinguishes it from a real error code, so the credential itself has to be compared against.
+//
+// Written after noticing the containment rule in safeProviderCode had no test: every other case in
+// this file is caught by the length cap, so removing that rule would have left the suite green.
+func TestATokenShapedKeyIsStillRefusedAsACode(t *testing.T) {
+	const shortKey = "4a3144d8e1b2c3d4e5f6a7b8c9d0e1f2" // 32 hex, the shape of an Azure key
+
+	st := store.NewAt(t.TempDir())
+	svc, _, _, _ := probeService(t, st)
+	svc.probers = map[store.KeySlot]prober{
+		store.SlotOpenAI: {
+			name: "OpenAI",
+			probe: func(ctx context.Context, key, region string, _ azure.Doer) stt.ProbeResult {
+				return stt.ProbeResult{
+					Kind:    stt.ProbeFailed,
+					Message: "OpenAI rechazó la conexión",
+					Code:    shortKey, // the server hands the credential back as its "code"
+				}
+			},
+		},
+	}
+
+	res := svc.TestConnection("openai", "", shortKey)
+
+	if strings.Contains(res.Error, shortKey) {
+		t.Errorf("a token-shaped credential survived as a code: %q", res.Error)
+	}
+	if !strings.Contains(res.Error, "OpenAI rechazó la conexión") {
+		t.Errorf("dropping the code must not drop the message: %q", res.Error)
+	}
+}

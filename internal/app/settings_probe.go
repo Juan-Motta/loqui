@@ -166,7 +166,10 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	defer cancel()
 
 	conn := p.probe(ctx, key, regionID, s.probeDoer())
-	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", keySlot, conn.OK, conn.Code))
+	// The code is SERVER-CONTROLLED, so it is filtered before it reaches either the log or the user.
+	// Logic below still keys off conn.Code, which is ours; only what is DISPLAYED is filtered.
+	shownCode := safeProviderCode(conn.Code, key)
+	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", keySlot, conn.OK, shownCode))
 
 	if conn.OK {
 		return ProbeResult{OK: true, Message: conn.Message, Payload: s.bootstrap.Payload()}
@@ -188,8 +191,11 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	}
 	// The provider's own code is appended when it gave one: short, non-prose, no key material, and
 	// exactly what the user would search for. It is never a substitute for the message.
-	if conn.Code != "" {
-		return s.probeFailed("", "%s (%s)", conn.Message, conn.Code)
+	//
+	// `shownCode`, not `conn.Code`: see safeProviderCode. "No key material" used to be an assertion in
+	// this comment and nothing more.
+	if shownCode != "" {
+		return s.probeFailed("", "%s (%s)", conn.Message, shownCode)
 	}
 	return s.probeFailed("", "%s", conn.Message)
 }
@@ -321,4 +327,41 @@ func (s *SettingsService) logLine(tag, msg string) {
 		return
 	}
 	s.log(tag, msg)
+}
+
+// safeProviderCode decides whether a provider's machine-readable code may be shown.
+//
+// The design deliberately passes the provider's own code through — `insufficient_quota`,
+// `unaccepted_terms`, `invalid_api_key` are short, searchable, and more honest than a bucket we
+// invented from documentation we cannot test. But the field is written by the SERVER, and until this
+// function existed "short, non-prose, no key material" was only a comment.
+//
+// That is not a hypothetical distinction. The same review pass found a real leak sitting behind an
+// identically worded claim (see describeHandshake in each stt provider): a 401 appended the provider's
+// prose — key tail and all — to our own wording, while a comment asserted it never did.
+//
+// Two rules, and the second is what a charset rule alone would miss: a token shape (so prose, spaces,
+// colons and masked echoes like "sk-proj-****ueba" are refused), and never anything containing the
+// credential — an Azure key is 32 hex characters, which is a perfectly well-formed "token".
+//
+// Refused codes are dropped silently rather than logged: the value is the thing that might BE the
+// secret, so it must not be written down to explain why it was not written down. The message survives
+// without it.
+func safeProviderCode(code, secret string) string {
+	const maxCodeLen = 40 // "invalid_request_error.invalid_api_key" is 37
+	if code == "" || len(code) > maxCodeLen {
+		return ""
+	}
+	if secret != "" && strings.Contains(code, secret) {
+		return ""
+	}
+	for _, r := range code {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '_', r == '-', r == '.':
+		default:
+			return ""
+		}
+	}
+	return code
 }
