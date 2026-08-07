@@ -50,6 +50,19 @@ func (u *ui) HideOverlay() {
 }
 
 func (u *ui) EmitOverlay(state session.OverlayState) {
+	// LOGGED, and it took a stale blocker to notice it was not.
+	//
+	// This state is how `stt.Started` becomes visible at all: nothing logs that event — it is consumed
+	// here to move the pill — so "the engine never started" and "the engine started and nobody wrote it
+	// down" looked identical in a log. That is exactly the mistake the Apple engine's blocker was built
+	// on, and it survived for weeks.
+	//
+	// THE STATUS ONLY — never state.Error. That field is the PROVIDER'S OWN PROSE, and this log is
+	// what gets attached to a bug report: whatever a vendor chooses to echo back would be exported
+	// with it. This project has already fixed two credential leaks that lived in exactly that kind of
+	// text. Whether the error says anything sensitive is not knowable from here, so it does not go in;
+	// the user still sees it on screen, and `whether there was an error` is what a log needs.
+	u.Log("OVERLAY", fmt.Sprintf("%s%s", state.Status, map[bool]string{true: " (with a message)"}[state.Error != ""]))
 	u.emit("overlay:state", state)
 }
 

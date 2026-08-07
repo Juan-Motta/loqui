@@ -81,6 +81,9 @@ type Dictation struct {
 	// zero says the audio never arrived, which is a different problem from a transcript that came back
 	// empty — and they send you to completely different places.
 	peakLevel float64
+	// metering is whether a session is live and its peak may still move. It exists because levels
+	// arrive from a CHILD PROCESS that outlives the stop by up to 300 ms — see noteLevel.
+	metering bool
 
 	// getSecret overrides the credential read. Only the tests set it — see secretReader.
 	getSecret func(store.KeySlot) (string, error)
@@ -101,6 +104,13 @@ func (d *Dictation) Controller() *session.Controller { return d.controller }
 func (d *Dictation) StartEngine(gen int) {
 	d.noteActivity()
 	d.clearTimers()
+
+	// Opened HERE, at the start, and closed where the peak is reported. Between those two points a
+	// level may move the peak; outside them it is a straggler from a helper that has not died yet.
+	d.mu.Lock()
+	d.peakLevel = 0
+	d.metering = true
+	d.mu.Unlock()
 
 	// Capture the frontmost app before anything else: the whole point is to compare it
 	// against the app in focus when the paste happens, and by then Loqui may have been
@@ -447,6 +457,17 @@ func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
 // thing regardless of which engine ran.
 func (d *Dictation) noteLevel(level float64) {
 	d.mu.Lock()
+	// IGNORED WHEN NO SESSION IS RUNNING, and this is a correctness fix rather than tidiness.
+	//
+	// StopEngine resets the peak and then stops the helper, and the Apple one is only signalled 300 ms
+	// later (helper/provider.go). Levels arriving in that window used to seed the NEXT session's peak,
+	// so a dictation that heard nothing could be logged as having had audio — destroying the one line
+	// whose whole purpose is telling "no audio reached us" apart from "audio arrived and the engine
+	// returned nothing". Found by a cross-engine review.
+	if !d.metering {
+		d.mu.Unlock()
+		return
+	}
 	if level > d.peakLevel {
 		d.peakLevel = level
 	}
@@ -511,6 +532,9 @@ func (d *Dictation) stopCapture() {
 	d.mu.Lock()
 	peak := d.peakLevel
 	d.peakLevel = 0
+	// Closed BEFORE the peak is reported, so a late level from a helper that has not died yet cannot
+	// land between the reset and the next session's start.
+	d.metering = false
 	d.mu.Unlock()
 	d.ui.Log("MIC", fmt.Sprintf("peak level this session: %.2f", peak))
 }

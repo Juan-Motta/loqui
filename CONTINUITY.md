@@ -59,6 +59,17 @@
   work: a signing decision, one engine that fails inside Apple's framework, and a refactor.
 
 - **Blockers:**
+  0. ~~**The Apple engine is blocked before `started`.**~~ **THE BLOCKER WAS FALSE — 2026-08-07.** It was
+     never blocked: it reaches the same live state as whisper (`OVERLAY listening`, driven only by
+     `stt.Started`). Two instrumentation gaps made a working engine indistinguishable from a dead one,
+     and the blocker was built on that ambiguity: `stt.Started` was logged nowhere, and the Apple
+     helper reported no microphone levels so its `MIC peak 0.00` read as silence. **Whisper, which
+     works, also logged zero mentions of "started"** — that is what exposed it. Both gaps are closed;
+     see `docs/e2e/reports/2026-08-07-speechanalyzer.md`.
+
+     **The lesson worth keeping:** a log that cannot tell "it did not happen" from "nobody wrote it
+     down" will eventually be read as the first, and the wrong conclusion outlives the session that
+     drew it. Before believing a blocker of this shape, compare against a component that WORKS.
   1. ~~**No remote.**~~ **Closed 2026-08-06:** `origin` is
      `git@github-jualopezmo:Juan-Motta/loqui.git` and `main` is pushed. Two loose ends: the repo is
      called `loqui` while the module path says `github.com/Juan-Motta/loqui-go` (harmless for a desktop
@@ -195,7 +206,7 @@ clean. Five Wails services: `Settings`, `History`, `Clipboard`, `Dictation`, `Pe
   Load-then-Save.
 - `internal/session` — the dictation controller (pure decisions, suite ported from Electron).
 - `internal/stt` — network-free contract. `azure` (reaches a real 401), `helper` (whisper ✅ and now
-  **reports microphone levels**, Apple ⛔), `grok` (✅ 71 tests).
+  **reports microphone levels**, and Apple does too since 2026-08-07), `grok` (✅ 71 tests).
 - `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — capture, paste,
   history + filter, `fn` protocol, TCC, AppKit glue, region validation.
 - `frontend/` — `index.html` is the Electron markup almost verbatim (delete-key buttons and a status
@@ -211,7 +222,7 @@ been done on 2026-07-30. Corrected here.
 | --- | --- | --- | --- |
 | **whisper** | ✅ | ✅ 2026-07-28 | nothing — the model row was ported 2026-08-07 and a real 465 MB download ran |
 | **azure** | ✅ | ✅ **2026-08-06** | nothing |
-| **macos** (SpeechAnalyzer) | ✅ | ⛔ | blocked before `started`, cause unknown — risk 5 of the port plan |
+| **macos** (SpeechAnalyzer) | ✅ | ⬜ reaches the live state **2026-08-07** | nothing — needs a voice to confirm text |
 | **grok** (xAI) | ✅ | ✅ **owner, 2026-08-07** | nothing |
 | **openai realtime** | ✅ | ✅ **owner, 2026-08-07** | nothing |
 | **elevenlabs** | ✅ | ✅ **owner, 2026-08-07** | nothing |
