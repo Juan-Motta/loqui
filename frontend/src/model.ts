@@ -145,3 +145,17 @@ Events.On("model:progress", (e: { data: unknown }) => {
     if (sub) sub.textContent = progress.text;
   }
 });
+
+// Drives the row's own buttons from outside, for the E2E that performs a REAL 465 MB download.
+//
+// It clicks the actual button rather than calling the binding: a probe that bypassed the row would
+// verify the downloader and prove nothing about the control the user presses. Same rule as the
+// connection-card affordance.
+Events.On("debug:model-click", (e: { data: unknown }) => {
+  const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  const which = String(arg ?? "download");
+  const sel = { download: ".model-get", cancel: ".model-stop", remove: ".model-del" }[which];
+  const btn = sel ? document.querySelector<HTMLButtonElement>(sel) : null;
+  Events.Emit("ui:model-click", { asked: which, found: btn !== null });
+  btn?.click();
+});
