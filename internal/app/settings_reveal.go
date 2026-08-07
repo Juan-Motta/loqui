@@ -46,19 +46,19 @@ type RevealResult struct {
 func (s *SettingsService) RevealKey(slot string) RevealResult {
 	keySlot, ok := knownKeySlot(slot)
 	if !ok {
-		return revealFailed("ranura de clave desconocida: %q", slot)
+		return s.revealFailed("ranura de clave desconocida: %q", slot)
 	}
 	// Same gate the write path uses. A slot no engine reads is one whose form is meant to be inert,
 	// and showing a credential there would advertise a configuration that does nothing.
 	if !store.IsAvailableKeySlot(keySlot) {
-		return revealFailed("este servicio todavía no está disponible en esta versión")
+		return s.revealFailed("este servicio todavía no está disponible en esta versión")
 	}
 	// An env-var credential is not ours to show. The app did not store it, cannot delete it, and the
 	// user cannot tell from the field which of the two they would be looking at — so the button would
 	// silently answer a different question depending on the slot. Naming the variable is the useful
 	// answer instead.
 	if name := envOverrideFor(keySlot); name != "" {
-		return revealFailed("esta ranura la controla la variable de entorno %s — la clave que se usa "+
+		return s.revealFailed("esta ranura la controla la variable de entorno %s — la clave que se usa "+
 			"viene de ahí, no de las guardadas", name)
 	}
 
@@ -68,15 +68,20 @@ func (s *SettingsService) RevealKey(slot string) RevealResult {
 		s.logLine("REVEAL", fmt.Sprintf("slot=%s ok=true", keySlot))
 		return RevealResult{OK: true, Key: key}
 	case errors.Is(err, store.ErrNoSecret):
-		return revealFailed("no hay ninguna clave guardada para este servicio")
+		return s.revealFailed("no hay ninguna clave guardada para este servicio")
 	case errors.Is(err, store.ErrSecretsUnreadable):
-		return revealFailed("no se pudieron leer las claves guardadas — revisa el archivo de claves")
+		return s.revealFailed("no se pudieron leer las claves guardadas — revisa el archivo de claves")
 	default:
-		return revealFailed("no se pudo leer la clave guardada: %v", err)
+		return s.revealFailed("no se pudo leer la clave guardada: %v", err)
 	}
 }
 
-// revealFailed also logs, so a refusal is as visible in the record as a disclosure.
-func revealFailed(format string, args ...any) RevealResult {
-	return RevealResult{Error: fmt.Sprintf(format, args...)}
+// revealFailed words a refusal in the user's language.
+//
+// A METHOD, not a package function, and that was a real gap rather than a style point: as a bare
+// function it had no way to reach a locale, so these three refusals crossed in Spanish onto an
+// otherwise English page. The hardened coverage scan is what surfaced it.
+func (s *SettingsService) revealFailed(format string, args ...any) RevealResult {
+	locale := s.bootstrap.Payload().Locale
+	return RevealResult{Error: s.phrase(locale, format, args...)}
 }

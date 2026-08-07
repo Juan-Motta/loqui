@@ -10,6 +10,7 @@
 // the Electron overlay, and it still shows NO transcript — that is read at the cursor,
 // where the text is injected.
 import { Events } from "@wailsio/runtime";
+import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 
 const BARS = 10;
 
@@ -26,12 +27,39 @@ const barsEl = document.getElementById("bars") as HTMLElement;
 const labelEl = document.getElementById("label") as HTMLElement;
 
 // Only reconnect/error need words; listening is bars-only.
+//
+// The overlay is a SEPARATE WINDOW with its own module instance, so it fetches the catalogue itself
+// rather than sharing the settings page's. It is also created once and lives for the whole session,
+// which is why the language is re-read on the `settings:language` event instead of only at startup:
+// otherwise a user who switches language would keep seeing this word in the old one until a restart.
 const LABELS: Record<string, string> = {
   idle: "",
   listening: "",
   reconnecting: "reconectando…",
   error: "",
 };
+
+let overlayCatalog: Record<string, string | undefined> = {};
+
+function tr(key: string): string {
+  return key === "" ? "" : (overlayCatalog[key] ?? key);
+}
+
+async function loadOverlayCatalog(): Promise<void> {
+  try {
+    const res = await Settings.Translations();
+    overlayCatalog = (res.catalog ?? {}) as Record<string, string | undefined>;
+    // Repaint whatever word is on screen right now, so a language change lands immediately rather
+    // than at the next state transition.
+    const shown = labelEl.dataset.key ?? "";
+    labelEl.textContent = tr(shown);
+  } catch {
+    /* stays in the authored language, which is readable */
+  }
+}
+
+void loadOverlayCatalog();
+Events.On("settings:language", () => void loadOverlayCatalog());
 
 // Static bars with a per-bar level multiplier, so the row reads like an equalizer rather
 // than one block moving. Mirrors the Home waveform so the two feel like the same indicator.
@@ -55,10 +83,13 @@ function render(): void {
   const metering =
     pillEl.classList.contains("metering") && state.status === "listening";
   pillEl.className = state.status + (metering ? " metering" : "");
+  // The KEY is remembered on the element, so a language change can retranslate whatever is showing
+  // without waiting for the next state transition — this window can sit visible for a whole
+  // dictation. The error text comes from Go, already translated there.
+  const key = LABELS[state.status] ?? "";
+  labelEl.dataset.key = key;
   labelEl.textContent =
-    state.status === "error"
-      ? state.error || "error"
-      : LABELS[state.status] || "";
+    state.status === "error" ? state.error || "error" : tr(key);
 }
 
 // Go pushes the already-reduced overlay state.
