@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 )
@@ -53,20 +54,43 @@ type WriteResult struct {
 
 // ok wraps a successful write, with what to tell the user about it.
 func (s *SettingsService) ok(notice string) WriteResult {
-	return WriteResult{Payload: s.bootstrap.Payload(), Notice: notice}
+	p := s.bootstrap.Payload()
+	return WriteResult{Payload: p, Notice: s.phrase(p.Locale, notice)}
+}
+
+// phrase translates a message on its way to the page.
+//
+// THE FORMAT STRING IS THE KEY, verbs and all: it is the authored Spanish, and the catalogue is
+// keyed by authored Spanish. Translating it BEFORE the arguments are filled in is what keeps every
+// call site in this package unchanged — they go on writing Spanish sentences, exactly as they did,
+// and none of them has to know a locale exists.
+//
+// Notices and errors do not travel inside the payload, so the payload's own pass cannot reach them;
+// without this an English card would carry a Spanish sentence underneath it.
+func (s *SettingsService) phrase(locale string, format string, args ...any) string {
+	if format == "" {
+		return ""
+	}
+	translated := i18n.T(i18n.Locale(locale), format, nil)
+	if len(args) == 0 {
+		return translated
+	}
+	return fmt.Sprintf(translated, args...)
 }
 
 // failed wraps a rejected or failed write. The payload is recomputed either way, so the page
 // repaints from what is actually stored rather than from what it hoped it had stored.
 func (s *SettingsService) failed(format string, args ...any) WriteResult {
-	return WriteResult{Payload: s.bootstrap.Payload(), Error: fmt.Sprintf(format, args...)}
+	p := s.bootstrap.Payload()
+	return WriteResult{Payload: p, Error: s.phrase(p.Locale, format, args...)}
 }
 
 // invalid is failed for the case where the user can fix it in a specific input.
 func (s *SettingsService) invalid(field string, format string, args ...any) WriteResult {
+	p := s.bootstrap.Payload()
 	return WriteResult{
-		Payload: s.bootstrap.Payload(),
-		Error:   fmt.Sprintf(format, args...),
+		Payload: p,
+		Error:   s.phrase(p.Locale, format, args...),
 		Field:   field,
 	}
 }

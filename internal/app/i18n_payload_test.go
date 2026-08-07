@@ -70,3 +70,51 @@ func TestSpanishIsUnchangedByTheBoundaryPass(t *testing.T) {
 		}
 	}
 }
+
+// Notices and errors are the OTHER half of what the user reads, and they do not travel in the
+// payload — they come back beside it, from WriteResult and ProbeResult. Translating the payload
+// alone leaves an English card with a Spanish sentence under it.
+//
+// The format string is what gets looked up, "%s" and all: it is the authored Spanish, so it is the
+// key, and the arguments are filled in afterwards. That keeps every call site in the seventeen files
+// unchanged — they go on writing Spanish, which is what the catalogue is keyed by.
+func TestNoticesAndErrorsAreTranslated(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AppLanguage = "en"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, vault, _, _ := probeService(t, st)
+	svc.bootstrap.systemLocale = func() string { return "es-CO" }
+
+	t.Run("an error", func(t *testing.T) {
+		res := svc.SaveConnection("ranura-que-no-existe", "", "x")
+		if res.Error == "" {
+			t.Fatal("expected a refusal")
+		}
+		if strings.Contains(res.Error, "ranura de clave desconocida") {
+			t.Errorf("the error crossed in Spanish: %q", res.Error)
+		}
+		if !strings.Contains(res.Error, "unknown key slot") {
+			t.Errorf("error = %q, want the English wording", res.Error)
+		}
+	})
+
+	// Most setters answer with an empty notice; this one speaks, because a credential vanishing
+	// without a word is the failure its wording was written for.
+	t.Run("a notice", func(t *testing.T) {
+		vault.set(store.SlotOpenAI, "una-clave")
+		res := svc.DeleteKey("openai")
+		if res.Error != "" {
+			t.Fatalf("unexpected error: %q", res.Error)
+		}
+		if res.Notice == "" {
+			t.Fatal("a successful write must say something")
+		}
+		if i18n.T(i18n.English, res.Notice, nil) != res.Notice {
+			t.Errorf("the notice crossed untranslated: %q", res.Notice)
+		}
+	})
+}

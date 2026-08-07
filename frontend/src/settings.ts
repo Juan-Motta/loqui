@@ -23,7 +23,7 @@
 // key, appearance, the input device, the permission rows, About and the onboarding wizard. See
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
-import { applyTranslations, loadTranslations, setText } from "./i18n.js";
+import { applyTranslations, loadTranslations, setText, t } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
@@ -701,7 +701,7 @@ function paint(p: SettingsPayload): boolean {
       use.style.display = active || !available ? "none" : "";
       const ready = state === "connected" || state === "available";
       use.disabled = !ready;
-      use.title = ready ? "" : "Configura este motor antes de poder usarlo";
+      use.title = ready ? "" : t("Configura este motor antes de poder usarlo");
     }
 
     // The key field shows a MASK when this app holds a credential for the slot — never the secret,
@@ -745,10 +745,10 @@ function paint(p: SettingsPayload): boolean {
         const canReveal = (key?.stored ?? false) || now === "typed" || now === "revealed";
         eye.disabled = !canReveal;
         eye.title = key?.fromEnv
-          ? "La clave la define una variable de entorno — la app no la tiene guardada"
+          ? t("La clave la define una variable de entorno — la app no la tiene guardada")
           : canReveal
-            ? "Ver la clave"
-            : "No hay ninguna clave que mostrar";
+            ? t("Ver la clave")
+            : t("No hay ninguna clave que mostrar");
       }
     }
 
@@ -769,7 +769,7 @@ function paint(p: SettingsPayload): boolean {
       const deletable = available && key?.status === "present" && !key.fromEnv;
       del.disabled = !deletable;
       del.title = key?.fromEnv
-        ? "Definida por variable de entorno — quítala del entorno para dejar de usarla"
+        ? t("Definida por variable de entorno — quítala del entorno para dejar de usarla")
         : "";
     }
   }
@@ -814,18 +814,18 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
   switch (status) {
     case "present":
       return fromEnv
-        ? "(definida por variable de entorno — no se puede borrar desde aquí)"
-        : "(guardada — escribe una nueva para reemplazarla)";
+        ? t("(definida por variable de entorno — no se puede borrar desde aquí)")
+        : t("(guardada — escribe una nueva para reemplazarla)");
     case "absent":
       // Absent AND from the environment is a state of its own: the variable is in force, so it is
       // what dictation reads, and it holds nothing usable. "No configurada" would send the user to
       // paste a key that the variable would go on overriding — and that the backend refuses to save
       // for exactly that reason.
       return fromEnv
-        ? "(la variable de entorno está definida pero vacía — quítala del entorno para usar una clave guardada)"
-        : "(no configurada)";
+        ? t("(la variable de entorno está definida pero vacía — quítala del entorno para usar una clave guardada)")
+        : t("(no configurada)");
     case "unreadable":
-      return "(no se pudieron leer las claves guardadas — revisa el archivo de claves)";
+      return t("(no se pudieron leer las claves guardadas — revisa el archivo de claves)");
     default:
       return "";
   }
@@ -892,7 +892,7 @@ function say(status: HTMLElement | null, kind: "ok" | "err" | "busy", text: stri
 
 // setBusy shows or clears a control's in-flight spinner.
 //
-// A CLASS rather than swapping the label: replacing "Guardar" with "Guardando…" resizes the button
+// A CLASS rather than swapping the label: replacing "Guardar" with t("Guardando…") resizes the button
 // and shoves its neighbours sideways under the cursor, mid-click. The CSS hides the label in place
 // and centres a ring over it, so the control keeps its exact geometry.
 function setBusy(control: HTMLElement | null, busy: boolean): void {
@@ -967,7 +967,7 @@ async function run(
   const epoch = beginAction(card);
   // A named activity rather than "…". The ellipsis was on screen for as long as the round trip took
   // — often a few hundred milliseconds — and then vanished, so the user reported never seeing it.
-  say(status, "busy", opts.busy ?? "Guardando…");
+  say(status, "busy", opts.busy ?? t("Guardando…"));
   const wasDisabled = trigger?.disabled ?? false;
   if (trigger) trigger.disabled = true;
   // Spun down in the finally below, on EVERY path. A spinner that outlives its request is worse than
@@ -1046,7 +1046,7 @@ async function probe(
   secret: string,
 ): Promise<void> {
   const epoch = beginAction(card);
-  say(status, "busy", "Probando la conexión…");
+  say(status, "busy", t("Probando la conexión…"));
   trigger.disabled = true;
   // The same spinner Guardar gets, and it earns its place here more than anywhere: a probe opens a
   // real socket to a real service and is bounded at fifteen seconds.
@@ -1094,7 +1094,7 @@ async function probe(
         // Said, not swallowed: an empty status line is indistinguishable from a click that never
         // arrived. "busy" is the kind that carries no ✓ and no ✗, which is right — nothing was
         // proved or disproved about what is on screen now.
-        say(status, "busy", "El formulario cambió durante la prueba — vuelve a probar");
+        say(status, "busy", t("El formulario cambió durante la prueba — vuelve a probar"));
         Events.Emit("ui:probe", { provider, ok: false, error: "stale-form", field: "" });
         return;
       }
@@ -1125,7 +1125,7 @@ function wire(): void {
       engineStatus,
       home,
       () => Settings.SetProvider(value),
-      { busy: "Cambiando de motor…" },
+      { busy: t("Cambiando de motor…") },
     );
   });
 
@@ -1256,7 +1256,7 @@ function wire(): void {
         status,
         use,
         () => Settings.SetProvider(provider),
-        { card, provider, busy: "Cambiando de motor…" },
+        { card, provider, busy: t("Cambiando de motor…") },
       );
     });
 
@@ -1307,7 +1307,7 @@ function wire(): void {
         {
           card,
           provider,
-          busy: "Guardando…",
+          busy: t("Guardando…"),
           // Folds the moment the write lands. The spinner carried the "something is happening"
           // part while it flew, so there is nothing left to hold the form open for.
           onOk: () => foldNow(card),
@@ -1323,7 +1323,7 @@ function wire(): void {
         status,
         del,
         () => Settings.DeleteKey(slot),
-        { card, provider, busy: "Borrando la clave…" },
+        { card, provider, busy: t("Borrando la clave…") },
       );
     });
   }
