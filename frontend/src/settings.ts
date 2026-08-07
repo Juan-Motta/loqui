@@ -325,12 +325,101 @@ const KEY_MASK = "************";
 // A WeakSet rather than dataset, so the mark cannot be read, faked or left behind in the DOM.
 const maskedFields = new WeakSet<HTMLInputElement>();
 
+// revealedFields marks inputs currently showing the REAL stored credential, fetched on demand by the
+// eye button. Like maskedFields it records provenance, and for the same reason: the content alone
+// cannot say whether the page put it there or a person did.
+//
+// Kept apart from maskedFields rather than folded into one "page-owned" set, because the two behave
+// oppositely when the user starts typing. A mask is worthless and gets wiped; a revealed key is the
+// real thing, and wiping it would delete what the user came to edit.
+const revealedFields = new WeakSet<HTMLInputElement>();
+
 // keyFieldKind classifies a key input WITHOUT looking at what is in it. This is the only shape in
 // which the field's state is ever reported or logged: the design review's P0 was a plan to report
 // "the value the probe used", and card reports are written to the app log verbatim (wiring.go:145).
-function keyFieldKind(input: HTMLInputElement | null): "empty" | "masked" | "typed" {
+function keyFieldKind(
+  input: HTMLInputElement | null,
+): "empty" | "masked" | "revealed" | "typed" {
   if (!input || input.value === "") return "empty";
-  return maskedFields.has(input) ? "masked" : "typed";
+  if (maskedFields.has(input)) return "masked";
+  if (revealedFields.has(input)) return "revealed";
+  return "typed";
+}
+
+// pageOwned is "this content came from the page, not from a person" — a mask or a revealed key.
+// It is what decides whether a repaint may replace the contents.
+function pageOwned(input: HTMLInputElement | null): boolean {
+  return input !== null && (maskedFields.has(input) || revealedFields.has(input));
+}
+
+// autoHides re-masks a revealed key after a while, per field.
+//
+// Not a nicety. Revealing is the one place the secret reaches the DOM, and this window can stay open
+// for hours — without a deadline, "let me check my key" leaves a credential on screen for the rest of
+// the day, in front of whoever walks past and in any screenshot taken meanwhile.
+const autoHides = new WeakMap<HTMLInputElement, number>();
+const AUTO_HIDE_MS = 15000;
+
+function cancelAutoHide(input: HTMLInputElement): void {
+  const timer = autoHides.get(input);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    autoHides.delete(input);
+  }
+}
+
+// Re-armed on every keystroke while the text is showing, so it behaves as an IDLE timeout rather
+// than a guillotine: it must not blank the field mid-word while someone is typing a long key.
+function scheduleAutoHide(input: HTMLInputElement): void {
+  cancelAutoHide(input);
+  autoHides.set(
+    input,
+    window.setTimeout(() => {
+      autoHides.delete(input);
+      autoHideNow(input);
+    }, AUTO_HIDE_MS),
+  );
+}
+
+// VISIBILITY AND PROVENANCE ARE DIFFERENT THINGS, and conflating them was the root of three separate
+// review findings. `type="text"` is whether the characters are readable; the WeakSets are who put
+// them there. Editing a revealed key changes the second without changing the first — and the first
+// version only ever un-hid via remask(), so an edited credential stayed legible for ever with every
+// automatic path switched off.
+function showKeyText(input: HTMLInputElement): void {
+  input.type = "text";
+  input.closest(".key-field")?.classList.add("revealed");
+  scheduleAutoHide(input);
+}
+
+function hideKeyText(input: HTMLInputElement): void {
+  input.type = "password";
+  input.closest(".key-field")?.classList.remove("revealed");
+  cancelAutoHide(input);
+}
+
+// autoHideNow is what the timer and the blur both want: put the characters away, and additionally
+// put the MASK back if what is showing is the stored credential rather than the user's own typing.
+function autoHideNow(input: HTMLInputElement): void {
+  if (revealedFields.has(input)) remask(input, true);
+  else hideKeyText(input);
+}
+
+// remask puts a revealed field back to how it was, and it is the ONLY way out of the revealed state
+// that does not involve the user typing.
+//
+// The real credential stops being in the DOM at this point, which is the whole reason the auto-hide
+// below exists: a key left on screen outlives the reason it was shown.
+function remask(input: HTMLInputElement | null, stored: boolean): void {
+  if (!input || !revealedFields.has(input)) return;
+  revealedFields.delete(input);
+  hideKeyText(input);
+  if (stored) {
+    input.value = KEY_MASK;
+    maskedFields.add(input);
+  } else {
+    input.value = "";
+  }
 }
 
 // secretToSend is the guard, and it is the whole reason the mask is safe to show.
@@ -340,7 +429,11 @@ function keyFieldKind(input: HTMLInputElement | null): "empty" | "masked" | "typ
 // the stored one (settings_probe.go:242). So the mask never travels, and nothing had to be invented
 // to make that true.
 function secretToSend(input: HTMLInputElement | null): string {
-  return keyFieldKind(input) === "masked" ? "" : (input?.value ?? "");
+  // A REVEALED key counts as untouched too, and that is not an optimisation. The user pressed the eye
+  // to look, not to re-save; sending it back would rewrite the same credential for no reason and,
+  // worse, would make "I looked at my key" a write — so a glance could fail, or overwrite a newer
+  // value that landed meanwhile.
+  return pageOwned(input) ? "" : (input?.value ?? "");
 }
 
 // setKeyField writes a value the way a KEYSTROKE would, clearing the mask mark.
@@ -353,6 +446,7 @@ function setKeyField(input: HTMLInputElement | null, value: string): void {
   if (!input) return;
   input.value = value;
   maskedFields.delete(input);
+  revealedFields.delete(input);
 }
 
 const $ = <T extends HTMLElement>(id: string) =>
@@ -630,8 +724,31 @@ function paint(p: SettingsPayload): boolean {
       } else if (!key?.stored && kind === "masked") {
         keyInput.value = "";
         maskedFields.delete(keyInput);
+      } else if (!key?.stored && kind === "revealed") {
+        // The credential this field is DISPLAYING no longer exists — deleted, or the file stopped
+        // being readable. Leaving it on screen would show a secret the app no longer holds.
+        remask(keyInput, false);
       }
-      // kind === "typed" falls through untouched, deliberately.
+      // "typed" and a still-valid "revealed" fall through untouched, deliberately: paint() runs after
+      // every write in the window, so anything else would wipe what the user is looking at or typing.
+
+      // The eye is dead where there is nothing to fetch. Its own click handler re-checks with the
+      // backend, which is the authority — this only keeps the control honest between repaints.
+      //
+      // RE-READ after the transitions above, not reused from before them. Using the stale value left
+      // a deleted-while-revealed slot showing an enabled eye over an empty field, so pressing it
+      // replaced the "key deleted" confirmation with a backend refusal. Review finding.
+      const eye = card.querySelector<HTMLButtonElement>(".eye-btn");
+      if (eye) {
+        const now = keyFieldKind(keyInput);
+        const canReveal = (key?.stored ?? false) || now === "typed" || now === "revealed";
+        eye.disabled = !canReveal;
+        eye.title = key?.fromEnv
+          ? "La clave la define una variable de entorno — la app no la tiene guardada"
+          : canReveal
+            ? "Ver la clave"
+            : "No hay ninguna clave que mostrar";
+      }
     }
 
     // Found by class, not by id: each card's span has a DIFFERENT id (keyState, openaiKeyState,
@@ -726,52 +843,23 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
 // state before the write that just succeeded.
 const cardEpochs = new WeakMap<HTMLElement, number>();
 
-// pendingFolds is the "close this card in a moment" timer, one per card, and it exists to be
-// CANCELLED.
+// foldNow collapses the card the moment its write lands.
 //
-// The epoch guard alone does not cover this, and assuming it did was the design review's P1. Neither
-// reopening the card (the toggle only flips `hidden`) nor typing advances the epoch — so without an
-// explicit cancel, a user who saves and immediately starts typing a replacement key has the form
-// close underneath them 1.2 seconds later.
-const pendingFolds = new Map<HTMLElement, number>();
-
-// cancelFold stops a scheduled collapse. Called from everything that means "the user is still
-// working in here": the toggle, a keystroke in the key field, a region change, and any new action.
-function cancelFold(card: HTMLElement | null): void {
-  if (!card) return;
-  const timer = pendingFolds.get(card);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    pendingFolds.delete(card);
-  }
-}
-
-// foldAfterSuccess shows the ✓ for a moment and then collapses the card.
+// IMMEDIATE, on the owner's instruction of 2026-08-07: "apenas termine se cierre el acordeón". It
+// replaced an earlier design that held the ✓ on screen for 1.2 s first — which existed because the
+// status line lives inside .conn-form and folding took the confirmation down with it. The spinner is
+// what makes that delay unnecessary: the feedback now happens DURING the write instead of after it,
+// and what remains once the card folds is the row badge.
 //
-// Not immediate, and that is the point: the status line lives INSIDE .conn-form, so folding at once
-// takes the confirmation down with it and leaves the row badge as the only signal. The delay gives
-// both — the sentence, then the folded row with its badge already green.
-const FOLD_DELAY_MS = 1200;
-
-function foldAfterSuccess(card: HTMLElement | null, epoch: number): void {
-  if (!card) return;
-  cancelFold(card);
-  const timer = window.setTimeout(() => {
-    pendingFolds.delete(card);
-    // Re-checked AT FIRING, not only when scheduled. The cancellations above cover this card's own
-    // events; the epoch still covers the case they cannot see — an action on ANOTHER card whose
-    // repaint supersedes this one.
-    if (!isCurrent(card, epoch)) return;
-    const form = card.querySelector<HTMLElement>(".conn-form");
-    if (form) form.hidden = true;
-  }, FOLD_DELAY_MS);
-  pendingFolds.set(card, timer);
+// The consequence, stated rather than glossed: "✓ Clave guardada" is no longer read. Progress is the
+// spinner, and the result is the badge.
+function foldNow(card: HTMLElement | null): void {
+  const form = card?.querySelector<HTMLElement>(".conn-form");
+  if (form) form.hidden = true;
 }
 
 function beginAction(card: HTMLElement | null): number {
   if (!card) return 0;
-  // A new action supersedes a collapse that was queued by the previous one.
-  cancelFold(card);
   const next = (cardEpochs.get(card) ?? 0) + 1;
   cardEpochs.set(card, next);
   // A new action supersedes whatever the last one complained about, so the red border goes with it.
@@ -795,6 +883,15 @@ function say(status: HTMLElement | null, kind: "ok" | "err" | "busy", text: stri
   if (!status) return;
   status.className = kind === "busy" ? "status" : "status " + kind;
   status.textContent = kind === "ok" ? "✓ " + text : kind === "err" ? "✗ " + text : text;
+}
+
+// setBusy shows or clears a control's in-flight spinner.
+//
+// A CLASS rather than swapping the label: replacing "Guardar" with "Guardando…" resizes the button
+// and shoves its neighbours sideways under the cursor, mid-click. The CSS hides the label in place
+// and centres a ring over it, so the control keeps its exact geometry.
+function setBusy(control: HTMLElement | null, busy: boolean): void {
+  control?.classList.toggle("is-busy", busy);
 }
 
 // markInvalid puts the border on the input Go named. The page is told WHICH field, never asked to
@@ -840,9 +937,11 @@ function serialize<T>(fn: () => Promise<T>): Promise<T> {
 // would leave the page with nothing authoritative to repaint from — showing the choice that was
 // just refused. Repainting on failure is what snaps the picker back to the engine really in use.
 //
-// While a write is in flight the triggering control is disabled: two overlapping credential
-// operations on one slot are exactly what the store's per-slot gate has to serialise, and a
-// double-clicked Guardar is the easiest way to cause it.
+// While a write is in flight the triggering control is disabled AND shows a spinner. The disable is
+// the load-bearing half — two overlapping credential operations on one slot are exactly what the
+// store's per-slot gate has to serialise, and a double-clicked Guardar is the easiest way to cause
+// it. The spinner is what makes the disable legible: a button that simply greys out reads as one
+// that refused the click.
 async function run(
   label: string,
   status: HTMLElement | null,
@@ -856,7 +955,7 @@ async function run(
     // same guard that decides who gets to speak. Used by Guardar to fold the card; a failed write
     // must leave it open, because the red border and the message it explains are both inside the
     // form, and folding would hide the complaint along with the field to fix.
-    onOk?: (epoch: number) => void;
+    onOk?: () => void;
   } = {},
 ): Promise<void> {
   const card = opts.card ?? null;
@@ -866,6 +965,10 @@ async function run(
   say(status, "busy", opts.busy ?? "Guardando…");
   const wasDisabled = trigger?.disabled ?? false;
   if (trigger) trigger.disabled = true;
+  // Spun down in the finally below, on EVERY path. A spinner that outlives its request is worse than
+  // none: it says "still working" about something that finished, and the button underneath it is
+  // already live again.
+  setBusy(trigger, true);
   // The ENTIRE sequence goes in the queue — the call, the recovery load and the repaint. Wrapping
   // only the call let the queue advance the moment it rejected, so a later write could finish while
   // the failed one was still fetching its recovery payload, and that stale payload painted last.
@@ -882,7 +985,7 @@ async function run(
       if (isCurrent(card, epoch)) {
         if (res.error === "") {
           say(status, "ok", res.notice);
-          opts.onOk?.(epoch);
+          opts.onOk?.();
         } else {
           say(status, "err", res.error);
           markInvalid(card, opts.provider ?? "", res.field);
@@ -917,6 +1020,8 @@ async function run(
         // whose precondition is now unknown.
         if (trigger) trigger.disabled = wasDisabled;
       }
+    } finally {
+      setBusy(trigger, false);
     }
   });
 }
@@ -938,6 +1043,9 @@ async function probe(
   const epoch = beginAction(card);
   say(status, "busy", "Probando la conexión…");
   trigger.disabled = true;
+  // The same spinner Guardar gets, and it earns its place here more than anywhere: a probe opens a
+  // real socket to a real service and is bounded at fifteen seconds.
+  setBusy(trigger, true);
   try {
     // Read-after-write: anything already queued has to land first, or an empty key field would be
     // tested against the credential the user has just replaced.
@@ -945,6 +1053,7 @@ async function probe(
     const res = await Settings.TestConnection(slot, region, secret);
     // Not painted from the payload — no state disables it, by design — so it releases itself.
     trigger.disabled = false;
+    setBusy(trigger, false);
     // The probe re-reads the stored credentials, so its payload is the next chance to correct a card
     // that had gone stale. paint() drops it if a newer snapshot got there first.
     // A probe writes nothing, so its repaint must leave the form exactly as it found it. paint() fills
@@ -995,6 +1104,7 @@ async function probe(
   } catch (err) {
     const msg = String(err instanceof Error ? err.message : err);
     trigger.disabled = false;
+    setBusy(trigger, false);
     if (isCurrent(card, epoch)) say(status, "err", msg);
     Events.Emit("ui:probe", { provider, ok: false, error: msg });
   }
@@ -1025,8 +1135,6 @@ function wire(): void {
     card
       .querySelector<HTMLButtonElement>(".conn-toggle")
       ?.addEventListener("click", () => {
-        // Whatever collapse was queued, the user has just taken the decision back by hand.
-        cancelFold(card);
         const form = card.querySelector<HTMLElement>(".conn-form");
         if (form) form.hidden = !form.hidden;
       });
@@ -1040,15 +1148,78 @@ function wire(): void {
     const keyInput = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
     keyInput?.addEventListener("beforeinput", () => {
       if (maskedFields.has(keyInput)) {
+        // A mask is not content. Wipe it whole, so the first character does not land on its end.
         keyInput.value = "";
         maskedFields.delete(keyInput);
+      } else if (revealedFields.has(keyInput)) {
+        // A revealed key IS content — the real one — so it is KEPT and promoted to typed. The user
+        // pressed the eye to see it; editing one character of it must not delete the rest.
+        revealedFields.delete(keyInput);
       }
-      // Typing is not watching: a queued collapse would close the form under the user.
-      cancelFold(card);
+      // The deadline is RE-ARMED rather than cancelled. Cancelling it was a review finding: the first
+      // edit dropped the revealed mark, which left the blur handler with nothing to act on and the
+      // timer switched off — so an edited credential stayed legible on screen indefinitely.
+      if (keyInput.type === "text") scheduleAutoHide(keyInput);
     });
-    if (provider === "azure") {
-      $<HTMLSelectElement>("region")?.addEventListener("change", () => cancelFold(card));
-    }
+
+    // THE EYE. Reveals the credential this app has stored, fetched on the press and never before —
+    // it is not in any payload, precisely so it does not cross on every repaint.
+    const eye = card.querySelector<HTMLButtonElement>(".eye-btn");
+    // The press must not move focus. Without this the eye STOPS BEING A TOGGLE: clicking it while the
+    // field is focused fires the input's blur first, which re-hides, and the click handler then sees a
+    // hidden field and reveals again — so the key never goes away. Found in review, and it only bites
+    // when the user has clicked into the field, which is exactly what someone does to copy the key.
+    eye?.addEventListener("mousedown", (ev) => ev.preventDefault());
+
+    eye?.addEventListener("click", () => {
+      if (!keyInput) return;
+      // The eye means one thing — SHOW OR HIDE — and only fetches when there is nothing to show yet.
+      if (keyInput.type === "text") {
+        autoHideNow(keyInput);
+        return;
+      }
+      if (keyFieldKind(keyInput) === "typed") {
+        // The user's own typing: nothing to fetch, just stop hiding it.
+        showKeyText(keyInput);
+        return;
+      }
+      if (!slot) return;
+      // A read, so it stays out of the write queue — but it WAITS for it, or the eye would show the
+      // credential that a save still in flight is about to replace.
+      void (async () => {
+        eye.disabled = true;
+        // Snapshotted BEFORE the wait. The response can land after the user has typed a replacement,
+        // or after a delete removed the very key being fetched — and applying it then would either
+        // overwrite what they just wrote or display a credential that no longer exists. Review
+        // finding; the eye had no guard at all.
+        const before = keyInput.value;
+        try {
+          await writes;
+          const res = await Settings.RevealKey(slot);
+          if (keyInput.value !== before) return; // the field moved on; this answer is about the past
+          if (!res.ok) {
+            // Said on the card's own status line, because a dead eye explains nothing. The refusals
+            // are real answers — an env-var slot, an unreadable file — not failures to paper over.
+            say(status, "err", res.error);
+            return;
+          }
+          setKeyField(keyInput, res.key);
+          revealedFields.add(keyInput);
+          showKeyText(keyInput);
+        } catch (err) {
+          say(status, "err", String(err instanceof Error ? err.message : err));
+        } finally {
+          eye.disabled = false;
+        }
+      })();
+    });
+
+    // Looking away puts it away. A credential left on screen outlives the reason it was shown, and
+    // the window can sit open for hours. Applies to typed-and-visible too, not just to a revealed
+    // key: the characters go back behind dots either way, and only a revealed one is also re-masked.
+    keyInput?.addEventListener("blur", () => {
+      if (keyInput.type === "text") autoHideNow(keyInput);
+    });
 
     // "Probar conexión". It writes NOTHING, so it stays out of the write queue: a fifteen-second
     // network call in there would hold up a Guardar behind it. What it does do is WAIT for whatever
@@ -1107,6 +1278,12 @@ function wire(): void {
       if (input) {
         input.value = "";
         maskedFields.delete(input);
+        revealedFields.delete(input);
+        cancelAutoHide(input);
+        // Back to hidden, whatever the eye had done. A save must not leave the next thing typed here
+        // in plain sight.
+        input.type = "password";
+        input.closest(".key-field")?.classList.remove("revealed");
       }
       const regionValue =
         provider === "azure"
@@ -1126,10 +1303,9 @@ function wire(): void {
           card,
           provider,
           busy: "Guardando…",
-          // The card folds itself once the write lands, so "it saved" is something the user SEES
-          // rather than only reads. The ✓ stays up for a beat first — it lives inside the form, and
-          // folding at once would take it down with it.
-          onOk: (epoch) => foldAfterSuccess(card, epoch),
+          // Folds the moment the write lands. The spinner carried the "something is happening"
+          // part while it flew, so there is nothing left to hold the form open for.
+          onOk: () => foldNow(card),
         },
       );
     });
@@ -1365,6 +1541,9 @@ Events.On("debug:record-click", () => {
 // passing a real credential through an environment variable would put it in the process environment
 // and in every log that captures it.
 const DEBUG_BAD_KEY = "loqui-debug-clave-invalida";
+// A SECOND fixed sentinel, distinct from the first, for the cases that need the field to change to
+// something else mid-flight — proving a verdict is refused when its inputs moved.
+const DEBUG_OTHER_KEY = "loqui-debug-otra-clave";
 
 function debugConnStep(step: string): string {
   const [provider, action, arg] = step.split(":");
@@ -1393,12 +1572,41 @@ function debugConnStep(step: string): string {
       if (region && arg) region.value = arg;
       card.querySelector<HTMLButtonElement>(".conn-save")?.click();
       return `save-region(${arg ?? ""})`;
-    case "set-key":
-      // Types into the key field without pressing anything — the counterpart of set-region, and the
-      // only way to reproduce from outside a user who edits the field while a probe is in flight.
-      // Goes through setKeyField, so it clears the mask exactly as a keystroke does.
-      setKeyField(key, arg === "empty" ? "" : (arg ?? DEBUG_BAD_KEY));
-      return `set-key(${arg ?? "badkey"})`;
+    case "eye":
+      card.querySelector<HTMLButtonElement>(".eye-btn")?.click();
+      return "eye";
+    case "blur-key":
+      // Drives the look-away path: a revealed key must go back behind the mask on blur.
+      key?.dispatchEvent(new FocusEvent("blur"));
+      return "blur-key";
+    case "set-key": {
+      // Types into the key field — the counterpart of set-region, and the only way to reproduce from
+      // outside a user who edits while something is in flight.
+      //
+      // IT ACCEPTS ONLY FIXED TOKENS, NEVER A VALUE. The first version took arbitrary text and echoed
+      // it back in the step report, which is logged verbatim — so `set-key:sk-live-…` would have
+      // written a real credential into the app log through the very affordance meant to avoid that.
+      // It is the rule `test:badkey` already followed and this broke; a cross-engine review caught it.
+      const sentinels: Record<string, string> = {
+        badkey: DEBUG_BAD_KEY,
+        other: DEBUG_OTHER_KEY,
+        empty: "",
+      };
+      const token = arg ?? "badkey";
+      const value = sentinels[token];
+      if (value === undefined) return `set-key(rechazado: usa badkey|other|empty)`;
+      // A REAL beforeinput first, so the page's own listener runs: that is what clears a mask and
+      // promotes a revealed key to typed. Setting .value alone skipped both, the same class of
+      // mistake design review caught in `test` — a driver that does not behave like the user cannot
+      // verify the user's path.
+      key?.dispatchEvent(new InputEvent("beforeinput", { data: value, inputType: "insertText" }));
+      setKeyField(key, value);
+      // Only the TOKEN is reported, never the text it stands for.
+      return `set-key(${token})`;
+    }
+    case "toggle":
+      card.querySelector<HTMLButtonElement>(".conn-toggle")?.click();
+      return "toggle";
     case "set-region":
       // Chosen but NOT saved, which is the state a probe has to leave untouched: paint() fills this
       // select from what is stored, so restoring it is the only thing keeping an unsaved choice
@@ -1433,7 +1641,10 @@ function reportCard(provider: string): Record<string, unknown> {
   const button = (sel: string) => {
     const b = card.querySelector<HTMLButtonElement>(sel);
     if (!b) return "absent";
-    return `${b.style.display === "none" ? "hidden" : "shown"}/${b.disabled ? "disabled" : "enabled"}`;
+    // The spinner is reported too, because "disabled" alone cannot distinguish a control that is
+    // WORKING from one the payload switched off — and those say opposite things to the user.
+    const busy = b.classList.contains("is-busy") ? "/busy" : "";
+    return `${b.style.display === "none" ? "hidden" : "shown"}/${b.disabled ? "disabled" : "enabled"}${busy}`;
   };
   const status = card.querySelector<HTMLElement>(".status");
   // The HOME status line, not this card's: it is where the engine check speaks, and it is the one
@@ -1446,6 +1657,11 @@ function reportCard(provider: string): Record<string, unknown> {
     // report is logged verbatim (wiring.go:148), so a field carrying the value would write a real
     // credential into the app log. Reporting the value was the design review's P0.
     keyField: keyFieldKind($<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "")),
+    // Whether the characters are READABLE, which is a different question from who put them there.
+    // Both are needed: an edited credential is "typed" by provenance and was left legible for ever by
+    // the first version of this code, and provenance alone could not see it.
+    keyVisible:
+      $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "")?.type === "text",
     // Whether the accordion is open, so the fold-after-save behaviour is observable at all.
     formOpen: card.querySelector<HTMLElement>(".conn-form")?.hidden === false,
     badge: card.querySelector<HTMLElement>(".conn-state")?.textContent ?? "",
@@ -1456,6 +1672,7 @@ function reportCard(provider: string): Record<string, unknown> {
     homeEngine: $<HTMLSelectElement>("homeEngine")?.value ?? "",
     keyState: card.querySelector<HTMLElement>(".key-state")?.textContent ?? "",
     region: $<HTMLSelectElement>("region")?.value ?? "",
+    eye: button(".eye-btn"),
     test: button(".conn-test"),
     use: button(".conn-use"),
     delete: button(".conn-delete"),
@@ -1470,14 +1687,32 @@ Events.On("debug:conn-click", (e: { data: unknown }) => {
   const arg = Array.isArray(e.data) ? e.data[0] : e.data;
   const steps = String(arg ?? "").split("+");
   const provider = String(steps[0] ?? "").split(":")[0];
-  // Only the first step names the card; the rest inherit it. Every chain acts on one card — that is
-  // what makes the steps overlap in the first place — and repeating the provider in each one reads
-  // as though they might not.
-  const done = steps.map((step) => {
-    const named = document.querySelector(`.conn[data-provider="${step.split(":")[0]}"]`) !== null;
-    return debugConnStep(named ? step : `${provider}:${step}`);
-  });
-  Events.Emit("ui:conn-probe", { ran: done.join(" | "), card: reportCard(provider) });
+  void (async () => {
+    // Only the first step names the card; the rest inherit it. Every chain acts on one card — that is
+    // what makes the steps overlap in the first place — and repeating the provider in each one reads
+    // as though they might not.
+    //
+    // Steps still run in ONE tick unless a `wait` separates them, which is what keeps the
+    // overlapping-actions cases reproducible: awaiting between every step would serialise exactly the
+    // races those cases exist to provoke.
+    //
+    // `wait:<ms>` was added because some behaviour is only reachable in sequence — pressing the eye
+    // and then pressing it again (the first press disables the button while it fetches), and anything
+    // that has to land inside a timer's window, like the 1.2 s fold.
+    const done: string[] = [];
+    for (const step of steps) {
+      const head = step.split(":")[0];
+      if (head === "wait") {
+        const ms = Number(step.split(":")[1] ?? "500");
+        await new Promise((resolve) => setTimeout(resolve, Number.isFinite(ms) ? ms : 500));
+        done.push(`wait(${ms})`);
+        continue;
+      }
+      const named = document.querySelector(`.conn[data-provider="${head}"]`) !== null;
+      done.push(debugConnStep(named ? step : `${provider}:${step}`));
+    }
+    Events.Emit("ui:conn-probe", { ran: done.join(" | "), card: reportCard(provider) });
+  })();
 });
 
 // Report a card's state without touching it, for the before/after of a use case.

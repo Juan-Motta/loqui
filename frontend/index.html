@@ -338,8 +338,56 @@
       button.btn:disabled:hover { background: var(--card-bg); filter: none; }
       button.btn.primary:disabled:hover { background: var(--accent); }
 
+      /* A button whose action is in flight. The LABEL IS HIDDEN RATHER THAN REPLACED and the padding
+         is untouched, so the control keeps its exact width — swapping "Guardar" for "Guardando…"
+         would resize it and shove the buttons beside it sideways under the cursor.
+         Opacity is raised back up: :disabled dims to 0.45, and a spinner at 45% reads as broken
+         rather than busy. */
+      button.btn.is-busy { position: relative; color: transparent; opacity: 1; }
+      button.btn.is-busy:disabled { opacity: 1; }
+      button.btn.is-busy::after {
+        content: ""; position: absolute; top: 50%; left: 50%;
+        width: 13px; height: 13px; margin: -7.5px 0 0 -7.5px; box-sizing: border-box;
+        border: 2px solid color-mix(in srgb, var(--text-2) 45%, transparent);
+        /* One transparent edge is what makes a ring read as spinning rather than pulsing. */
+        border-top-color: var(--text);
+        border-radius: 50%; animation: btn-spin 0.65s linear infinite;
+      }
+      button.btn.primary.is-busy::after {
+        border-color: color-mix(in srgb, #fff 40%, transparent); border-top-color: #fff;
+      }
+      @keyframes btn-spin { to { transform: rotate(360deg); } }
+      /* Same courtesy the waveform already extends. A still ring still says "not ready yet", which is
+         the part that matters; the spin is only the flourish. */
+      @media (prefers-reduced-motion: reduce) {
+        button.btn.is-busy::after { animation: none; }
+      }
+
       /* The field the backend named as the one to fix. Applied from WriteResult.Field /
          ProbeResult.Field — the page never decides which input is at fault. */
+      /* The key field and its reveal button.
+         NEW UI: the Electron original has no eye, so rather than invent a look this borrows
+         .icon-btn's shape — same size, same radius, same hover — and sits inside the field.
+         The input keeps its own max-width on the WRAPPER instead, so the control is the same
+         width it always was and the button overlays its right edge. */
+      .key-field { position: relative; max-width: 520px; }
+      .key-field input { width: 100%; max-width: none; padding-right: 38px; }
+      .eye-btn {
+        position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+        width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px;
+        background: none; color: var(--text-3); cursor: default;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .eye-btn:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text-2); }
+      /* Disabled rather than hidden: an eye that vanishes reads as a rendering bug, while a dimmed
+         one says "there is nothing here to show yet" — which is exactly the state it means. */
+      .eye-btn:disabled { opacity: 0.35; }
+      .eye-btn svg { width: 16px; height: 16px; }
+      .eye-btn .eye-closed { display: none; }
+      .key-field.revealed .eye-btn { color: var(--accent); }
+      .key-field.revealed .eye-btn .eye-open { display: none; }
+      .key-field.revealed .eye-btn .eye-closed { display: block; }
+
       .conn-form input.invalid, .conn-form select.invalid { border-color: var(--err); }
       .conn-form input.invalid:focus, .conn-form select.invalid:focus {
         border-color: var(--err);
@@ -1000,7 +1048,10 @@
                     </div>
 
                     <label id="keyLabel">Clave API <span id="keyState" class="muted key-state"></span></label>
-                    <input id="key" type="password" placeholder="pega tu clave (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                    <div class="key-field">
+                      <input id="key" type="password" placeholder="pega tu clave (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                      <button type="button" class="eye-btn" title="Ver la clave guardada" aria-label="Ver la clave guardada"><svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.6 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a3 3 0 1 0 4.2 4.2"/><path d="M3 3l18 18"/></svg></button>
+                    </div>
 
                     <div class="conn-actions">
                       <span class="status" id="azureStatus"></span>
@@ -1028,7 +1079,10 @@
                       <option value="gpt-4o-mini-transcribe" data-i18n>gpt-4o-mini-transcribe — más rápido/barato</option>
                     </select>
                     <label>API key <span id="openaiKeyState" class="muted key-state"></span></label>
-                    <input id="openaiApiKey" type="password" placeholder="sk-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                    <div class="key-field">
+                      <input id="openaiApiKey" type="password" placeholder="sk-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                      <button type="button" class="eye-btn" title="Ver la clave guardada" aria-label="Ver la clave guardada"><svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.6 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a3 3 0 1 0 4.2 4.2"/><path d="M3 3l18 18"/></svg></button>
+                    </div>
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-test" data-i18n>Probar conexión</button>
@@ -1049,7 +1103,10 @@
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Transcripción en streaming. La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
                     <label>API key <span id="grokKeyState" class="muted key-state"></span></label>
-                    <input id="grokApiKey" type="password" placeholder="xai-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                    <div class="key-field">
+                      <input id="grokApiKey" type="password" placeholder="xai-… (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                      <button type="button" class="eye-btn" title="Ver la clave guardada" aria-label="Ver la clave guardada"><svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.6 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a3 3 0 1 0 4.2 4.2"/><path d="M3 3l18 18"/></svg></button>
+                    </div>
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-test" data-i18n>Probar conexión</button>
@@ -1070,7 +1127,10 @@
                   <div class="conn-form" hidden>
                     <p class="none" data-i18n>Scribe v2 Realtime (streaming). La API key vive solo en el proceso principal, nunca en la ventana de transcripción.</p>
                     <label>API key <span id="elevenKeyState" class="muted key-state"></span></label>
-                    <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                    <div class="key-field">
+                      <input id="elevenApiKey" type="password" placeholder="tu API key de ElevenLabs (se guarda en tu equipo, sin cifrar)" data-i18n-attr="placeholder" />
+                      <button type="button" class="eye-btn" title="Ver la clave guardada" aria-label="Ver la clave guardada"><svg class="eye-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg><svg class="eye-closed" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7c1.6 0 3 .4 4.3 1M22 12s-3.6 7-10 7c-1.6 0-3-.4-4.3-1"/><path d="M9.9 9.9a3 3 0 1 0 4.2 4.2"/><path d="M3 3l18 18"/></svg></button>
+                    </div>
                     <div class="conn-actions">
                       <span class="status"></span>
                       <button class="btn conn-test" data-i18n>Probar conexión</button>

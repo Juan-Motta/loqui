@@ -82,8 +82,9 @@ pisaría la clave que el usuario está tecleando en ese momento.
 > Regla: se escribe la máscara **sólo si el campo está vacío o ya contiene la máscara**. Nunca sobre
 > texto del usuario.
 
-El campo se marca con `dataset.masked` para distinguir "esto es una máscara" de "esto lo escribió
-alguien" — el valor por sí solo no basta, porque un usuario podría teclear asteriscos.
+El campo se marca en un `WeakSet` para distinguir "esto lo puso la página" de "esto lo escribió
+alguien" — el valor por sí solo no basta, porque un usuario podría teclear asteriscos. **Un WeakSet y
+no `dataset`**: la marca no debe poder leerse, falsificarse ni quedarse olvidada en el DOM.
 
 ### 3. Se limpia al primer carácter, no al foco
 
@@ -112,8 +113,8 @@ casos el payload dice `present` y al reabrir se ve la misma máscara. Así que a
 
 La transición inversa es tan obligatoria como la directa. Al borrar la clave el payload vuelve con
 `Stored=false`; si nadie limpia el campo, la tarjeta sigue afirmando una credencial que ya no
-existe. `paint()` limpia **sólo lo que pintó la propia página** (`dataset.masked`), nunca texto que
-haya escrito el usuario.
+existe. `paint()` limpia **sólo lo que pintó la propia página**, nunca texto que haya escrito el
+usuario.
 
 ### 5. Plegar sólo en éxito, y el plegado tiene que poder CANCELARSE
 
@@ -160,7 +161,7 @@ cambió.
 ### 7. El afordance de debug tiene que mentir menos que el usuario
 
 `debugConnStep` asigna `key.value` directamente (`settings.ts:1183`), sin pasar por `beforeinput`.
-Sobre una tarjeta ya enmascarada eso dejaría `dataset.masked` puesto: el guardarraíl mandaría vacío,
+Sobre una tarjeta ya enmascarada eso dejaría la marca de máscara puesta: el guardarraíl mandaría vacío,
 Go probaría la clave **buena** guardada, y el caso negativo del E2E saldría **verde**. El E2E habría
 verificado exactamente lo contrario de lo que afirma.
 
@@ -187,7 +188,7 @@ cancelan el toggle, cualquier tecla en la clave o la región, y cualquier acció
 **P1 — la máscara sobrevivía al borrado.** La v1 decía cuándo poner la máscara y no decía nunca
 cuándo quitarla. Borras la clave, el payload vuelve con `Stored=false`, y el campo **sigue
 enmascarado**: la tarjeta afirma una credencial que ya no existe. **Resuelto:** la transición
-inversa es explícita, y sólo limpia lo que pintó la propia página (`dataset.masked`), nunca texto
+inversa es explícita, y sólo limpia lo que pintó la propia página, nunca texto
 del usuario.
 
 **P1 — el chequeo de prueba rancia se olvidaba de la región.** El probe captura clave **y** región
@@ -200,7 +201,7 @@ del usuario.
 clasificación de lo enviado. Es la diferencia entre un test que mira y uno que prueba.
 
 **P2 — el propio afordance de debug habría falseado el E2E.** `debugConnStep` asigna `key.value`
-directamente (`:1183`) sin pasar por `beforeinput`, así que `dataset.masked` seguiría puesto: el
+directamente (`:1183`) sin pasar por `beforeinput`, así que la marca de máscara seguiría puesta: el
 guardarraíl mandaría vacío, Go probaría la clave **buena** guardada, y el caso negativo del E2E
 diría verde. Habría verificado lo contrario de lo que afirma. **Resuelto:** el driver escribe por el
 mismo helper que una tecla real.
@@ -209,6 +210,58 @@ mismo helper que una tecla real.
 sin tocar contesta "no hay nada que guardar". Para Azure no: la página siempre manda la región
 (`settings.ts:921`) y `SaveConnection` la escribe cuando viene, así que contesta "Región guardada" y
 pliega. El comportamiento está bien; la afirmación estaba mal. **Corregido arriba.**
+
+## 8. El ojo — y por qué es un cambio de postura, no un botón
+
+Pedido por el usuario el 2026-08-07, **después** de ver el diseño de arriba: "un botón de ojo para
+poder ver las claves".
+
+**El ojo no puede simplemente quitar la máscara, porque la máscara no es la clave.** Es una constante;
+revelarla mostraría doce asteriscos. Así que "ver la clave" exige traer el secreto desde Go, que es
+exactamente el invariante que este código sostiene. Se le planteó el intercambio al usuario y lo
+eligió con conocimiento: las claves ya están **en claro en disco** con FileVault apagado, así que lo
+que se añade es el valor en memoria del webview y a la vista de quien pase por detrás.
+
+### `Settings.RevealKey(slot)` — el agujero más estrecho posible
+
+- **Nunca en un payload.** Los payloads se reconstruyen y reenvían en cada repintado; un secreto ahí
+  cruzaría decenas de veces por sesión sin que nadie lo pida. Esto cruza **una vez, al pulsar**.
+- **Una ranura, nombrada por quien llama.**
+- **El valor no se registra jamás.** El ACTO sí (`REVEAL slot=… ok=…`), porque "alguien mostró una
+  credencial" merece estar en el registro; la credencial no.
+- **Espera la cola de escrituras** antes de leer, o el ojo enseñaría la clave que un guardado en
+  vuelo está a punto de reemplazar.
+
+### Cuatro negativas, y son contrato
+
+Ranura desconocida; ranura que ningún motor lee (`azure-openai`); **credencial de variable de
+entorno**; y credenciales ilegibles. La del entorno es la que más importa: la app no la guardó, no
+puede borrarla, y devolverla haría que el botón conteste una pregunta distinta según la ranura
+—"qué guardaste" frente a "qué hay en tu entorno"— sin que el usuario pueda ver cuál. En la UI el
+ojo aparece **deshabilitado** ahí, con la etiqueta diciendo por qué; Go lo rechaza igualmente, porque
+el binding está expuesto al webview.
+
+### Tres formas de volver a ocultarla, porque una sola no basta
+
+Una clave en pantalla sobrevive a la razón por la que se mostró, y esta ventana puede quedarse
+abierta horas:
+
+1. **el propio ojo**, que alterna;
+2. **apartar la vista** (`blur`);
+3. **un temporizador de 15 s**, que es el que cubre el caso de irse sin cerrar nada.
+
+Y además: **guardar** vuelve a ocultar, para que lo siguiente que se teclee no quede a la vista.
+
+### La regla que distingue máscara de clave revelada
+
+Las dos las puso la página, pero se comportan al revés cuando el usuario teclea. Una máscara **no
+es contenido** y se borra entera, para no escribir detrás de ella. Una clave revelada **sí lo es**
+—es la de verdad— así que se **conserva** y pasa a contar como tecleada: pulsaste el ojo para verla,
+y editarle un carácter no puede borrarte el resto.
+
+Ninguna de las dos se envía al guardar si no se tocó. Que una revelada cuente como intacta no es una
+optimización: reenviarla convertiría "mirar mi clave" en una **escritura**, y entonces una ojeada
+podría fallar, o pisar un valor más nuevo que hubiera llegado entretanto.
 
 ## Tests
 
@@ -221,7 +274,21 @@ pliega. El comportamiento está bien; la afirmación estaba mal. **Corregido arr
 | 3 | clave por variable de entorno | `Stored=false` **aunque `Status=present`** — el caso que mentiría |
 | 4 | credenciales ilegibles | `Stored=false` — "no pude leer" no es "hay una" |
 
-Verificados por mutación, los cuatro.
+Y para `RevealKey`:
+
+| # | Caso | Asserts |
+|---|---|---|
+| 5 | ranura con clave guardada | devuelve la credencial |
+| 6 | ranura vacía | rechaza, y `Key` vacío |
+| 7 | ranura mandada por variable de entorno | rechaza, **nombra la variable**, y no aparece ninguna de las dos claves |
+| 8 | ranura desconocida | rechaza |
+| 9 | ranura que ningún motor lee, **con clave dentro** | rechaza por DISPONIBILIDAD |
+
+El caso 9 lleva clave sembrada a propósito: sin ella lo rechazaba "no hay nada guardado", así que
+borrar la puerta de disponibilidad dejaba el test en verde. Lo destapó la mutación, que es la única
+razón de que esté escrito así.
+
+Verificados por mutación, los nueve.
 
 **En la página**, que no tiene runner: se verifica por E2E con el afordance, y para eso el reporte de
 tarjeta (`reportCard`, `settings.ts:1217`) gana tres campos observables — `keyField` (vacío /
@@ -232,9 +299,10 @@ enmascarado / escrito), `formOpen`, y el valor que el probe realmente usó.
 1. **El retardo de 1.2 s es un temporizador en una página que ya arbitra por épocas.** Mitigado
    reusando la misma guarda; el riesgo residual es plegar una tarjeta que el usuario acaba de
    reabrir, y por eso la época se re-comprueba al disparar y no sólo al programar.
-2. **`dataset.masked` es estado en el DOM**, que es justo lo que este código evita en todas partes
-   (una sola ruta de estado a píxeles). Aceptado: es estado sobre el WIDGET, no sobre el dominio, y
-   no hay dónde más ponerlo — el valor de un input no puede distinguir origen por sí solo.
+2. **La procedencia del campo es estado fuera del payload**, que es justo lo que este código evita
+   en todas partes (una sola ruta de estado a píxeles). Aceptado: es estado sobre el WIDGET, no sobre
+   el dominio, y no hay dónde más ponerlo — el valor de un input no puede distinguir origen por sí
+   solo. Vive en `WeakSet`s y no en `dataset` para que no sea legible ni falsificable desde el DOM.
 3. **Regenerar los bindings** tras añadir el campo (`./scripts/task.sh common:generate:bindings`), o
    la página no lo verá.
 
