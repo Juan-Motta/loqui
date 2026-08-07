@@ -1,254 +1,146 @@
 # Continuity — session handoff
 
-> The first thing to read on a new session (auto-loaded via `CLAUDE.md` / `AGENTS.md`).
-> Keep it current and SMALL; refresh it with the `checkpoint` skill before closing a session.
+> First thing to read on a new session (auto-loaded via `CLAUDE.md` / `AGENTS.md`).
+> Keep it SMALL. Refresh with the `checkpoint` skill before closing a session.
 
 - **Focus:** port of **Loqui** (Electron/TS, in `../loqui`) to **Go + Wails v3**, macOS arm64 only.
-  **The app dictates for real through Azure** as of 2026-08-06 — the thing phase 1 had carried as
-  outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
-  (the UI) nearly closed: the app is navigated, configured and used.
+  **The port is finished.** Every engine is ported, the app is navigated/configured/used, it dictates,
+  it translates itself, and it downloads its own whisper model. `main` is `4f8cbb5`, pushed;
+  `./scripts/task.sh check` green (15 test packages, `vet`, frontend types).
 
-- **El i18n está terminado y sin puntos abiertos (2026-08-07).** Traduce en cinco superficies: markup
-  estático, el payload y los avisos que emite Go, la prosa que arma la página, el overlay, y el menú
-  nativo de la bandeja. Cambio en caliente verificado en las dos direcciones y con "seguir el
-  sistema". Evidencia: `docs/e2e/reports/2026-08-07-interface-language.md`.
+- **NEXT STEP — one action, and it is a real bug that costs money.**
+  **`internal/session/controller.go:278` sets `c.reconnectAttempt = 0` on `stt.Started`**, so
+  `maxReconnects` (`:26`) bounds nothing whenever the connection OPENS before failing: a provider that
+  connects and immediately drops reconnects for ever, against services billed by the hour.
 
-  **Lo que hay que entender antes de tocarlo:** las claves del catálogo SON las cadenas en español, así
-  que editar una frase rompe su clave — y lo que sostiene todo esto son los **ocho barridos de
-  cobertura** de `internal/i18n`. Seis comprueban que lo enrutado tenga traducción; **los dos últimos
-  van al revés y buscan prosa española que nadie enrutó**, que es el fallo real de una migración a
-  medias. Sin ellos, i18n se pudre en silencio y el fallback a español hace que cada omisión parezca
-  intencionada. Si añades copia, corre `./scripts/go.sh test ./internal/i18n/` y te dirá qué falta.
+  Start red, in `internal/session`: a provider that emits `Started` then a retryable `Canceled`,
+  `maxReconnects`+1 times, must stop reconnecting — today it never does.
+  `internal/stt/grok/errors.go:29-35` documents this from the other side and says its
+  `serverErrorCode` should become `ServiceError` once the budget is fixed; do both in one change.
 
-  Dos cosas quedan dichas y no son deudas: sólo hay `es` e `in`glés (el original declara pt/fr/it/de y
-  deliberadamente no los ofrece sin revisar), y **nadie ha revisado la calidad del inglés** — está
-  verificado que el mecanismo traduce, no que un nativo elegiría esas palabras.
+- **After that:** the other known bug — **reconnection leaks the previous capture** (declared
+  out-of-scope twice by the owner; see the review log of `docs/plans/grok-stt-provider.md`). Then the
+  refactor nobody has done: **extract the WebSocket lifecycle out of `internal/stt/grok`** into a
+  shared package. Three real implementations now exist, which was the stated condition.
 
-- **Older next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
-  starts on a **fresh branch off `main`**: (1) the accordion **folds itself** after a successful save
-  — show `✓ Clave guardada` for ~1.2 s, then collapse, so the fold is confirmation and not a
-  disappearance; (2) reopening a card whose key is stored shows a **fixed asterisk mask** in the
-  field, so "there is something here" is visible. Groundwork already measured: the secret never
-  leaves Go (`internal/app/bootstrap.go:29`) so the mask must **never** be the real key; the backend
-  already treats an empty secret as "leave the stored key alone" (`settings_write.go:466`) and an
-  empty typed key as "probe the stored one" (`settings_probe.go:242`), so the mask only has to be
-  guarded against ever being sent. The hazard to design around: `paint()` runs after every write, so
-  the mask must only ever land on an **empty** field or it will clobber what the user is typing. Do
-  not mask an env-supplied key (`fromEnv`) — the app never stored it.
+- **Blockers — all owner decisions, none is code:**
+  1. **Ad-hoc signing.** The root cause of credentials living in cleartext
+     (`~/Library/Application Support/LoquiGo/secrets.json`, mode 0600, FileVault off — a trade the
+     owner accepted, and the About view tells the user). It also revokes permissions on every rebuild.
+     Pending: a fixed self-signed identity vs a Developer ID.
+  2. **Apple's engine awaits a voice.** It reaches the same live state as whisper, but nobody has seen
+     it produce text — and **an agent cannot check this**: the debug affordance starts and stops a
+     dictation, it cannot speak. To make it machine-checkable, feed audio from a FILE through
+     `cmd/stt-probe`.
+  3. **An orphan Keychain item** nothing reads: `security find-generic-password -s
+     com.jualopezmo.loquigo -a azure-speech`. Delete it so there is one copy of the key, not two.
 
-- **Done 2026-08-07:** `feat/probe-remaining-providers` closed out. E2E rerun whole against the real
-  services on a freshly packaged build, nine cases PASS, and **the three green paths ran for the
-  first time**.
+- **Active workflow: NO.** Nothing is half-done. `.workflow/state.md` describes the last shipped
+  change and is gitignored; start the next one from `shared/state.template.md`.
+- **Updated:** 2026-08-07
 
-- **DONE 2026-08-07: the whisper model row is ported**, which closes the fidelity assignment. Status,
-  resumable download with progress, cancel and delete. Report:
-  `docs/e2e/reports/2026-08-07-whisper-model-row.md`.
+## Providers
 
-  **And the review of it found the thing that made the whole feature decorative:** packaging copied the
-  model into the bundle, so the `.app` was 497 MB and `WhisperModelPath` always found a bundled copy —
-  the downloader was never exercised, by anyone. Excluded → **32 MB**, with `LOQUI_BUNDLE_MODEL=1` as
-  an escape hatch for a personal build with no network.
+| Engine | Ported | Transcribes |
+| --- | --- | --- |
+| **whisper** | ✅ | ✅ 2026-07-28 · model row ported, a real 465 MB download ran |
+| **azure** | ✅ | ✅ 2026-08-06 · E2E report |
+| **grok** (xAI) | ✅ | ✅ **owner**, 2026-08-07 |
+| **openai realtime** | ✅ | ✅ **owner**, 2026-08-07 |
+| **elevenlabs** | ✅ | ✅ **owner**, 2026-08-07 |
+| **macos** (SpeechAnalyzer) | ✅ | ⬜ reaches the live state 2026-08-07 · text unconfirmed |
 
-  **The design point to keep:** bytes land in `<path>.part` and the rename happens only after the
-  digest matches, so the canonical path never holds unverified bytes. That is what makes it safe for
-  `dictation.go` to judge the model by existence and for `status()` to skip hashing on every repaint —
-  both of which were unsound before.
-
-- **The port has no assignment left.** Every engine that was going to be ported is ported and every
-  one of them transcribes except Apple's. What remains is under Blockers, and none of it is porting
-  work: a signing decision, one engine that fails inside Apple's framework, and a refactor.
-
-- **Blockers:**
-  0. ~~**The Apple engine is blocked before `started`.**~~ **THE BLOCKER WAS FALSE — 2026-08-07.** It was
-     never blocked: it reaches the same live state as whisper (`OVERLAY listening`, driven only by
-     `stt.Started`). Two instrumentation gaps made a working engine indistinguishable from a dead one,
-     and the blocker was built on that ambiguity: `stt.Started` was logged nowhere, and the Apple
-     helper reported no microphone levels so its `MIC peak 0.00` read as silence. **Whisper, which
-     works, also logged zero mentions of "started"** — that is what exposed it. Both gaps are closed;
-     see `docs/e2e/reports/2026-08-07-speechanalyzer.md`.
-
-     **The lesson worth keeping:** a log that cannot tell "it did not happen" from "nobody wrote it
-     down" will eventually be read as the first, and the wrong conclusion outlives the session that
-     drew it. Before believing a blocker of this shape, compare against a component that WORKS.
-  1. ~~**No remote.**~~ **Closed 2026-08-06:** `origin` is
-     `git@github-jualopezmo:Juan-Motta/loqui.git` and `main` is pushed. Two loose ends: the repo is
-     called `loqui` while the module path says `github.com/Juan-Motta/loqui-go` (harmless for a desktop
-     app, but inconsistent), and `../loqui` — the Electron project — still has that same remote in its
-     local config, so pushing from there would collide with 46 unrelated commits.
-  2. **Ad-hoc signing.** Down from three symptoms to two: permissions are revoked on every rebuild,
-     and probably Apple's engine. The third — the Keychain not answering — was routed around rather
-     than fixed: the credentials now live in a cleartext file (`store/secrets.go`), a trade the owner
-     accepted for a personal build. Signing is still the only thing that fixes the rest, and the only
-     thing that would let the keys go back to being encrypted at rest. Pending decision: a fixed
-     self-signed identity vs a Developer ID.
-  3. ~~**Cloud keys.**~~ **Fully closed 2026-08-07.** All four slots hold a real credential, all four
-     were accepted by their real service (report:
-     `docs/e2e/reports/2026-08-07-probe-remaining-providers.md`), and all four have transcribed —
-     Azure with an E2E report behind it, the other three **attested by the owner**, which is the most
-     that is obtainable without a voice. See the provider table.
-
-- **Credentials now live in a cleartext file**, `~/Library/Application Support/LoquiGo/secrets.json`,
-  mode 0600 — not the Keychain, which hangs under ad-hoc signing. A deliberate trade the owner accepted
-  with FileVault off; see `store/secrets.go` and the About view, which says so to the user. The Azure
-  key was pasted through the app on 2026-08-06 and works. **An orphan remains**: the older item is
-  still in the login Keychain (`security find-generic-password -s com.jualopezmo.loquigo -a
-  azure-speech`) and nothing reads it — worth deleting so there is one copy, not two.
-
-- ~~**Debt, unowned: the frontend does not type-check.**~~ **FIXED AT THE ROOT 2026-08-07.**
-  `typescript` is now `^5.7.2` and `tsconfig.json` has the `"target": "ES2022"` it was missing — that
-  omission was the whole bug: tsc defaulted to ES5 and produced ~25 errors that were pure noise, so
-  nobody could tell a real error from the noise and the check was abandoned. Meanwhile vite strips
-  types without validating them, so a type error reached the packaged app in silence.
-
-  Run it with **`./scripts/task.sh typecheck`**, or `./scripts/task.sh check` for Go tests + vet +
-  types together. The old workaround —passing `--target es2022` on the command line— is obsolete and
-  should not be used: passing the target by hand is exactly what hid the fact that the config lacked
-  it. Verified by mutation: a wrong type is caught, and `for…of` over a DOM collection now compiles.
-
-- **Known debt, owned:** two pre-existing bugs in `internal/session` that affect Azure **today** —
-  the retry budget bounds nothing if the connection opens (a spend loop against a service that bills
-  by the hour) and reconnection leaks the previous capture. With `file:line` at the end of
-  `docs/plans/grok-stt-provider.md`. They go in their own change.
-
-- **Active workflow: YES** — "Probar conexión" for the three remaining providers, in
-  `.workflow/state.md` (**gitignored**, so a fresh clone does not have it). That file holds the
-  ship-gate boxes, the review log and the captured E2E evidence. Do not duplicate it here; read it.
-- **Updated:** 2026-08-06 (second checkpoint of the day)
+The column says **"owner"** rather than a date alone on purpose: there is no E2E report behind those
+three and **there cannot be** — see blocker 2. Do not upgrade them to a verified claim.
 
 ## Handoff notes
 
-0. **THE ONE THING THAT WOULD HAVE SHIPPED A LIE, and how it was caught.** The connection test was
-   designed as "open the socket, close it, report success". Measuring the three services with an
-   invalid key showed **OpenAI and ElevenLabs return HTTP 101 for a garbage key** and refuse afterwards
-   as an event — so that design would have answered `✓ Conexión correcta` to any string a user pasted.
-   The protocol is now: dial → wait for the FIRST server message → classify it → CloseNow. Success is
-   positive only, by event name; a clean close is **not** success (ElevenLabs closes with 1000 *after*
-   refusing). Full measurement: `docs/research/2026-08-06-where-realtime-stt-auth-fails.md`.
+1. **THE MOST EXPENSIVE LESSON HERE, and it cost weeks.** Apple's engine was marked ⛔ *"blocked before
+   `started`, cause unknown"*. **It was never blocked.** `stt.Started` was logged nowhere (it is
+   consumed to move the overlay pill) and the Apple helper reported no microphone levels, so its
+   `MIC peak 0.00` read as silence. A working engine and a dead one produced **the same log**. What
+   exposed it: whisper — which works — also logged zero mentions of "started".
 
-   The transferable part: **ask where auth fails before designing anything that tests a credential.**
-   One curl per service, no account needed, and it decided the whole shape of the feature.
+   **A log that cannot tell "it did not happen" from "nobody wrote it down" gets read as the first,
+   and the wrong conclusion outlives the session that drew it.** Before believing a blocker of that
+   shape, compare against a component that works. Both gaps are closed
+   (`docs/e2e/reports/2026-08-07-speechanalyzer.md`).
 
+2. **Verify by MUTATING; distrust a green test.** Repeatedly, tests that looked thorough proved
+   nothing until deliberately broken: an i18n scan whose regex had the *same blind spot* as the bug it
+   existed to catch (Go joins concatenated literals, the catalogue held fragments, so nine messages
+   reached users in Spanish while the guard reported "covered"); a redaction test asserting an 8-char
+   suffix against a fixture that preserved five; a payload test that passed only because the strings
+   were absent from the catalogue. **Break what each new test covers and watch it fail.**
 
-1. **The UI works and is ported FAITHFULLY to the original layout.** `frontend/index.html` is still
-   the Electron markup almost verbatim, and the CSS is its own — which is why **what the page emits
-   has to match the classes that CSS expects**. A first attempt invented `.hist-item`/`.hist-meta`
-   and produced unstyled rows. Now ported, with their classes: History (`.hrow`, expand, copy, empty
-   states), Connections (`.conn-state` with the state AS A CLASS, which is what colours the dot),
-   languages (chips/select depending on capability), System (shortcut, appearance, mode, device) and
-   Permissions (`.prow` with three-way state).
+3. **Cross-engine review of the DIFF is where the real defects were**, far more than in plan reviews.
+   Recent hauls: two credential leaks in provider prose; a download writing into the canonical model
+   path (whisper would have loaded a partial file); packaging that copied the 465 MB model into the
+   bundle so the downloader was **never exercised** by anyone (497 MB → 32 MB); blocking I/O on a
+   realtime audio thread. Run it on every diff that touches a boundary.
 
-   The TS modules are split per view: `settings.ts` (shell + connections), `history.ts`,
-   `language.ts`, `system.ts`, `permissions.ts`. The **rules** all live in Go
-   (`internal/store/{connection,language,language_catalog,trigger}.go`,
-   `internal/app/permission_rows.go`) with tests; the page decides nothing.
+4. **Environment traps, one lost run each.** Bare `go` does not compile (Azure SDK cgo flags →
+   `./scripts/go.sh`); `task`/`wails3` are not on PATH (→ `./scripts/task.sh`); **launch the packaged
+   app UNSANDBOXED** or it prints its platform line and goes silent, which looks exactly like a broken
+   feature; kill the previous instance first (`SingleInstance` makes the second exit 0 without a word);
+   use braces in debug steps (`"${p}:test"` — zsh eats `:t`); and **regenerate bindings** after adding
+   a service field or method (`./scripts/task.sh common:generate:bindings`).
 
-2. **Three things that "just persist it" does NOT cover, and each has already bitten once.** Any new
-   setting has to check them:
-   - **The mode** is read once when the engine is built → it has to be pushed to the live controller
-     (`LiveHooks.ModeChanged`).
-   - **The shortcut** lives in a child process launched at startup → the listener has to be
-     restarted (`LiveHooks.TriggerChanged`), or the new one is saved and the old one keeps working.
-   - **The appearance** is applied by Wails exactly once and it exposes no way to change it → cgo in
-     `internal/macos/appearance_darwin.go`.
+5. **Where the rules live — check this before adding any user-facing text.** Decisions are in Go
+   (`internal/store`, `internal/app`) with tests; the page paints what it is handed, including the
+   CSS class that colours a badge. **i18n keys ARE the Spanish source strings**, so editing copy breaks
+   its key — the eight coverage scans in `internal/i18n` are what stop that rotting silently, and two
+   of them hunt Spanish prose that was never routed at all. Run
+   `./scripts/go.sh test ./internal/i18n/` and it will name what is missing. Only `es` and `en` exist,
+   and **no native speaker has reviewed the English**.
 
-   And the hooks are passed in the **constructor**, not through methods: Wails binds every exported
-   method of a service to the webview.
+6. **Three things "just persist it" does not cover.** Any new setting must check them, and each has
+   bitten once: the **mode** is read when the engine is built (`LiveHooks.ModeChanged`); the
+   **shortcut** lives in a child process started at launch (`LiveHooks.TriggerChanged`); the
+   **appearance** is applied by Wails once and cannot be changed through it (cgo in
+   `internal/macos/appearance_darwin.go`). Hooks are passed in the **constructor** — Wails binds every
+   exported method of a service to the webview.
 
-3. **To test the UI without a mouse** — a `<select>` inside a Wails webview cannot be clicked from a
-   script, so there are environment-variable probes, all gated:
-   `LOQUI_DEBUG_NAVIGATE=<view>`, `LOQUI_DEBUG_RECORD_CLICK=1`, `LOQUI_DEBUG_SET_PROVIDER=<engine>`,
-   `LOQUI_DEBUG_APPEARANCE=<mode>`, `LOQUI_DEBUG_HISTORY_EVENT=1`, `LOQUI_DEBUG_OVERLAY=1`,
-   `LOQUI_DEBUG_DICTATE=<seconds>`. Each reports to the Go log (`UI-NAV`, `CONN`, `LANG`, `SYS`,
-   `PERMS`, `HIST-SHAPE`…), **never transcription text**. `./scripts/capture-overlay.sh` captures the
-   pill at native resolution.
-
-4. **A passing test does not prove it tests anything.** In this session **four** of my own tests did
-   not test what their names claimed, and all four were found by **mutating the production code**,
-   not by the suite: one put the secret in a seam the function never called, one checked only "not
-   empty" and blessed an incorrect default, one accepted any error where two checks overlapped, and
-   one asserted on a code present in both of the lists it was supposed to distinguish. **Verify every
-   new test by deliberately breaking what it says it covers.**
-
-5. **What is still inert** (measured, not from memory): System's `#save` — which may be redundant by
-   design, because here every control already persists on change —, `#engineHint`, the fields for
-   unported subservices (`azureOpenAiResource`, `azureOpenAiDeployment`, `openaiModel`), the footer
-   links (`#openDonate`, `#openTutorial`), the **report** view, and the 17 `wiz*` elements of the
-   **onboarding**.
-
-   **Two entries left this list on 2026-08-07, and one of them was wrong in a way worth remembering.**
-   The model row is live now. But it was listed as `#modelRow`, **an id that never existed in this
-   port** — the container is `#modelBox` / `.model-box`. Grepping for the name in the list found
-   nothing, which sends you looking for a missing element instead of for missing code. And it was in
-   the wrong category: the other entries are controls that EXIST and do nothing, while that one was a
-   container whose code had never been written. **About** also left the list: it renders, and since
-   the i18n work it renders translated.
-
-6. **Read the README before running anything.** Two environment traps: bare `go` does not compile
-   (the Speech SDK's cgo flags come from the environment → `./scripts/go.sh`) and `wails3` is not on
-   the PATH (→ `./scripts/task.sh`). When adding fields or methods to a service, **regenerate the
-   bindings**: `./scripts/task.sh common:generate:bindings` (a bare `generate:bindings` task does not
-   exist; `package` already runs it).
+7. **Still inert** (measured): System's `#save` (possibly redundant — every control persists on
+   change), `#engineHint`, the unported-subservice fields (`azureOpenAiResource`,
+   `azureOpenAiDeployment`, `openaiModel`), the footer links (`#openDonate`, `#openTutorial`), the
+   **report** view, and the 17 `wiz*` elements of the **onboarding**.
 
 ## State of the code
 
-Thirteen test packages green with `-race -count=1` (`./scripts/task.sh test`), `vet` and `gofmt`
-clean. Five Wails services: `Settings`, `History`, `Clipboard`, `Dictation`, `Permissions`.
+**8 Wails services:** `Settings`, `History`, `Clipboard`, `Dictation`, `Permissions`, `About`,
+`Links`, `Model`.
 
 - `main.go`, `wiring.go` — the Wails app: 2 windows, tray, `fn` hotkey, permissions, and the
-  `LiveHooks` that connect settings to the running engine and listener. The **store is opened in
-  `main`** and shared with the engine.
-- `internal/app` — the Settings payload (`bootstrap.go`), the setters (`settings_write.go`), and the
-  history, clipboard, dictation and permissions services. Every setter returns
-  `WriteResult{payload, error}` and **not** a Go error: Wails discards the result of a method that
-  also returns an error, and the page needs the payload precisely when it fails.
+  `LiveHooks` connecting settings to the running engine and listener. The **store is opened in `main`**
+  and shared, because two Stores over one directory each hold their own lock.
+- `internal/app` — the Settings payload (`bootstrap.go`), the setters (`settings_write.go`), the probe
+  (`settings_probe.go`), reveal, the model downloader, and the history/clipboard/dictation/permissions
+  services. Every setter returns `WriteResult{payload, error}` and **not** a Go error: Wails discards
+  the result of a method that also returns an error, and the page needs the payload precisely when it
+  fails. User-facing text is translated at the **boundary** (`i18n_payload.go`) — the pure rules keep
+  emitting Spanish, which is the catalogue's key format.
 - `internal/store` — persistence **and** the rules ported from Electron's pure modules: connections,
-  language capability, catalogue, shortcut. `UpdateSettings` is transactional; never
-  Load-then-Save.
-- `internal/session` — the dictation controller (pure decisions, suite ported from Electron).
-- `internal/stt` — network-free contract. `azure` (reaches a real 401), `helper` (whisper ✅ and now
-  **reports microphone levels**, and Apple does too since 2026-08-07), `grok` (✅ 71 tests).
-- `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — capture, paste,
-  history + filter, `fn` protocol, TCC, AppKit glue, region validation.
-- `frontend/` — `index.html` is the Electron markup almost verbatim (delete-key buttons and a status
-  line were added); five TS modules, one per view; `overlay.html` is the pill.
-- `cmd/stt-probe` — dictation from the CLI, to isolate failures without the app.
+  language capability, catalogue, shortcut, and the whisper model spec (`model.go`, pinned by size AND
+  sha256). `UpdateSettings` is transactional; never Load-then-Save.
+- `internal/session` — the dictation controller (pure decisions, suite ported from Electron). **Holds
+  the two known bugs above.**
+- `internal/stt` — network-free contract. `azure`, `helper` (whisper and Apple, both reporting
+  microphone levels), `grok`, `openai`, `elevenlabs`, each with a connection probe.
+- `internal/i18n` — the catalogue and the eight coverage scans.
+- `internal/{audio,inject,history,hotkey,permissions,macos,assets,settings}` — capture, paste, history
+  + filter, `fn` protocol, TCC, AppKit glue, region validation.
+- `frontend/` — `index.html` is the Electron markup almost verbatim, so **what the page emits must
+  match the classes the CSS expects** (a first attempt invented `.hist-item` and produced unstyled
+  rows). One TS module per view, plus `i18n.ts` and `model.ts`; `overlay.html` is the pill.
+- `cmd/stt-probe` — dictation from the CLI, to isolate failures without the app. **The place to add
+  file-based audio** if anyone wants transcription machine-verifiable.
 
-## Providers: where each one stands
+## Debug affordances
 
-This section was stale for two sessions: it listed elevenlabs and openai as unported when both had
-been done on 2026-07-30. Corrected here.
-
-| Engine | Ported | Real transcription | Blocked on |
-| --- | --- | --- | --- |
-| **whisper** | ✅ | ✅ 2026-07-28 | nothing — the model row was ported 2026-08-07 and a real 465 MB download ran |
-| **azure** | ✅ | ✅ **2026-08-06** | nothing |
-| **macos** (SpeechAnalyzer) | ✅ | ⬜ reaches the live state **2026-08-07** | nothing — needs a voice to confirm text |
-| **grok** (xAI) | ✅ | ✅ **owner, 2026-08-07** | nothing |
-| **openai realtime** | ✅ | ✅ **owner, 2026-08-07** | nothing |
-| **elevenlabs** | ✅ | ✅ **owner, 2026-08-07** | nothing |
-
-All four cloud engines can now **store** a key and **test** it. Storing was fixed in `07c14a3`; testing
-is on this branch.
-
-**The credential blocker is CLOSED as of 2026-08-07** and it had gone stale in these notes: real keys
-for all three were already on disk (written 2026-08-06 17:16) while this file still said none existed.
-All three probes returned `ok=true` against the real services — see
-`docs/e2e/reports/2026-08-07-probe-remaining-providers.md`. That also settles risk 1 of the plan: the
-readiness event names had never been observed by anyone, and now all three have been.
-
-**All six ported engines now transcribe, and the last three are attested rather than machine-verified.**
-The owner reported on 2026-08-07 that the cloud providers work. That is the strongest evidence
-available for this one: **transcription cannot be verified without a human voice.** The debug
-affordance can start and stop a dictation, but it cannot speak — the whisper run done that day ended
-with a microphone peak of 0.10, which is silence. So there is no E2E report behind these three ticks
-and there cannot be one; the column says "owner" for exactly that reason.
-
-What that leaves worth doing, if anyone wants it stronger: a dictation whose audio comes from a FILE
-rather than the microphone would make this checkable by a machine. `cmd/stt-probe` already exists to
-run a dictation without the app and would be the place.
-
-**Still not done, and worth keeping visible:** the WebSocket lifecycle was never extracted out of
-`internal/stt/grok` into a shared package. Two real implementations now exist (grok and elevenlabs),
-which was the condition set for doing it — see the approach section of
-`docs/plans/grok-stt-provider.md`. It is refactoring, not a feature, so it goes behind the items
-above.
+All gated by environment variable, all reporting to the Go log and **never transcript text**:
+`LOQUI_DEBUG_NAVIGATE`, `RECORD_CLICK`, `SET_PROVIDER`, `SET_LANGUAGE`, `APPEARANCE`,
+`HISTORY_EVENT`, `OVERLAY`, `DICTATE=<s>`, `CONN_CLICK`/`CONN_REPORT`, `MODEL_CLICK`, `TIME_TEXT`.
+A `<select>` inside a Wails webview cannot be clicked from a script, which is why these exist — and
+they dispatch **real** events on the real controls, so what runs is the handler a mouse reaches.
+`CONN_CLICK` supports `+` to chain steps and `wait:<ms>` to sequence them.
