@@ -24,6 +24,7 @@
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
 import { applyTranslations, currentLocale, loadTranslations, setText, t } from "./i18n.js";
+import { refreshModelRow } from "./model.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
@@ -795,6 +796,9 @@ function paint(p: SettingsPayload): boolean {
   // options, the connection rows, the language chips. Translating before they run would leave the
   // newest text on the page as the only Spanish left.
   applyTranslations();
+  // The model row is fetched rather than painted from this payload: it reads the disk, and the
+  // settings payload deliberately does not — a stat per repaint is cheap, hashing 465 MB is not.
+  void refreshModelRow();
   return true;
 }
 

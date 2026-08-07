@@ -3,6 +3,8 @@ package app
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/Juan-Motta/loqui-go/internal/store"
 )
 
 // HelperPath locates a compiled native helper.
@@ -30,14 +32,13 @@ func HelperPath(name string) string {
 	return ""
 }
 
-// WhisperModelBytes is the exact size of ggml-small.bin, ported from the Electron build's
-// shared/modelSpec.ts (which pins it alongside a sha256).
+// WhisperModelBytes is the exact size of ggml-small.bin.
 //
-// The size alone is not proof — the original says so, and it is right: a truncated-then-padded file
-// or a mirror serving something else would pass. It is enough for the question asked HERE, which is
-// "would Whisper start", and the digest costs seconds to compute. Hashing belongs with the model row
-// still to be ported, where there is a progress line to put it behind.
-const WhisperModelBytes = 487601967
+// NOW A REFERENCE, not a second copy: the spec — size AND digest — lives in store.WhisperModel, put
+// there when the model row was ported. Two copies of a pinned byte count is exactly the kind of
+// duplication that drifts silently, and the comment that used to live here promised the digest would
+// arrive with that row. It has.
+var WhisperModelBytes = store.WhisperModel.Bytes
 
 // WhisperModelPath is where the whisper model lives.
 //

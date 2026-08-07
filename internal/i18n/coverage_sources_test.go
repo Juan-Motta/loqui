@@ -156,9 +156,20 @@ var exemptTSPrefix = []string{
 	"meter:", "engine:", "http", "/", "--", "%", "&", "id=", "class=",
 }
 
+// classList is the shape of a CSS class or a list of them: all-lowercase ASCII with a hyphen, and no
+// punctuation beyond hyphens and spaces.
+//
+// It exists because "model-del" and "btn small model-del" match the Spanish word "del". Exempting by
+// SHAPE rather than dropping "del" from the word list keeps the scan able to see real copy — "del
+// sistema", "del día" — which is the opposite trade from "no", where the word itself was the problem.
+var classList = regexp.MustCompile(`^[a-z0-9]+(?:[- ][a-z0-9]+)*$`)
+
 func exemptLiteral(s string) bool {
 	if !spanishProse.MatchString(s) {
 		return false // no Spanish shape at all: nothing to translate
+	}
+	if strings.Contains(s, "-") && classList.MatchString(s) {
+		return true
 	}
 	for _, p := range exemptTSPrefix {
 		if strings.HasPrefix(s, p) {

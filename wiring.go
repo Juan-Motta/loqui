@@ -152,6 +152,13 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	wailsApp.Event.On("ui:lang-switch", func(e *application.CustomEvent) {
 		u.Log("LANG-SWITCH", fmt.Sprintf("%v", e.Data))
 	})
+	// The model row's shape and verdict. No user data: a verdict, a class, and which buttons are up.
+	wailsApp.Event.On("ui:model-row", func(e *application.CustomEvent) {
+		u.Log("MODEL-ROW", fmt.Sprintf("%v", e.Data))
+	})
+	wailsApp.Event.On("ui:model-error", func(e *application.CustomEvent) {
+		u.Log("MODEL-ERR", fmt.Sprintf("%v", e.Data))
+	})
 	wailsApp.Event.On("ui:i18n", func(e *application.CustomEvent) {
 		u.Log("I18N", fmt.Sprintf("%v", e.Data))
 	})
