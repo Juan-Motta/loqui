@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Juan-Motta/loqui-go/internal/audio"
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
@@ -89,16 +90,21 @@ type SettingsPayload struct {
 	// AzureService, AzureOpenAiResource and AzureOpenAiDeployment are the second Azure product's
 	// configuration. Carried because the connection state depends on which sub-service is selected:
 	// the realtime endpoint is addressed by resource name, the speech one by region.
-	AzureService          string              `json:"azureService"`
-	AzureOpenAiResource   string              `json:"azureOpenAiResource"`
-	AzureOpenAiDeployment string              `json:"azureOpenAiDeployment"`
-	Mode                  string              `json:"mode"`
-	TriggerKey            string              `json:"triggerKey"`
-	Appearance            string              `json:"appearance"`
-	AppLanguage           string              `json:"appLanguage"`
-	Onboarded             bool                `json:"onboarded"`
-	LanguageBySlot        map[string][]string `json:"languageBySlot"`
-	InputDeviceID         string              `json:"inputDeviceId"`
+	AzureService          string `json:"azureService"`
+	AzureOpenAiResource   string `json:"azureOpenAiResource"`
+	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
+	Mode                  string `json:"mode"`
+	TriggerKey            string `json:"triggerKey"`
+	Appearance            string `json:"appearance"`
+	AppLanguage           string `json:"appLanguage"`
+	// Locale is the language actually IN EFFECT, which is not the same as AppLanguage: the default
+	// is empty, meaning "follow the system", and only Go can read the system's answer (NSLocale
+	// through cgo — an app launched from Finder inherits no LANG). The page needs the resolved value
+	// to translate itself, and it cannot work it out.
+	Locale         string              `json:"locale"`
+	Onboarded      bool                `json:"onboarded"`
+	LanguageBySlot map[string][]string `json:"languageBySlot"`
+	InputDeviceID  string              `json:"inputDeviceId"`
 
 	// ---- computed state ----
 	Keys        []KeyState       `json:"keys"`
@@ -243,6 +249,9 @@ type Bootstrap struct {
 	// caps reports what this machine can run. Nil means ask the machine — see hostCaps, which
 	// exists because Bootstrap is also built as a literal, and a nil call there would panic.
 	caps func() store.HostCapabilities
+	// systemLocale is the OS language, for the "follow the system" default. A field for the same
+	// reason as the rest: it reads NSLocale through cgo, so a test cannot arrange an answer.
+	systemLocale func() string
 
 	// revision stamps every snapshot. Atomic because Wails dispatches each bound call on its own
 	// goroutine, so two payloads can be under construction at once — which is the situation the
@@ -253,10 +262,11 @@ type Bootstrap struct {
 // NewBootstrap wires the real machine.
 func NewBootstrap(st *store.Store) *Bootstrap {
 	return &Bootstrap{
-		store:     st,
-		keyStatus: st.KeyStatusFor,
-		perms:     livePermissions,
-		devices:   audio.ListInputDevices,
+		store:        st,
+		keyStatus:    st.KeyStatusFor,
+		perms:        livePermissions,
+		systemLocale: macos.SystemLocale,
+		devices:      audio.ListInputDevices,
 	}
 }
 
@@ -323,6 +333,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		TriggerKey:            cfg.TriggerKey,
 		Appearance:            cfg.Appearance,
 		AppLanguage:           cfg.AppLanguage,
+		Locale:                string(b.locale(cfg)),
 		Onboarded:             cfg.Onboarded,
 		LanguageBySlot:        languages(cfg),
 		InputDeviceID:         cfg.InputDeviceID,
@@ -553,4 +564,17 @@ func languages(settings store.Settings) map[string][]string {
 		out[slot] = store.LanguagesIn(settings, slot)
 	}
 	return out
+}
+
+// locale is the interface language in effect for this snapshot.
+//
+// Resolved ONCE per payload rather than per string: every piece of wording in one snapshot has to
+// describe the same world, and a language change landing halfway through would produce a payload
+// that is half translated.
+func (b *Bootstrap) locale(cfg store.Settings) i18n.Locale {
+	system := ""
+	if b.systemLocale != nil {
+		system = b.systemLocale()
+	}
+	return i18n.ResolveLocale(cfg.AppLanguage, system)
 }

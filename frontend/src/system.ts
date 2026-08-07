@@ -9,6 +9,7 @@
 // The only DOM-specific piece is turning a keydown into an accelerator string, which is inherently a
 // browser concern. Even then the string is sent to Go to be validated and canonicalised.
 import { Events } from "@wailsio/runtime";
+import { loadTranslations } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   SettingsPayload,
@@ -355,6 +356,14 @@ export function wireSystem(): void {
     const value = (e.target as HTMLSelectElement).value;
     void run(status, "✓ idioma de la interfaz guardado", () =>
       Settings.SetAppLanguage(value),
+    ).then(() =>
+      // THE CATALOGUE HAS TO BE RE-FETCHED, not just repainted. Every other setting only changes
+      // what the payload says; this one changes the TABLE the whole page is drawn through, and a
+      // repaint alone would rewrite the same Spanish. It also covers "Seguir el sistema", where the
+      // new language is one only Go can resolve.
+      loadTranslations().catch(() => {
+        /* stays in the previous language, which is still readable */
+      }),
     );
   });
 

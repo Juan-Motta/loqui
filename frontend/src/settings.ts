@@ -23,6 +23,7 @@
 // key, appearance, the input device, the permission rows, About and the onboarding wizard. See
 // docs/plans/loqui-go-port.md, phase 4.
 import { Events } from "@wailsio/runtime";
+import { applyTranslations, loadTranslations, setText } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
@@ -183,7 +184,7 @@ function setDictating(active: boolean): void {
   document.documentElement.dataset.dictating = String(active);
   const label =
     $<HTMLElement>("testDictate")?.querySelector<HTMLElement>(".btn-label");
-  if (label) label.textContent = active ? "Detener" : "Probar dictado";
+  setText(label, active ? "Detener" : "Probar dictado");
 
   const wave = $<HTMLElement>("heroWave");
   if (wave) {
@@ -778,6 +779,10 @@ function paint(p: SettingsPayload): boolean {
   renderAllLanguages(p);
   paintSystem(p);
   paintOnboarding(p);
+  // AFTER the sub-renders, because several of them write fresh markup — the engine picker's
+  // options, the connection rows, the language chips. Translating before they run would leave the
+  // newest text on the page as the only Spanish left.
+  applyTranslations();
   return true;
 }
 
@@ -1357,7 +1362,16 @@ Dictation.Active().then(
   },
 );
 
-Settings.Load().then(
+// The catalogue is fetched BEFORE the first payload is painted, so the page does not appear in
+// Spanish for a frame and then rewrite itself under the user. It is chained rather than raced: a
+// paint that lands first would be Spanish, and applyTranslations() would then have to redo it.
+//
+// A FAILURE HERE IS NOT FATAL. If the catalogue cannot be read the app stays in Spanish, which is
+// the authored language and perfectly usable — far better than blocking the whole window on it.
+loadTranslations()
+  .catch((err) => Events.Emit("ui:i18n-failed", { error: String(err) }))
+  .then(() => Settings.Load())
+  .then(
   (payload) => {
     Events.Emit("ui:bootstrap", {
       provider: payload.provider,
@@ -1386,7 +1400,9 @@ Settings.Load().then(
       // The empty state's instruction has to name the trigger the user actually has configured, so
       // the history module is told before anything paints.
       setHistoryTriggerContext(payload.triggerKey, payload.mode);
-      setHistoryLocale(payload.appLanguage);
+      // The RESOLVED locale, not the stored one: "" means follow the system, and only Go knows what
+      // the system said.
+      setHistoryLocale(payload.locale || payload.appLanguage);
       // A language save repaints the WHOLE page from the payload it returned, not just its own
       // control: changing Azure's sub-service moves which slot the row edits, so a control patching
       // itself in isolation would leave the rest of the row describing the other service.
