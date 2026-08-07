@@ -525,3 +525,32 @@ func TestStoredIsTrueOnlyForACredentialThisAppHolds(t *testing.T) {
 		}
 	})
 }
+
+// The payload carries the RESOLVED locale, not the stored one, and the difference is the whole
+// point of "Seguir el sistema": stored is empty by default, and the page cannot resolve it because
+// only Go can read NSLocale.
+func TestThePayloadCarriesTheResolvedLocale(t *testing.T) {
+	for _, c := range []struct {
+		name, stored, system, want string
+	}{
+		{"empty follows the system", "", "en-GB", "en"},
+		{"an explicit choice wins", "es", "en-GB", "es"},
+		{"a system language we do not speak falls back", "", "ja-JP", "es"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			st := store.NewAt(t.TempDir())
+			if err := st.UpdateSettings(func(cfg *store.Settings) error {
+				cfg.AppLanguage = c.stored
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			b := testBootstrap(t, st)
+			b.systemLocale = func() string { return c.system }
+
+			if got := b.Payload().Locale; got != c.want {
+				t.Errorf("locale = %q, want %q (stored %q, system %q)", got, c.want, c.stored, c.system)
+			}
+		})
+	}
+}

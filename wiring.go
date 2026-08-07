@@ -146,6 +146,12 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	wailsApp.Event.On("ui:conn-probe", func(e *application.CustomEvent) {
 		u.Log("CONN-CLICK", fmt.Sprintf("%v", e.Data))
 	})
+	// What the page did with the catalogue: locale, how many strings it rewrote, and one sample.
+	// Without it, "is the UI translated" is unanswerable from outside — every other report echoes
+	// strings that come from Go rather than from the markup.
+	wailsApp.Event.On("ui:i18n", func(e *application.CustomEvent) {
+		u.Log("I18N", fmt.Sprintf("%v", e.Data))
+	})
 	wailsApp.Event.On("ui:conn-report", func(e *application.CustomEvent) {
 		u.Log("CONN-CARD", fmt.Sprintf("%v", e.Data))
 	})

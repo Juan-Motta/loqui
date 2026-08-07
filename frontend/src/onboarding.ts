@@ -9,6 +9,7 @@
 // mount the SAME components the Ajustes tabs use. That is deliberate: the wizard showing different
 // engine states from the Conexiones tab would be worse than no wizard.
 import { Events } from "@wailsio/runtime";
+import { setText } from "./i18n.js";
 import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/settingsservice.js";
 import type {
   SettingsPayload,
@@ -73,7 +74,7 @@ function showStep(next: number): void {
   const back = $<HTMLElement>("wizBack");
   if (back) back.style.visibility = step === 0 ? "hidden" : "";
   const next_ = $<HTMLElement>("wizNext");
-  if (next_) next_.textContent = step === STEPS - 1 ? "Empezar" : "Continuar";
+  setText(next_, step === STEPS - 1 ? "Empezar" : "Continuar");
   // Nothing left to skip on the last step, where Skip and Continue would do the same thing.
   const skip = $<HTMLElement>("wizSkip");
   if (skip) skip.style.visibility = step === STEPS - 1 ? "hidden" : "";
