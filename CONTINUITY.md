@@ -8,7 +8,18 @@
   outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
   (the UI) nearly closed: the app is navigated, configured and used.
 
-- **Next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
+- **FIRST, AND IT IS THE ONLY THING ON THIS LIST THAT IS A RISK:** the interface language shipped to
+  `main` on 2026-08-07 **with `check-gates` at 3/6**, by explicit decision of the owner after being
+  told. Three things rest on reading the code and have never been executed:
+  **(1)** the hot language change — the `LanguageChanged` hook is wired and the history repaints, but
+  nobody has switched language in the app and watched the UI follow; there is no debug affordance for
+  the language select, and adding one is the cheapest way to close this.
+  **(2)** `relabelTray` — only "the menu is BUILT translated" is verified; the rebuild on a language
+  change has not run once. It touches a native menu.
+  **(3)** no cross-engine review of that diff, which changed `main.go`, startup, two windows and the
+  tray. The review of the PLAN found 7 P1 in a smaller design.
+
+- **Older next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
   starts on a **fresh branch off `main`**: (1) the accordion **folds itself** after a successful save
   — show `✓ Clave guardada` for ~1.2 s, then collapse, so the fold is confirmation and not a
   disappearance; (2) reopening a card whose key is stored shows a **fixed asterisk mask** in the
