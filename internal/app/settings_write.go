@@ -130,7 +130,8 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 	// the model part of that row's state belongs with the model download, still to be ported.
 	if provider == store.DefaultProvider {
 		if problem := s.defaultEngineProblem(); problem != nil {
-			notice = fmt.Sprintf("Motor guardado, pero %s no puede dictar: %v", provider, problem)
+			notice = i18n.T(i18n.Locale(p.Locale), "Motor guardado, pero {engine} no puede dictar: {reason}",
+				map[string]string{"engine": provider, "reason": problem.Error()})
 		}
 	}
 	return WriteResult{Payload: p, Notice: notice}
@@ -142,16 +143,21 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 // is reachable from anything running script in that window, and "unsupported" additionally depends on
 // the machine rather than on what is ported. So "saved" is not the same claim as "ready", and this is
 // the sentence that keeps them apart.
+// PARAMETERISED KEYS here, not concatenation. "Motor activo: " + row.Name cannot be a catalogue key,
+// because the key would change with the engine — so these use {engine} and i18n's interpolation, and
+// the sentence stays one lookup whatever the value is.
 func providerNotice(p SettingsPayload, provider string) string {
+	locale := i18n.Locale(p.Locale)
+	t := func(key string, args map[string]string) string { return i18n.T(locale, key, args) }
 	for _, row := range p.Connections {
 		if row.ID != provider {
 			continue
 		}
 		switch row.State {
 		case store.ConnActive:
-			return "Motor activo: " + row.Name
+			return t("Motor activo: {engine}", map[string]string{"engine": row.Name})
 		case store.ConnUnsupported:
-			return "Motor guardado, pero no puede funcionar en este sistema"
+			return t("Motor guardado, pero no puede funcionar en este sistema", nil)
 		case store.ConnUnconfigured:
 			// Credentials that could not be read are NOT missing configuration: the key may be sitting
 			// right there. presenceMap collapses the two — deliberately, for the badge — so the
@@ -160,19 +166,19 @@ func providerNotice(p SettingsPayload, provider string) string {
 			key := keyStateIn(p, row.KeySlot)
 			switch {
 			case key.Status == store.KeyUnreadable:
-				return "Motor seleccionado, pero no se pudieron leer las claves guardadas — no se puede confirmar si la suya está disponible"
+				return t("Motor seleccionado, pero no se pudieron leer las claves guardadas — no se puede confirmar si la suya está disponible", nil)
 			case key.FromEnv && key.Status == store.KeyAbsent:
 				// In force and holding nothing usable — the only case where the form cannot help,
 				// because whatever is typed there stays overridden. An env variable holding a REAL
 				// key also lands here whenever some other field is missing (Azure without a region),
 				// and telling that user to delete it would break a working credential.
-				return "Motor seleccionado, pero su variable de entorno está definida y vacía — quítala del entorno para poder usar una clave guardada"
+				return t("Motor seleccionado, pero su variable de entorno está definida y vacía — quítala del entorno para poder usar una clave guardada", nil)
 			}
-			return "Motor seleccionado, pero le falta configuración — no podrá dictar hasta que la completes"
+			return t("Motor seleccionado, pero le falta configuración — no podrá dictar hasta que la completes", nil)
 		}
-		return "Motor guardado: " + row.Name
+		return t("Motor guardado: {engine}", map[string]string{"engine": row.Name})
 	}
-	return "Motor guardado"
+	return t("Motor guardado", nil)
 }
 
 // keyStateIn is what a payload knows about one slot, zero when the slot is not listed — which is the

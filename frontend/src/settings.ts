@@ -453,7 +453,10 @@ function setKeyField(input: HTMLInputElement | null, value: string): void {
 const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
 
-// The engine labels as the markup shipped them, captured ONCE at load.
+// The engine labels as the markup shipped them, captured ONCE at load — and therefore in SPANISH,
+// which is deliberate: Spanish source strings are the catalogue's keys, so these are keys. Capturing
+// them after the first translation pass would capture English and lose the ability to look anything
+// up. The rebuild below translates them on the way into the option.
 //
 // paint() rebuilds the picker's options and appends "— no disponible aún" to the unavailable ones.
 // Reading the labels back off those rebuilt options — which is what it used to do — appended the
@@ -535,7 +538,7 @@ function paint(p: SettingsPayload): boolean {
       // the rebuilt options re-appended the suffix every time.
       home.innerHTML = providers
         .map((prov) => {
-          const label = escapeHtml(ENGINE_LABELS.get(prov.id) ?? prov.id);
+          const label = escapeHtml(t(ENGINE_LABELS.get(prov.id) ?? prov.id));
           const state = stateById.get(prov.id)?.state;
           // Three different "cannot use this", kept distinct because the way out of each differs:
           // not ported YET (wait for a release), cannot run on THIS machine (nothing will fix it),
@@ -550,13 +553,13 @@ function paint(p: SettingsPayload): boolean {
           let suffix = "";
           let disabled = "";
           if (!prov.available) {
-            suffix = " — no disponible aún";
+            suffix = " " + t("— no disponible aún");
             disabled = isStored ? "" : " disabled";
           } else if (state === "unsupported") {
-            suffix = " — no disponible en este sistema";
+            suffix = " " + t("— no disponible en este sistema");
             disabled = isStored ? "" : " disabled";
           } else if (state === "unconfigured") {
-            suffix = " — sin configurar";
+            suffix = " " + t("— sin configurar");
             disabled = isStored ? "" : " disabled";
           }
           return `<option value="${prov.id}"${disabled}>${label}${suffix}</option>`;

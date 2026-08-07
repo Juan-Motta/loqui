@@ -15,6 +15,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -120,6 +121,7 @@ func main() {
 					return applyTriggerChange(settingsUI, trigger)
 				},
 				LanguageChanged: func(locale string) {
+					logLine("LANG-HOOK", "interface language now "+locale)
 					// The settings page retranslates itself; these two cannot. The overlay is a
 					// separate window created once, and the tray menu is native — neither is reached
 					// by the page's own pass.
@@ -462,7 +464,15 @@ func trayLocale() i18n.Locale {
 // none today (three stateless actions), and this comment is here for whoever adds a checkbox to it.
 func relabelTray(locale i18n.Locale) {
 	if trayRef == nil || trayApp == nil {
+		logLine("TRAY", "relabel skipped: no tray yet")
 		return
 	}
 	trayRef.SetMenu(buildTrayMenu(trayApp, locale))
+	// LOGGED because a native menu is the one surface no page report can reach: NSMenuItem titles are
+	// not in any DOM, so without this line "the tray followed the language" is unverifiable from
+	// outside. The labels are UI copy, never user data.
+	logLine("TRAY", fmt.Sprintf("relabelled locale=%s items=%s|%s|%s", locale,
+		i18n.T(locale, "Dictar (prueba)", nil),
+		i18n.T(locale, "Ajustes…", nil),
+		i18n.T(locale, "Salir", nil)))
 }

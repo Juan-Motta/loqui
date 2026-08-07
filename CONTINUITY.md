@@ -8,16 +8,21 @@
   outstanding since the beginning. Phases 0-3 done except two providers' real transcription. Phase 4
   (the UI) nearly closed: the app is navigated, configured and used.
 
-- **FIRST, AND IT IS THE ONLY THING ON THIS LIST THAT IS A RISK:** the interface language shipped to
-  `main` on 2026-08-07 **with `check-gates` at 3/6**, by explicit decision of the owner after being
-  told. Three things rest on reading the code and have never been executed:
-  **(1)** the hot language change — the `LanguageChanged` hook is wired and the history repaints, but
-  nobody has switched language in the app and watched the UI follow; there is no debug affordance for
-  the language select, and adding one is the cheapest way to close this.
-  **(2)** `relabelTray` — only "the menu is BUILT translated" is verified; the rebuild on a language
-  change has not run once. It touches a native menu.
-  **(3)** no cross-engine review of that diff, which changed `main.go`, startup, two windows and the
-  tray. The review of the PLAN found 7 P1 in a smaller design.
+- **El riesgo del i18n está CERRADO (2026-08-07).** Se mergeó con `check-gates` en 3/6 y las tres
+  cosas que quedaban sin verificar ya están ejecutadas, con evidencia en
+  `docs/e2e/reports/2026-08-07-interface-language.md`: el cambio de idioma en caliente (ida y vuelta,
+  más "seguir el sistema"), el relabelado de la bandeja nativa, y la revisión cruzada del diff.
+
+  **Verificar no fue un trámite: destapó seis defectos.** El que más importa, porque el guardián y el
+  fallo compartían punto ciego: Go une literales en compilación, yo había guardado los FRAGMENTOS en
+  el catálogo, así que nueve mensajes llegaban enteros en español **mientras el test de cobertura los
+  daba por cubiertos** — su regex también leía sólo el primer literal. Se arregló el test primero y
+  fue él quien dijo la verdad.
+
+  **Quedan seis puntos declarados con file:line** al final de ese informe, ninguno una fuga:
+  `AboutService` sin idioma, la prosa que arman permisos/historial/onboarding, dos campos que
+  `translatePayload` no toca, el cambio de idioma desde el onboarding, la fuga de menús de
+  `relabelTray`, y la anchura de la cobertura — que es el que decide si el resto se termina.
 
 - **Older next step:** the owner asked on 2026-08-07 for two changes to the credential cards, and the work
   starts on a **fresh branch off `main`**: (1) the accordion **folds itself** after a successful save

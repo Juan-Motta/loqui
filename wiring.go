@@ -149,6 +149,9 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// What the page did with the catalogue: locale, how many strings it rewrote, and one sample.
 	// Without it, "is the UI translated" is unanswerable from outside — every other report echoes
 	// strings that come from Go rather than from the markup.
+	wailsApp.Event.On("ui:lang-switch", func(e *application.CustomEvent) {
+		u.Log("LANG-SWITCH", fmt.Sprintf("%v", e.Data))
+	})
 	wailsApp.Event.On("ui:i18n", func(e *application.CustomEvent) {
 		u.Log("I18N", fmt.Sprintf("%v", e.Data))
 	})
@@ -275,6 +278,36 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 			time.Sleep(6 * time.Second)
 			u.Log("DEBUG", "announcing a history change")
 			u.HistoryChanged()
+		}()
+	}
+
+	// Dev affordance: change the interface language the way the user does.
+	//
+	// It exists because THE ONE THING THIS FEATURE COULD NOT PROVE was the live switch: a <select>
+	// inside a Wails webview cannot be clicked from a script, so "the UI follows a language change"
+	// rested on reading the code. This dispatches a real `change` on the real control, so the app's
+	// own handler runs — the same rule the connection-card affordance follows.
+	//
+	// Delayed past the first paint on purpose: the point is to change the language of an interface
+	// that is ALREADY drawn, which is the case that was never exercised.
+	// Opts the history shape reports into reporting the rendered timestamp. Behind its own flag
+	// because that is activity metadata — when the user dictated — and a verification aid must not
+	// widen what an ordinary run writes to the log.
+	if os.Getenv("LOQUI_DEBUG_TIME_TEXT") == "1" {
+		wailsApp.Event.On("ui:ready", func(*application.CustomEvent) {
+			wailsApp.Event.Emit("debug:time-text", "1")
+		})
+	}
+
+	if lang := os.Getenv("LOQUI_DEBUG_SET_LANGUAGE"); lang != "" {
+		go func() {
+			time.Sleep(6 * time.Second)
+			// "system" means the empty value — "Seguir el sistema" — which cannot be passed through an
+			// environment variable as "" because that reads as unset.
+			if lang == "system" {
+				lang = ""
+			}
+			wailsApp.Event.Emit("debug:set-language", lang)
 		}()
 	}
 

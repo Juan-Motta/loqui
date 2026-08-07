@@ -291,9 +291,16 @@ function reportShape(
     // interface language is harder to grep, not friendlier.
     rowClass: row?.className ?? "(none)",
     childClasses: classes.join(" | "),
-    // The relative timestamp as rendered. A time, never transcript text — and the only way to see
-    // from outside that the language reached this formatter.
-    when: row?.querySelector(".hist-when,.hrow-when")?.textContent ?? "",
+    // The rendered timestamp, and ONLY under an explicit debug flag.
+    //
+    // It is the only way to see from outside that the language reached this formatter, but it is
+    // also user activity metadata — WHEN you dictated — that these logs did not carry before. A
+    // verification aid does not get to widen what every ordinary run writes down. Review finding,
+    // and it was mine to begin with.
+    ...(import.meta.env?.MODE === "development" ||
+    document.documentElement.dataset.debugTime === "1"
+      ? { when: row?.querySelector(".hist-when,.hrow-when")?.textContent ?? "" }
+      : {}),
   });
 }
 
@@ -373,3 +380,9 @@ export function wireHistory(): void {
   const box = $<HTMLElement>("historyBox");
   if (box) new ResizeObserver(() => markTruncatedRows(box)).observe(box);
 }
+
+// Turns on the rendered-timestamp field of the shape reports. Off by default — see reportShape.
+Events.On("debug:time-text", () => {
+  document.documentElement.dataset.debugTime = "1";
+  void refreshHistory();
+});

@@ -355,24 +355,29 @@ export function wireSystem(): void {
 
   $<HTMLSelectElement>("appLanguage")?.addEventListener("change", (e) => {
     const value = (e.target as HTMLSelectElement).value;
+    // THE ORDER IS WRITE → FETCH → REPAINT, and each step is there because the other two are not
+    // enough on their own.
+    //
+    //  · WRITE first, or the fetch asks Go for a language it has not been told about yet and comes
+    //    back with the OLD table. (Fetching first was an attempt at this that made it worse.)
+    //  · FETCH next, so the catalogue in the page is the new one.
+    //  · REPAINT last, and this is the part a plain applyTranslations() cannot cover: that only
+    //    rewrites marked static nodes, while the engine options, the key-state label and the busy
+    //    lines are BUILT through t() during a paint. Without a repaint they keep the old language on
+    //    an otherwise switched page. Review finding.
     void run(status, "✓ idioma de la interfaz guardado", () =>
       Settings.SetAppLanguage(value),
-    ).then(() =>
-      // THE CATALOGUE HAS TO BE RE-FETCHED, not just repainted. Every other setting only changes
-      // what the payload says; this one changes the TABLE the whole page is drawn through, and a
-      // repaint alone would rewrite the same Spanish. It also covers "Seguir el sistema", where the
-      // new language is one only Go can resolve.
-      loadTranslations()
-        .then(() => {
-          // The history formats its own timestamps and is not part of what paint() rebuilds, so it
-          // is told separately. Empty means "follow the system", which only Go can resolve — hence
-          // the payload's resolved locale rather than the value just saved.
-          void Settings.Load().then((p) => setHistoryLocale(p.locale || p.appLanguage));
-        })
-        .catch(() => {
-          /* stays in the previous language, which is still readable */
-        }),
-    );
+    )
+      .then(() => loadTranslations())
+      .catch(() => {
+        /* stays in the previous language, which is still readable */
+      })
+      .then(() => Settings.Load())
+      .then((p) => {
+        onSaved(p);
+        // The history formats its own timestamps and is not part of what paint() rebuilds.
+        setHistoryLocale(p.locale || p.appLanguage);
+      });
   });
 
   $<HTMLSelectElement>("device")?.addEventListener("change", (e) => {
@@ -382,3 +387,28 @@ export function wireSystem(): void {
     );
   });
 }
+
+// Drives the interface-language select from outside, for the E2E that proves a live switch reaches
+// the whole window. A real `change` event, so the page's own handler is what runs — an affordance
+// that bypassed it would verify itself instead of the app.
+Events.On("debug:set-language", (e: { data: unknown }) => {
+  const arg = Array.isArray(e.data) ? e.data[0] : e.data;
+  const value = String(arg ?? "");
+  const select = $<HTMLSelectElement>("appLanguage");
+  if (!select) {
+    Events.Emit("ui:lang-switch", { error: "no language select" });
+    return;
+  }
+  // VALIDATED against what the control actually offers, and the raw value is never echoed. An
+  // unsupported string like "en-US" would otherwise leave the select on its empty option, PERSIST
+  // "follow the system" — silently changing a real preference on a typo — and write whatever the
+  // environment held into the log. Review finding.
+  const allowed = Array.from(select.options).map((o) => o.value);
+  if (!allowed.includes(value)) {
+    Events.Emit("ui:lang-switch", { rejected: true, allowed: allowed.join("|") });
+    return;
+  }
+  select.value = value;
+  select.dispatchEvent(new Event("change"));
+  Events.Emit("ui:lang-switch", { requested: value === "" ? "system" : value });
+});

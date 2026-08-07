@@ -45,14 +45,26 @@ function tr(key: string): string {
   return key === "" ? "" : (overlayCatalog[key] ?? key);
 }
 
+// A generation counter, for the same reason the settings page has one: two language changes produce
+// two fetches, and the slower answer must not win. Review finding — the settings loader guarded this
+// and the overlay did not.
+let overlayGeneration = 0;
+
 async function loadOverlayCatalog(): Promise<void> {
+  const mine = ++overlayGeneration;
   try {
     const res = await Settings.Translations();
+    if (mine !== overlayGeneration) return;
     overlayCatalog = (res.catalog ?? {}) as Record<string, string | undefined>;
     // Repaint whatever word is on screen right now, so a language change lands immediately rather
     // than at the next state transition.
-    const shown = labelEl.dataset.key ?? "";
-    labelEl.textContent = tr(shown);
+    //
+    // ONLY WHEN THERE IS A KEY TO REPAINT. The first version wrote tr("") unconditionally, which
+    // BLANKED a visible error message: an error's text comes from Go and has no key, so its data-key
+    // is empty. Changing language while a dictation had failed erased the explanation — worse than
+    // leaving it in the previous language. Review finding.
+    const shown = labelEl.dataset.key;
+    if (shown) labelEl.textContent = tr(shown);
   } catch {
     /* stays in the authored language, which is readable */
   }
@@ -85,7 +97,12 @@ function render(): void {
   pillEl.className = state.status + (metering ? " metering" : "");
   // The KEY is remembered on the element, so a language change can retranslate whatever is showing
   // without waiting for the next state transition — this window can sit visible for a whole
-  // dictation. The error text comes from Go, already translated there.
+  // dictation.
+  //
+  // AN ERROR HAS NO KEY: its text is built by Go from whatever failed, so it is not a catalogue
+  // string and is left exactly as it arrives. Whether Go translated it is Go's business — and today
+  // the dictation errors do NOT go through phrase(), which is recorded as open rather than papered
+  // over here. An earlier version of this comment claimed they were translated; they are not.
   const key = LABELS[state.status] ?? "";
   labelEl.dataset.key = key;
   labelEl.textContent =
