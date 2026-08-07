@@ -12,7 +12,20 @@
 package i18n
 
 var englishCatalog = map[string]string{
-	"(o usa el ícono de la bandeja) y empieza a hablar. El texto aparece en el cursor.": "key (or use the tray icon) and start speaking. The text appears at your cursor.",
+	// ---- strings the Go services emit (badges, row descriptions, shortcut notes) ----
+	// These never appear in the markup, so the coverage test cannot see them; they are
+	// checked by the payload test in internal/app instead.
+	"Activo":     "Active",
+	"Conectado":  "Connected",
+	"Disponible": "Available",
+	"ElevenLabs (Scribe, nube): transcripción en streaming por WebSocket. Requiere tu API key de ElevenLabs; ":                     "ElevenLabs (Scribe, cloud): streaming transcription over WebSocket. Needs your ElevenLabs API key; ",
+	"En la nube: requiere región + clave. Detecta y alterna idiomas automáticamente (LID continuo).":                               "Cloud: needs a region and a key. Detects and switches languages automatically (continuous LID).",
+	"Este atajo solo funciona en modo Alternar: el sistema no avisa cuándo lo sueltas.":                                            "This shortcut only works in Toggle mode: the system does not report when you release it.",
+	"Grok (xAI, nube): transcripción en streaming por WebSocket. Requiere tu API key de xAI; se usa solo en el proceso principal.": "Grok (xAI, cloud): streaming transcription over WebSocket. Needs your xAI API key; used only in the main process.",
+	"Local · sin conexión ni clave": "Local · no network, no key",
+	"OpenAI (nube): transcripción realtime por WebSocket (gpt-realtime-whisper). Requiere tu API key de OpenAI.": "OpenAI (cloud): realtime transcription over WebSocket (gpt-realtime-whisper). Needs your OpenAI API key.",
+	"Sin atajo configurado: usa el ícono de la barra de menús o “Probar dictado”.":                               "No shortcut configured: use the menu-bar icon or “Test dictation”.",
+	"(o usa el ícono de la bandeja) y empieza a hablar. El texto aparece en el cursor.":                          "key (or use the tray icon) and start speaking. The text appears at your cursor.",
 	"ACTIVACIÓN Y ENTRADA":    "ACTIVATION AND INPUT",
 	"APARIENCIA":              "APPEARANCE",
 	"APOYA EL PROYECTO":       "SUPPORT THE PROJECT",

@@ -25,6 +25,7 @@ import (
 
 	"github.com/Juan-Motta/loqui-go/internal/app"
 	"github.com/Juan-Motta/loqui-go/internal/assets"
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/macos"
 	"github.com/Juan-Motta/loqui-go/internal/session"
 	"github.com/Juan-Motta/loqui-go/internal/store"
@@ -130,7 +131,11 @@ func main() {
 			})),
 			application.NewService(app.NewHistoryService(st)),
 			application.NewService(app.NewClipboardService()),
-			application.NewService(app.NewPermissionsService()),
+			application.NewService(app.NewPermissionsService(func() i18n.Locale {
+				// Read on EVERY call rather than captured: the user can change language with the
+				// Permisos tab open, and "Volver a comprobar" rebuilds these rows from Go.
+				return i18n.ResolveLocale(st.LoadSettings().AppLanguage, macos.SystemLocale())
+			})),
 			// Read-only: Acerca de reports the build and the machine, and takes the store only to
 			// name the files it writes.
 			application.NewService(app.NewAboutService(st)),
