@@ -611,5 +611,6 @@ func (f *fakeIO) Overlay(session.OverlayState) {}
 // ScheduleReconnect deliberately DROPS the retry instead of running it: these cases are about
 // whether the transcript survives the cancel, not about reconnecting.
 func (f *fakeIO) ScheduleReconnect(d time.Duration, fn func()) {}
+func (f *fakeIO) ReconnectExhausted(int)                       {}
 
 var _ session.IO = (*fakeIO)(nil)

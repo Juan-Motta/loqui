@@ -139,6 +139,16 @@ ship commit). See `shared/rules/docs-layout.md`.
 
 ## Unreleased
 
+### Reconnect retries are now a real bound
+
+- One dictation can schedule at most six reconnects even when every replacement connection opens
+  before failing; the seventh retryable failure stops, keeps the terminal error visible, and delivers
+  any transcript accumulated across generations exactly once.
+- Grok in-socket server errors now retry behind that bound instead of being mislabeled as a client
+  `BadRequest`. A permanent ambiguous error can therefore take about 61 seconds of backoff plus
+  handshake time to surface, but it cannot create an open-ended billing loop.
+- A late `Started` after terminal exhaustion no longer repaints a stopped session as listening.
+
 ### Grok (xAI) STT provider — phase 3 of the port
 
 - **`internal/stt/grok`**: streaming dictation provider against `wss://api.x.ai/v1/stt`, over the

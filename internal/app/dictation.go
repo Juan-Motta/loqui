@@ -239,6 +239,11 @@ func (d *Dictation) ScheduleReconnect(delay time.Duration, fn func()) {
 	d.mu.Unlock()
 }
 
+// ReconnectExhausted records why a retryable session stopped without scheduling again.
+func (d *Dictation) ReconnectExhausted(attempts int) {
+	d.ui.Log("RECONNECT", fmt.Sprintf("budget exhausted after %d retries; stopping", attempts))
+}
+
 // ---- providers ---------------------------------------------------------------
 
 // buildProvider resolves the configured engine.

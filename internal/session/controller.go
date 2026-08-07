@@ -46,6 +46,8 @@ type IO interface {
 
 	// ScheduleReconnect runs fn after d. Only one is ever pending.
 	ScheduleReconnect(d time.Duration, fn func())
+	// ReconnectExhausted reports that a retryable failure consumed the session's full budget.
+	ReconnectExhausted(attempts int)
 }
 
 // Controller is the dictation controller. Safe for concurrent use: provider callbacks
@@ -275,7 +277,9 @@ func (c *Controller) providerEventLocked(evt stt.Event) {
 			return // stale
 		}
 		c.applyLocked(c.machine.EngineStarted()) // honour a stop that arrived first
-		c.reconnectAttempt = 0
+		if !c.tracker.Desired() {
+			return // a pending or terminal stop must keep its final overlay state
+		}
 		c.setOverlayLocked(ReduceOverlay(c.overlay, evt))
 
 	case stt.Partial:
@@ -336,7 +340,12 @@ func (c *Controller) handleCancelLocked(evt stt.Event) {
 	}
 	class := ClassifyCancel(Cancel{ErrorCode: evt.ErrorCode, Error: evt.Error})
 
-	if !ShouldReconnect(class) || c.reconnectAttempt >= maxReconnects {
+	retryable := ShouldReconnect(class)
+	if !retryable || c.reconnectAttempt >= maxReconnects {
+		if retryable {
+			attempts := c.reconnectAttempt
+			c.queue(func() { c.io.ReconnectExhausted(attempts) })
+		}
 		c.doStopLocked()
 		c.machine.EngineStopped()
 		c.setOverlayLocked(ReduceOverlay(c.overlay, evt)) // show WHY it stopped
@@ -355,6 +364,10 @@ func (c *Controller) handleCancelLocked(evt stt.Event) {
 			c.mu.Lock()
 			desired := c.tracker.Desired()
 			c.mu.Unlock()
+			// A stop can still land between this read and StartEngine. Holding mu across IO
+			// would deadlock on a synchronous provider callback; closing this narrow TOCTOU
+			// belongs with the separate reconnect/capture lifecycle refactor. In that window
+			// a metered provider can open after the controller stopped owning the session.
 			if desired {
 				c.io.StartEngine(gen)
 			}

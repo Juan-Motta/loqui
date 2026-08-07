@@ -361,8 +361,8 @@ func TestARejectedHandshakeIsClassified(t *testing.T) {
 	}
 }
 
-// An error event ends the session with a non-retryable code: the event is prose only, so transient and
-// permanent are indistinguishable, and a retryable guess becomes an unbounded loop against a metered API.
+// An error event stays terminal until the provider maps its preserved machine-readable code into the
+// shared session vocabulary; retrying the collapsed bucket would retry known-permanent auth failures.
 func TestAServerErrorEndsTheSessionWithoutRetrying(t *testing.T) {
 	srv := newFakeOpenAI(t, func(f *fakeOpenAI, conn *websocket.Conn) {
 		f.ready(conn)

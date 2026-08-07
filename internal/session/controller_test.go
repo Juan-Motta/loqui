@@ -24,6 +24,7 @@ type fakeIO struct {
 	delivered  []delivery
 	reconnects []time.Duration
 	pending    []func()
+	exhausted  []int
 }
 
 type delivery struct {
@@ -43,6 +44,9 @@ func (f *fakeIO) DeliverFinal(text, language string, trigger Mode) {
 func (f *fakeIO) ScheduleReconnect(d time.Duration, fn func()) {
 	f.reconnects = append(f.reconnects, d)
 	f.pending = append(f.pending, fn)
+}
+func (f *fakeIO) ReconnectExhausted(attempts int) {
+	f.exhausted = append(f.exhausted, attempts)
 }
 
 func (f *fakeIO) texts() []string {
@@ -76,6 +80,9 @@ func TestHoldPressStartsAndReleaseStops(t *testing.T) {
 	}
 	if io.hides != 1 {
 		t.Errorf("hides = %d, want 1", io.hides)
+	}
+	if len(io.exhausted) != 0 {
+		t.Errorf("reconnect exhaustion signals = %v, want none for a user stop", io.exhausted)
 	}
 }
 
@@ -247,15 +254,177 @@ func TestReconnectAttemptsAreCapped(t *testing.T) {
 	c, io := newFixture(ModeToggle)
 	c.Press()
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
-	for i := 0; i < 8; i++ {
+	for i := 0; i < maxReconnects+1; i++ {
 		c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: c.Generation(), Error: "1006 network"})
 	}
-	if len(io.reconnects) > maxReconnects {
-		t.Errorf("scheduled %d reconnects, want at most %d — unbounded retry is a billing loop",
+	if len(io.reconnects) != maxReconnects {
+		t.Errorf("scheduled %d reconnects, want exactly %d — unbounded retry is a billing loop",
 			len(io.reconnects), maxReconnects)
 	}
-	if len(io.stops) < 1 {
-		t.Error("after the cap it must actually stop")
+	if len(io.stops) != 1 || c.Desired() {
+		t.Errorf("stops=%d desired=%t, want one stop and desired=false after the reconnect budget", len(io.stops), c.Desired())
+	}
+	if want := []int{maxReconnects}; !reflect.DeepEqual(io.exhausted, want) {
+		t.Errorf("reconnect exhaustion signals = %v, want %v", io.exhausted, want)
+	}
+}
+
+func TestReconnectBudgetSurvivesShortLivedSuccessfulConnections(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	c.ProviderEvent(stt.Event{Type: stt.Final, Gen: 1, Text: "antes"})
+
+	for attempt := 0; attempt < maxReconnects+1; attempt++ {
+		if attempt == maxReconnects {
+			c.ProviderEvent(stt.Event{Type: stt.Final, Gen: c.Generation(), Text: "después"})
+		}
+		c.ProviderEvent(stt.Event{
+			Type:      stt.Canceled,
+			Gen:       c.Generation(),
+			ErrorCode: "ServiceError",
+			Error:     "falló el servicio",
+		})
+		if attempt < maxReconnects {
+			if len(io.pending) != attempt+1 {
+				t.Fatalf("attempt %d left %d pending reconnects, want %d", attempt+1, len(io.pending), attempt+1)
+			}
+			io.pending[attempt]()
+			c.ProviderEvent(stt.Event{Type: stt.Started, Gen: c.Generation()})
+		}
+	}
+
+	if len(io.reconnects) != maxReconnects {
+		t.Errorf("scheduled %d reconnects, want %d", len(io.reconnects), maxReconnects)
+	}
+	if len(io.stops) != 1 || c.Desired() {
+		t.Errorf("stops=%d desired=%t, want one stop and desired=false after the reconnect budget", len(io.stops), c.Desired())
+	}
+	wantDelays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
+	if !reflect.DeepEqual(io.reconnects, wantDelays) {
+		t.Errorf("reconnect delays = %v, want %v", io.reconnects, wantDelays)
+	}
+	if want := []int{maxReconnects}; !reflect.DeepEqual(io.exhausted, want) {
+		t.Errorf("reconnect exhaustion signals = %v, want %v", io.exhausted, want)
+	}
+	if want := []string{"antes después"}; !reflect.DeepEqual(io.texts(), want) {
+		t.Errorf("delivered %v, want %v in generation order", io.texts(), want)
+	}
+	errorOverlays := 0
+	sawReconnecting := false
+	for _, state := range io.overlays {
+		if state.Status == OverlayError {
+			errorOverlays++
+		}
+		if state.Status == OverlayReconnecting {
+			sawReconnecting = true
+		}
+	}
+	if errorOverlays != 1 || len(io.overlays) == 0 || io.overlays[len(io.overlays)-1].Status != OverlayError {
+		t.Fatalf("overlay states = %+v, want exactly one error state and want it last", io.overlays)
+	}
+	if !sawReconnecting {
+		t.Errorf("overlay states = %+v, want at least one reconnecting state", io.overlays)
+	}
+
+	stops, reconnects, exhausted, deliveries, overlays := len(io.stops), len(io.reconnects), len(io.exhausted), len(io.delivered), len(io.overlays)
+	c.ProviderEvent(stt.Event{
+		Type: stt.Canceled, Gen: c.Generation(),
+		ErrorCode: "ServiceError", Error: "cancel duplicado",
+	})
+	if len(io.stops) != stops || len(io.reconnects) != reconnects || len(io.exhausted) != exhausted || len(io.delivered) != deliveries || len(io.overlays) != overlays {
+		t.Errorf("duplicate terminal cancel changed effects: stops %d→%d reconnects %d→%d exhausted %d→%d deliveries %d→%d overlays %d→%d",
+			stops, len(io.stops), reconnects, len(io.reconnects), exhausted, len(io.exhausted), deliveries, len(io.delivered), overlays, len(io.overlays))
+	}
+
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: c.Generation()})
+	if c.Desired() || len(io.stops) != stops || len(io.reconnects) != reconnects || len(io.exhausted) != exhausted || len(io.delivered) != deliveries || len(io.overlays) != overlays || io.overlays[len(io.overlays)-1].Status != OverlayError {
+		t.Errorf("late Started after exhaustion changed effects: desired=%t stops %d→%d reconnects %d→%d exhausted %d→%d deliveries %d→%d overlays %d→%d",
+			c.Desired(), stops, len(io.stops), reconnects, len(io.reconnects), exhausted, len(io.exhausted), deliveries, len(io.delivered), overlays, len(io.overlays))
+	}
+}
+
+func TestNewDictationGetsAFreshReconnectBudget(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	exhaustReconnectBudget(t, c, io)
+	if c.Desired() {
+		t.Fatal("first dictation did not exhaust its reconnect budget")
+	}
+
+	if want := []int{maxReconnects}; !reflect.DeepEqual(io.exhausted, want) {
+		t.Fatalf("first dictation exhaustion signals = %v, want %v", io.exhausted, want)
+	}
+	beforeReconnects, beforeStops, beforeExhausted := len(io.reconnects), len(io.stops), len(io.exhausted)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: c.Generation()})
+	exhaustReconnectBudget(t, c, io)
+
+	if got := len(io.reconnects) - beforeReconnects; got != maxReconnects {
+		t.Errorf("new dictation scheduled %d reconnects, want a fresh budget of %d", got, maxReconnects)
+	}
+	if got := len(io.stops) - beforeStops; got != 1 || c.Desired() {
+		t.Errorf("new dictation stops=%d desired=%t, want one stop and desired=false", got, c.Desired())
+	}
+	if got := len(io.exhausted) - beforeExhausted; got != 1 {
+		t.Errorf("new dictation exhaustion signals=%d, want 1", got)
+	}
+}
+
+func exhaustReconnectBudget(t *testing.T, c *Controller, io *fakeIO) {
+	t.Helper()
+	for attempt := 0; attempt < maxReconnects+1; attempt++ {
+		pendingBefore := len(io.pending)
+		c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: c.Generation(), ErrorCode: "ServiceError"})
+		if attempt < maxReconnects {
+			if len(io.pending) != pendingBefore+1 {
+				t.Fatalf("attempt %d scheduled %d new reconnects, want 1", attempt+1, len(io.pending)-pendingBefore)
+			}
+			io.pending[len(io.pending)-1]()
+			c.ProviderEvent(stt.Event{Type: stt.Started, Gen: c.Generation()})
+		}
+	}
+}
+
+func TestStaleCancelDoesNotConsumeReconnectBudget(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
+	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
+	if len(io.reconnects) != 1 || len(io.stops) != 0 {
+		t.Fatalf("stale cancel changed effects: reconnects=%d stops=%d, want 1 and 0", len(io.reconnects), len(io.stops))
+	}
+
+	// Six more current-generation cancels consume the five remaining schedules, then stop.
+	for i := 0; i < maxReconnects; i++ {
+		c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: c.Generation(), ErrorCode: "ConnectionFailure"})
+	}
+
+	if len(io.reconnects) != maxReconnects || len(io.stops) != 1 {
+		t.Errorf("reconnects=%d stops=%d, want %d reconnects and one stop", len(io.reconnects), len(io.stops), maxReconnects)
+	}
+}
+
+func TestPendingReconnectDoesNotStartAfterUserStop(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
+	if len(io.pending) != 1 {
+		t.Fatalf("pending reconnects = %d, want 1", len(io.pending))
+	}
+
+	c.Press()
+	starts := len(io.starts)
+	io.pending[0]()
+
+	if len(io.starts) != starts {
+		t.Errorf("starts = %v, want no new engine after the user stopped", io.starts)
+	}
+	if len(io.exhausted) != 0 {
+		t.Errorf("reconnect exhaustion signals = %v, want none for a user stop", io.exhausted)
 	}
 }
 
@@ -289,6 +458,9 @@ func TestAuthCancelStopsWithoutRetrying(t *testing.T) {
 	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, Error: "401 Unauthorized"})
 	if len(io.reconnects) != 0 || len(io.stops) != 1 {
 		t.Errorf("reconnects=%d stops=%d, want 0 and 1", len(io.reconnects), len(io.stops))
+	}
+	if len(io.exhausted) != 0 {
+		t.Errorf("reconnect exhaustion signals = %v, want none for auth", io.exhausted)
 	}
 }
 
@@ -616,6 +788,7 @@ func (r *reentrantIO) HideOverlay()                            {}
 func (r *reentrantIO) Overlay(OverlayState)                    {}
 func (r *reentrantIO) DeliverFinal(string, string, Mode)       {}
 func (r *reentrantIO) ScheduleReconnect(time.Duration, func()) {}
+func (r *reentrantIO) ReconnectExhausted(int)                  {}
 
 // A provider that delivers a whole dictation synchronously from StartEngine — the local
 // helpers can finish that fast on short audio — must not deadlock either.
@@ -658,3 +831,4 @@ func (s *syncSessionIO) DeliverFinal(text, _ string, _ Mode) {
 	s.delivered = text
 }
 func (s *syncSessionIO) ScheduleReconnect(time.Duration, func()) {}
+func (s *syncSessionIO) ReconnectExhausted(int)                  {}
