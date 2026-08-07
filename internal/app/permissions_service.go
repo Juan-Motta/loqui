@@ -7,6 +7,7 @@
 package app
 
 import (
+	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 )
 
@@ -27,14 +28,31 @@ type PermissionsService struct {
 	read    func() PermissionsState
 	request func(id string) bool
 	open    func(id string)
+	// locale answers "which language are these rows in". A FUNCTION, not a value, because this
+	// service outlives any one language: the user can switch while the Permisos tab is open, and
+	// "Volver a comprobar" rebuilds the rows from Go afterwards. A captured value would rebuild them
+	// in the language that was in force when the app started. Found in design review.
+	locale func() i18n.Locale
 }
 
-func NewPermissionsService() *PermissionsService {
+// NewPermissionsService takes the locale source rather than the store: this service is constructed
+// apart from the settings one (main.go) and has no business reading configuration for anything else.
+func NewPermissionsService(locale func() i18n.Locale) *PermissionsService {
 	return &PermissionsService{
 		read:    livePermissions,
 		request: requestPermission,
 		open:    openPermissionPane,
+		locale:  locale,
 	}
+}
+
+// rowLocale is the language for a rebuild, defaulting to the authored one when no source was wired
+// (the tests build this struct as a literal).
+func (s *PermissionsService) rowLocale() i18n.Locale {
+	if s.locale == nil {
+		return i18n.Default
+	}
+	return s.locale()
 }
 
 // ServiceName is what Wails calls this in its logs.
@@ -76,7 +94,10 @@ func (s *PermissionsService) page() PermissionsPage {
 	// whether the fn listener sees key events at all, so the only evidence would be whether that
 	// listener is producing them — and reporting "missing" on no evidence would tell the user to grant
 	// something that may already be granted.
-	rows := permissionRows(s.reader()(), PermUnknown)
+	// Translated on the way out, exactly like the settings payload: permissionRows emits Spanish,
+	// which IS the catalogue's key format. `missing` is computed BEFORE, from the untranslated rows,
+	// because it is a set of ids and a summary — not prose the user reads word for word.
+	rows := translateRows(permissionRows(s.reader()(), PermUnknown), s.rowLocale())
 	missing := requiredMissing(rows)
 	if missing == nil {
 		missing = []string{}

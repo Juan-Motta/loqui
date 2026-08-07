@@ -323,7 +323,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 
 	keys := b.keyStates()
 
-	return SettingsPayload{
+	payload := SettingsPayload{
 		Provider:              cfg.Provider,
 		Region:                cfg.Region,
 		AzureService:          cfg.AzureService,
@@ -354,6 +354,11 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		LanguageControls: languageControls(cfg),
 		Trigger:          triggerControl(cfg),
 	}
+	// LAST, so nothing downstream can put Spanish back. Every rule above emits Spanish because the
+	// catalogue's keys ARE Spanish source strings — see i18n_payload.go for why translating here
+	// beats threading a locale through all of them.
+	translatePayload(&payload)
+	return payload
 }
 
 // presenceMap reduces the key states to what the connection model needs: which slots hold a usable
