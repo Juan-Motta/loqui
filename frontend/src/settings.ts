@@ -305,6 +305,56 @@ const KEY_INPUT_BY_PROVIDER: Record<string, string> = {
   elevenlabs: "elevenApiKey",
 };
 
+// KEY_MASK is what a stored credential LOOKS like in the field. It is a constant, and every part of
+// that matters.
+//
+// It is not the key, it is not derived from the key, and its length says nothing about the real one —
+// a length is information too. The payload carries presence and never the value
+// (bootstrap.go:29), and this feature does not get to be the exception: the branch before this one
+// closed two real credential leaks, and inventing a "helpful" prefix or tail here would be the third.
+//
+// The input is type="password", so this renders as the usual dots. Twelve of them, because it has to
+// look like a credential rather than like a placeholder.
+const KEY_MASK = "************";
+
+// maskedFields marks the inputs whose CONTENT THIS PAGE PUT THERE, as opposed to content a person
+// typed. The value alone cannot tell them apart — someone may type asterisks — and getting it wrong
+// in either direction is bad: treat typed text as a mask and Guardar silently drops a real key;
+// treat a mask as typed and Guardar overwrites the stored credential with asterisks.
+//
+// A WeakSet rather than dataset, so the mark cannot be read, faked or left behind in the DOM.
+const maskedFields = new WeakSet<HTMLInputElement>();
+
+// keyFieldKind classifies a key input WITHOUT looking at what is in it. This is the only shape in
+// which the field's state is ever reported or logged: the design review's P0 was a plan to report
+// "the value the probe used", and card reports are written to the app log verbatim (wiring.go:145).
+function keyFieldKind(input: HTMLInputElement | null): "empty" | "masked" | "typed" {
+  if (!input || input.value === "") return "empty";
+  return maskedFields.has(input) ? "masked" : "typed";
+}
+
+// secretToSend is the guard, and it is the whole reason the mask is safe to show.
+//
+// An untouched mask means "I did not change the key", which both backends already understand: an
+// empty secret leaves the stored credential alone (settings_write.go:466) and makes a probe resolve
+// the stored one (settings_probe.go:242). So the mask never travels, and nothing had to be invented
+// to make that true.
+function secretToSend(input: HTMLInputElement | null): string {
+  return keyFieldKind(input) === "masked" ? "" : (input?.value ?? "");
+}
+
+// setKeyField writes a value the way a KEYSTROKE would, clearing the mask mark.
+//
+// The debug driver has to go through here too. Assigning .value directly left the mark in place, so
+// on an already-masked card the invalid-key sentinel would have been swallowed by the guard above,
+// Go would have tested the real stored key, and the negative E2E case would have reported SUCCESS —
+// a verification proving the opposite of what it claims. Found in design review.
+function setKeyField(input: HTMLInputElement | null, value: string): void {
+  if (!input) return;
+  input.value = value;
+  maskedFields.delete(input);
+}
+
 const $ = <T extends HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
 
@@ -559,9 +609,31 @@ function paint(p: SettingsPayload): boolean {
       use.title = ready ? "" : "Configura este motor antes de poder usarlo";
     }
 
-    // The key field stays EMPTY even when a key is stored: the payload carries presence, never
-    // the secret, so there is nothing to prefill. The label beside it says whether one is there.
+    // The key field shows a MASK when this app holds a credential for the slot — never the secret,
+    // which does not cross into the page at all. `stored` is decided in Go (bootstrap.go), because
+    // the case that would lie is subtle: an env-var key is PRESENT and dictation will use it, yet the
+    // app never stored it, so masking there would claim a key it cannot read or delete.
     //
+    // Both directions are handled, and the second one was missing from the first draft of the plan:
+    // after "Borrar clave" the payload says stored=false, and a field left masked would go on
+    // claiming a credential that no longer exists.
+    //
+    // WHAT IT MUST NEVER DO IS TOUCH TYPED TEXT. paint() runs after every write in the window —
+    // Sistema, idiomas, onboarding and the permissions refresh all repaint — so a rule that wrote the
+    // mask unconditionally would wipe the key the user is halfway through pasting.
+    const keyInput = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
+    if (keyInput) {
+      const kind = keyFieldKind(keyInput);
+      if (key?.stored && kind === "empty") {
+        keyInput.value = KEY_MASK;
+        maskedFields.add(keyInput);
+      } else if (!key?.stored && kind === "masked") {
+        keyInput.value = "";
+        maskedFields.delete(keyInput);
+      }
+      // kind === "typed" falls through untouched, deliberately.
+    }
+
     // Found by class, not by id: each card's span has a DIFFERENT id (keyState, openaiKeyState,
     // grokKeyState, elevenKeyState), so looking up "#keyState" repainted Azure's card and silently
     // left the other three blank.
@@ -654,8 +726,52 @@ function keyStateLabel(status?: string, fromEnv?: boolean): string {
 // state before the write that just succeeded.
 const cardEpochs = new WeakMap<HTMLElement, number>();
 
+// pendingFolds is the "close this card in a moment" timer, one per card, and it exists to be
+// CANCELLED.
+//
+// The epoch guard alone does not cover this, and assuming it did was the design review's P1. Neither
+// reopening the card (the toggle only flips `hidden`) nor typing advances the epoch — so without an
+// explicit cancel, a user who saves and immediately starts typing a replacement key has the form
+// close underneath them 1.2 seconds later.
+const pendingFolds = new Map<HTMLElement, number>();
+
+// cancelFold stops a scheduled collapse. Called from everything that means "the user is still
+// working in here": the toggle, a keystroke in the key field, a region change, and any new action.
+function cancelFold(card: HTMLElement | null): void {
+  if (!card) return;
+  const timer = pendingFolds.get(card);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    pendingFolds.delete(card);
+  }
+}
+
+// foldAfterSuccess shows the ✓ for a moment and then collapses the card.
+//
+// Not immediate, and that is the point: the status line lives INSIDE .conn-form, so folding at once
+// takes the confirmation down with it and leaves the row badge as the only signal. The delay gives
+// both — the sentence, then the folded row with its badge already green.
+const FOLD_DELAY_MS = 1200;
+
+function foldAfterSuccess(card: HTMLElement | null, epoch: number): void {
+  if (!card) return;
+  cancelFold(card);
+  const timer = window.setTimeout(() => {
+    pendingFolds.delete(card);
+    // Re-checked AT FIRING, not only when scheduled. The cancellations above cover this card's own
+    // events; the epoch still covers the case they cannot see — an action on ANOTHER card whose
+    // repaint supersedes this one.
+    if (!isCurrent(card, epoch)) return;
+    const form = card.querySelector<HTMLElement>(".conn-form");
+    if (form) form.hidden = true;
+  }, FOLD_DELAY_MS);
+  pendingFolds.set(card, timer);
+}
+
 function beginAction(card: HTMLElement | null): number {
   if (!card) return 0;
+  // A new action supersedes a collapse that was queued by the previous one.
+  cancelFold(card);
   const next = (cardEpochs.get(card) ?? 0) + 1;
   cardEpochs.set(card, next);
   // A new action supersedes whatever the last one complained about, so the red border goes with it.
@@ -732,7 +848,16 @@ async function run(
   status: HTMLElement | null,
   trigger: HTMLButtonElement | HTMLSelectElement | null,
   action: () => Promise<WriteResult>,
-  opts: { card?: HTMLElement | null; provider?: string; busy?: string } = {},
+  opts: {
+    card?: HTMLElement | null;
+    provider?: string;
+    busy?: string;
+    // onOk runs only when the write SUCCEEDED and this card's action is still the current one — the
+    // same guard that decides who gets to speak. Used by Guardar to fold the card; a failed write
+    // must leave it open, because the red border and the message it explains are both inside the
+    // form, and folding would hide the complaint along with the field to fix.
+    onOk?: (epoch: number) => void;
+  } = {},
 ): Promise<void> {
   const card = opts.card ?? null;
   const epoch = beginAction(card);
@@ -757,6 +882,7 @@ async function run(
       if (isCurrent(card, epoch)) {
         if (res.error === "") {
           say(status, "ok", res.notice);
+          opts.onOk?.(epoch);
         } else {
           say(status, "err", res.error);
           markInvalid(card, opts.provider ?? "", res.field);
@@ -837,6 +963,27 @@ async function probe(
       select.value = onScreen;
     }
     if (isCurrent(card, epoch)) {
+      // A VERDICT IS ABOUT THE INPUTS IT WAS GIVEN, and the form can move while the network is busy.
+      //
+      // Pre-existing, found by the cross-engine review of the previous branch and deferred to this
+      // one on purpose — this is the change that edits the handler. Editing an input does not advance
+      // the epoch (beginAction only runs for ACTIONS), so a ✓ used to land beside whatever the field
+      // happened to hold by then. The mask makes it sharper still: the field can now hold something
+      // that is not the key by design.
+      //
+      // The REGION is compared too. Without it: probe Azure against eastus, switch the picker to
+      // westus while it flies, and "✓ Conexión correcta" appears next to a region nobody tested.
+      const keyNow = secretToSend($<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? ""));
+      const regionNow =
+        provider === "azure" ? ($<HTMLSelectElement>("region")?.value ?? "") : "";
+      if (keyNow !== secret || regionNow !== region) {
+        // Said, not swallowed: an empty status line is indistinguishable from a click that never
+        // arrived. "busy" is the kind that carries no ✓ and no ✗, which is right — nothing was
+        // proved or disproved about what is on screen now.
+        say(status, "busy", "El formulario cambió durante la prueba — vuelve a probar");
+        Events.Emit("ui:probe", { provider, ok: false, error: "stale-form", field: "" });
+        return;
+      }
       if (res.ok) {
         say(status, "ok", res.message);
       } else {
@@ -878,9 +1025,30 @@ function wire(): void {
     card
       .querySelector<HTMLButtonElement>(".conn-toggle")
       ?.addEventListener("click", () => {
+        // Whatever collapse was queued, the user has just taken the decision back by hand.
+        cancelFold(card);
         const form = card.querySelector<HTMLElement>(".conn-form");
         if (form) form.hidden = !form.hidden;
       });
+
+    // The key field's own events, and both of them matter.
+    //
+    // beforeinput, NOT focus: clearing on focus makes the mask vanish the moment the user clicks the
+    // field to look at it, which destroys the one signal the mask exists to give. beforeinput fires
+    // before the character lands, so the whole mask goes and the user does not type onto the end of
+    // it.
+    const keyInput = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
+    keyInput?.addEventListener("beforeinput", () => {
+      if (maskedFields.has(keyInput)) {
+        keyInput.value = "";
+        maskedFields.delete(keyInput);
+      }
+      // Typing is not watching: a queued collapse would close the form under the user.
+      cancelFold(card);
+    });
+    if (provider === "azure") {
+      $<HTMLSelectElement>("region")?.addEventListener("change", () => cancelFold(card));
+    }
 
     // "Probar conexión". It writes NOTHING, so it stays out of the write queue: a fifteen-second
     // network call in there would hold up a Guardar behind it. What it does do is WAIT for whatever
@@ -892,7 +1060,14 @@ function wire(): void {
       // Captured at the click, before the wait. Read afterwards, they would be whatever the form
       // happens to hold when the queue drains rather than what the user pressed with.
       const input = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
-      const secret = input?.value ?? "";
+      // An untouched mask means "test the key you already have": empty makes Go resolve the STORED
+      // credential (source=stored), which is exactly what pressing Probar over a masked field means.
+      const secret = secretToSend(input);
+      Events.Emit("ui:key-submitted", {
+        provider,
+        action: "test",
+        kind: keyFieldKind(input) === "masked" ? "masked-blocked" : keyFieldKind(input),
+      });
       const regionValue =
         provider === "azure" ? ($<HTMLSelectElement>("region")?.value ?? "") : "";
       void probe(card, status, test, provider, slot, regionValue, secret);
@@ -913,11 +1088,26 @@ function wire(): void {
     save?.addEventListener("click", () => {
       if (!slot) return;
       const input = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
+      // THE GUARD. An untouched mask is not a credential — sending it would overwrite the stored key
+      // with asterisks. Empty means "leave the stored key alone" (settings_write.go:466), which is
+      // precisely what an untouched field means.
+      const kind = keyFieldKind(input);
+      const secret = secretToSend(input);
+      // Emitted as a CLASSIFICATION and never a value: card reports and events are written to the app
+      // log verbatim. Without this, nothing could tell "the mask was blocked" apart from "the mask was
+      // saved as the key" — both leave the payload saying `present` and the field showing a mask.
+      Events.Emit("ui:key-submitted", {
+        provider,
+        action: "save",
+        kind: kind === "masked" ? "masked-blocked" : kind,
+      });
       // Snapshot the secret and clear the field IMMEDIATELY. Waiting for the round trip to finish
       // leaves it sitting in the DOM for as long as the write takes — which used to be ten seconds on a
       // build where it does not answer — and left it there for ever when the write failed.
-      const secret = input?.value ?? "";
-      if (input) input.value = "";
+      if (input) {
+        input.value = "";
+        maskedFields.delete(input);
+      }
       const regionValue =
         provider === "azure"
           ? ($<HTMLSelectElement>("region")?.value ?? "")
@@ -932,7 +1122,15 @@ function wire(): void {
         status,
         save,
         () => Settings.SaveConnection(slot, regionValue, secret),
-        { card, provider, busy: "Guardando…" },
+        {
+          card,
+          provider,
+          busy: "Guardando…",
+          // The card folds itself once the write lands, so "it saved" is something the user SEES
+          // rather than only reads. The ✓ stays up for a beat first — it lives inside the form, and
+          // folding at once would take it down with it.
+          onOk: (epoch) => foldAfterSuccess(card, epoch),
+        },
       );
     });
 
@@ -1181,14 +1379,26 @@ function debugConnStep(step: string): string {
   const region = $<HTMLSelectElement>("region");
   switch (action) {
     case "test":
-      if (arg === "badkey" && key) key.value = DEBUG_BAD_KEY;
-      if (arg === "nokey" && key) key.value = "";
+      // setKeyField, NOT key.value = …, and the difference decides whether the E2E means anything.
+      //
+      // A direct assignment leaves the mask mark in place, so on an already-masked card the guard
+      // would classify the sentinel as a mask, send empty, and have Go test the REAL stored key —
+      // the negative case would come back green. Found in design review before it could produce a
+      // report claiming the opposite of the truth.
+      if (arg === "badkey") setKeyField(key, DEBUG_BAD_KEY);
+      if (arg === "nokey") setKeyField(key, "");
       card.querySelector<HTMLButtonElement>(".conn-test")?.click();
       return `test(${arg ?? "asis"})`;
     case "save-region":
       if (region && arg) region.value = arg;
       card.querySelector<HTMLButtonElement>(".conn-save")?.click();
       return `save-region(${arg ?? ""})`;
+    case "set-key":
+      // Types into the key field without pressing anything — the counterpart of set-region, and the
+      // only way to reproduce from outside a user who edits the field while a probe is in flight.
+      // Goes through setKeyField, so it clears the mask exactly as a keystroke does.
+      setKeyField(key, arg === "empty" ? "" : (arg ?? DEBUG_BAD_KEY));
+      return `set-key(${arg ?? "badkey"})`;
     case "set-region":
       // Chosen but NOT saved, which is the state a probe has to leave untouched: paint() fills this
       // select from what is stored, so restoring it is the only thing keeping an unsaved choice
@@ -1199,9 +1409,12 @@ function debugConnStep(step: string): string {
       if (region) region.value = "";
       return "clear-region";
     case "save":
-      if (arg === "nokey" && key) key.value = "";
+      if (arg === "nokey") setKeyField(key, "");
+      if (arg === "typed") setKeyField(key, DEBUG_BAD_KEY);
+      // "asis" is the case this feature exists for: press Guardar on a card whose field the page
+      // masked, without touching it. The guard must stop the mask from being stored.
       card.querySelector<HTMLButtonElement>(".conn-save")?.click();
-      return "save";
+      return `save(${arg ?? "asis"})`;
     case "use":
       card.querySelector<HTMLButtonElement>(".conn-use")?.click();
       return "use";
@@ -1229,6 +1442,12 @@ function reportCard(provider: string): Record<string, unknown> {
   const engine = $<HTMLElement>("engineStatus");
   return {
     provider,
+    // The key field as a CLASSIFICATION — empty / masked / typed — and never its contents. This
+    // report is logged verbatim (wiring.go:148), so a field carrying the value would write a real
+    // credential into the app log. Reporting the value was the design review's P0.
+    keyField: keyFieldKind($<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "")),
+    // Whether the accordion is open, so the fold-after-save behaviour is observable at all.
+    formOpen: card.querySelector<HTMLElement>(".conn-form")?.hidden === false,
     badge: card.querySelector<HTMLElement>(".conn-state")?.textContent ?? "",
     badgeClass: card.querySelector<HTMLElement>(".conn-state")?.className ?? "",
     status: status?.textContent ?? "",

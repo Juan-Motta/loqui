@@ -148,6 +148,15 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	wailsApp.Event.On("ui:conn-report", func(e *application.CustomEvent) {
 		u.Log("CONN-CARD", fmt.Sprintf("%v", e.Data))
 	})
+	// What the page SENT for the key, as a classification: typed, empty, or masked-blocked. Never the
+	// value — this line goes straight into the log.
+	//
+	// It exists because the mask's guard is otherwise unobservable: a run where the mask was correctly
+	// withheld and a run where it was stored as the credential look identical from outside. Both leave
+	// the slot reading "present" and the field showing the same mask.
+	wailsApp.Event.On("ui:key-submitted", func(e *application.CustomEvent) {
+		u.Log("KEY-SENT", fmt.Sprintf("%v", e.Data))
+	})
 	// A payload that arrived out of order and was dropped. Silent by design in the page — but if it
 	// ever starts happening often, that is worth seeing rather than guessing at.
 	wailsApp.Event.On("ui:stale-payload", func(e *application.CustomEvent) {
