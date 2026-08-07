@@ -54,13 +54,9 @@
   `dictation.go` to judge the model by existence and for `status()` to skip hashing on every repaint —
   both of which were unsound before.
 
-- **After that:** the port has no assignment left. The open items are the ones listed under Blockers.
-  Start with the red
-  `modelSpec` test in Go: port `../loqui/src/shared/modelSpec.ts` to `internal/store/model.go`
-  (file name, expected size, download URL) with tests, and only then the download service with
-  progress and the DOM of `renderModelInto` in `#modelRow`. It is **load-bearing**: without
-  `ggml-small.bin` whisper does not start, and today the only way to get it is
-  `./scripts/build-whisper-stt.sh`.
+- **The port has no assignment left.** Every engine that was going to be ported is ported and every
+  one of them transcribes except Apple's. What remains is under Blockers, and none of it is porting
+  work: a signing decision, one engine that fails inside Apple's framework, and a refactor.
 
 - **Blockers:**
   1. ~~**No remote.**~~ **Closed 2026-08-06:** `origin` is
@@ -74,10 +70,11 @@
      accepted for a personal build. Signing is still the only thing that fixes the rest, and the only
      thing that would let the keys go back to being encrypted at rest. Pending decision: a fixed
      self-signed identity vs a Developer ID.
-  3. ~~**Cloud keys — Azure is DONE, the rest are not.**~~ **Closed 2026-08-07.** All four slots hold
-     a real credential and all four have been accepted by their real service. Azure has also
-     transcribed (UC-9 of `docs/e2e/reports/2026-08-06-keys-in-a-file.md`); the other three have been
-     authenticated but not yet used to transcribe.
+  3. ~~**Cloud keys.**~~ **Fully closed 2026-08-07.** All four slots hold a real credential, all four
+     were accepted by their real service (report:
+     `docs/e2e/reports/2026-08-07-probe-remaining-providers.md`), and all four have transcribed —
+     Azure with an E2E report behind it, the other three **attested by the owner**, which is the most
+     that is obtainable without a voice. See the provider table.
 
 - **Credentials now live in a cleartext file**, `~/Library/Application Support/LoquiGo/secrets.json`,
   mode 0600 — not the Keychain, which hangs under ad-hoc signing. A deliberate trade the owner accepted
@@ -161,11 +158,19 @@
    one asserted on a code present in both of the lists it was supposed to distinguish. **Verify every
    new test by deliberately breaking what it says it covers.**
 
-5. **What is still inert** (measured, not from memory): the model row (`#modelRow`), System's
-   `#save` — which may be redundant by design, because here every control already persists on
-   change —, `#engineHint`, the fields for unported subservices (`azureOpenAiResource`,
-   `azureOpenAiDeployment`, `openaiModel`), the footer links (`#openDonate`, `#openTutorial`), the
-   **About** and **report** views, and the 17 `wiz*` elements of the **onboarding**.
+5. **What is still inert** (measured, not from memory): System's `#save` — which may be redundant by
+   design, because here every control already persists on change —, `#engineHint`, the fields for
+   unported subservices (`azureOpenAiResource`, `azureOpenAiDeployment`, `openaiModel`), the footer
+   links (`#openDonate`, `#openTutorial`), the **report** view, and the 17 `wiz*` elements of the
+   **onboarding**.
+
+   **Two entries left this list on 2026-08-07, and one of them was wrong in a way worth remembering.**
+   The model row is live now. But it was listed as `#modelRow`, **an id that never existed in this
+   port** — the container is `#modelBox` / `.model-box`. Grepping for the name in the list found
+   nothing, which sends you looking for a missing element instead of for missing code. And it was in
+   the wrong category: the other entries are controls that EXIST and do nothing, while that one was a
+   container whose code had never been written. **About** also left the list: it renders, and since
+   the i18n work it renders translated.
 
 6. **Read the README before running anything.** Two environment traps: bare `go` does not compile
    (the Speech SDK's cgo flags come from the environment → `./scripts/go.sh`) and `wails3` is not on
@@ -204,12 +209,12 @@ been done on 2026-07-30. Corrected here.
 
 | Engine | Ported | Real transcription | Blocked on |
 | --- | --- | --- | --- |
-| **whisper** | ✅ | ✅ 2026-07-28 | the model row — `ggml-small.bin` is downloaded by hand today |
+| **whisper** | ✅ | ✅ 2026-07-28 | nothing — the model row was ported 2026-08-07 and a real 465 MB download ran |
 | **azure** | ✅ | ✅ **2026-08-06** | nothing |
 | **macos** (SpeechAnalyzer) | ✅ | ⛔ | blocked before `started`, cause unknown — risk 5 of the port plan |
-| **grok** (xAI) | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
-| **openai realtime** | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
-| **elevenlabs** | ✅ | ⬜ credential ✅ **2026-08-07** | nothing but the run itself |
+| **grok** (xAI) | ✅ | ✅ **owner, 2026-08-07** | nothing |
+| **openai realtime** | ✅ | ✅ **owner, 2026-08-07** | nothing |
+| **elevenlabs** | ✅ | ✅ **owner, 2026-08-07** | nothing |
 
 All four cloud engines can now **store** a key and **test** it. Storing was fixed in `07c14a3`; testing
 is on this branch.
@@ -220,9 +225,16 @@ All three probes returned `ok=true` against the real services — see
 `docs/e2e/reports/2026-08-07-probe-remaining-providers.md`. That also settles risk 1 of the plan: the
 readiness event names had never been observed by anyone, and now all three have been.
 
-What none of the three has ever done is **transcribe**. A green probe proves the credential and that a
-session opens — not that audio goes out and text comes back. That run is now unblocked and is the
-cheapest big win left.
+**All six ported engines now transcribe, and the last three are attested rather than machine-verified.**
+The owner reported on 2026-08-07 that the cloud providers work. That is the strongest evidence
+available for this one: **transcription cannot be verified without a human voice.** The debug
+affordance can start and stop a dictation, but it cannot speak — the whisper run done that day ended
+with a microphone peak of 0.10, which is silence. So there is no E2E report behind these three ticks
+and there cannot be one; the column says "owner" for exactly that reason.
+
+What that leaves worth doing, if anyone wants it stronger: a dictation whose audio comes from a FILE
+rather than the microphone would make this checkable by a machine. `cmd/stt-probe` already exists to
+run a dictation without the app and would be the place.
 
 **Still not done, and worth keeping visible:** the WebSocket lifecycle was never extracted out of
 `internal/stt/grok` into a shared package. Two real implementations now exist (grok and elevenlabs),
