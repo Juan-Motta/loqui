@@ -276,3 +276,55 @@ Dos cambios, y el segundo importa tanto como el primero:
 cambio real   en → es :  rebuilds: 1
 mismo idioma  es → es :  rebuilds: 0   (y el hook sí se disparó)
 ```
+
+---
+
+## Revisión de la calidad del inglés — 2026-08-07
+
+Las 249 entradas leídas una por una, como traductor y no como programador. Auditoría del catálogo:
+**0 iguales a su clave, 0 vacías**, y **una sola** traducción repetida — que es un arreglo, no un
+descuido (ver abajo).
+
+**Una alarma mía que resultó infundada, y la retiro:** creí que `"Mantén la tecla"` → `"Hold the"`
+estaba truncado. No lo está. La frase va partida alrededor de `<b>fn</b>` y el segundo fragmento
+**empieza por `key`**, así que compone "Hold the **fn** key (or use the tray icon)…". El orden de
+palabras —que en español pone el sustantivo antes del nombre de la tecla y en inglés después— ya
+estaba resuelto.
+
+### Lo que sí estaba mal
+
+**La misma acción con dos nombres.** La bandeja decía `Dictate (test)` y el botón de Inicio
+`Test dictation` **para el mismo comando**. Un usuario no tiene forma de saber que son lo mismo.
+Ahora las dos dicen `Test dictation` — es la única traducción repetida del catálogo, y lo es a
+propósito. Verificado: `TRAY relabelled locale=en items=Test dictation|Settings…|Quit`.
+
+**Los nombres de los paneles de macOS, en su capitalización real.** `Input Monitoring` y
+`Speech Recognition`, no en minúsculas: el usuario va a buscarlos **literalmente** en Ajustes del
+Sistema, y una etiqueta que no coincide con la de Apple es una que no encuentra.
+
+**"Application" es la palabra del manual; la interfaz dice "App".** Y esta misma app ya usaba "app"
+en otra frase, así que había dos registros conviviendo. Unificado.
+
+**Líneas de estado con artículo.** El inglés de interfaz no lo lleva: `Testing connection…`,
+`Deleting key…`, `nothing to save`, `Could not list microphones:`.
+
+**`Detección automática` → `Auto-detect`**, no "Automatic detection": es una opción de un selector,
+no la descripción de una función.
+
+**`Abrir reporte en GitHub` → `Open an issue on GitHub`.** GitHub no los llama "reports". El botón se
+busca por el nombre que usa la plataforma.
+
+**`✗ Deja al menos un idioma` → `✗ Keep at least one language`.** "Leave" se lee como *marcharse*, que
+es lo contrario de lo que pide.
+
+**Y siete calcos** que eran correctos y sonaban traducidos: pasivas heredadas del español
+("Lets the transcribed text be inserted" → "Lets Loqui insert…"), paralelismo roto ("No key and no
+internet" frente a un "It needs…" en la frase siguiente → "Needs no key and no internet"), y frases
+que decían la idea sin decirla como la diría un nativo.
+
+### Lo que esta revisión NO es
+
+**Un hablante nativo no la ha visto.** Es mi juicio aplicado con las convenciones de interfaz de
+macOS y con el criterio de consistencia interna, que es donde estaban los defectos que importaban.
+Sigue siendo una revisión de una sola persona, y las 249 entradas no han pasado por un traductor
+profesional.
