@@ -10,6 +10,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -339,7 +340,12 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// rather than a mistimed probe.
 	if steps := os.Getenv("LOQUI_DEBUG_CONN_CLICK"); steps != "" {
 		wailsApp.Event.On("ui:painted", func(*application.CustomEvent) {
-			u.Log("DEBUG", "asking the UI to run "+steps)
+			// The ARGUMENTS are stripped before logging. The page only accepts fixed tokens for the
+			// key field, but this line prints whatever the environment held — so a
+			// `set-key:sk-live-…` typed by someone reaching for a shortcut would land in the log
+			// before the page ever refused it. The actions are what makes the run readable; the
+			// values are not worth the risk. The page reports back what it actually ran.
+			u.Log("DEBUG", "asking the UI to run "+stepActions(steps))
 			wailsApp.Event.Emit("debug:conn-click", steps)
 		})
 	}
@@ -573,4 +579,19 @@ func askFor(u *ui, name string, status func() permissions.Status, request func()
 	default:
 		u.Log("PERM-ERR", name+": "+string(st)+" — grant it in Ajustes de Sistema")
 	}
+}
+
+// stepActions renders a debug step chain with every argument removed: "openai:set-key:xyz" becomes
+// "openai:set-key:…". Only what was DONE survives, never what it was done with.
+func stepActions(steps string) string {
+	out := make([]string, 0, 4)
+	for _, step := range strings.Split(steps, "+") {
+		parts := strings.SplitN(step, ":", 3)
+		if len(parts) < 3 {
+			out = append(out, step) // no argument to hide
+			continue
+		}
+		out = append(out, parts[0]+":"+parts[1]+":…")
+	}
+	return strings.Join(out, "+")
 }

@@ -1,18 +1,23 @@
-// The Wails system logger, with binding arguments redacted.
+// The Wails system logger, with binding arguments AND results redacted.
 //
-// WHY THIS FILE EXISTS. Wails logs every binding call at Debug level, arguments included:
+// WHY THIS FILE EXISTS. Wails logs every binding call at Debug level, both directions on one line:
 //
-//	m.Debug("Binding call complete:", "id", ..., "method", ..., "args", string(jsonArgs), ...)
-//	(pkg/application/messageprocessor_call.go)
+//	m.Debug("Binding call complete:", "id", ..., "method", ..., "args", string(jsonArgs), "result", string(jsonResult))
+//	(pkg/application/messageprocessor_call.go:131)
 //
-// One of this app's bound methods takes an API key. So turning on Wails' debug logging — the
-// obvious thing to do while chasing a UI problem — would print the user's credential to the
-// terminal and into whatever captured it. Relying on the log LEVEL to prevent that is not a
-// safeguard: the level is exactly what someone changes when debugging.
+// One of this app's bound methods TAKES an API key, and one now RETURNS one. So turning on Wails'
+// debug logging — the obvious thing to do while chasing a UI problem — would print the user's
+// credential to the terminal and into whatever captured it. Relying on the log LEVEL to prevent that
+// is not a safeguard: the level is exactly what someone changes when debugging.
 //
-// So the args are dropped at the handler, where no future bound method can leak through by being
-// added without anyone remembering this. What is lost is worth less than what it protects: the
-// method name and id are still logged, which is what a binding problem is actually diagnosed from.
+// `result` was added to the redaction later than `args`, and the gap is worth recording. While every
+// bound method returned only state, results were safe BY ACCIDENT — nothing put a secret in one. Then
+// Settings.RevealKey did, because showing the user their own key is its entire purpose, and this file
+// went on protecting one direction of a two-way log line. A cross-engine review caught it.
+//
+// Both are dropped at the handler, where no future bound method can leak through by being added
+// without anyone remembering this. What is lost is worth less than what it protects: the method name
+// and id are still logged, which is what a binding problem is actually diagnosed from.
 package main
 
 import (
@@ -22,7 +27,7 @@ import (
 	"log/slog"
 )
 
-// redactArgsHandler drops the "args" attribute from every Wails system log record.
+// redactArgsHandler drops the "args" and "result" attributes from every Wails system log record.
 //
 // Sanitises in BOTH Handle and WithAttrs, and descends into groups. Only Handle would be enough for
 // how Wails logs today (one top-level "args"), but a handler that is correct only for the caller
@@ -34,10 +39,15 @@ type redactArgsHandler struct{ inner slog.Handler }
 // tell "withheld" from "there was nothing here".
 const redactedValue = "[redacted]"
 
-// sanitize replaces any attribute called "args" with the placeholder, recursing into groups.
+// redactedKeys are the attributes that may carry credential material in either direction. Named as a
+// set rather than checked inline, so adding a third is one line and cannot be half-done.
+var redactedKeys = map[string]bool{"args": true, "result": true}
+
+// sanitize replaces any attribute carrying binding payload with the placeholder, recursing into
+// groups.
 func sanitize(a slog.Attr) slog.Attr {
-	if a.Key == "args" {
-		return slog.String("args", redactedValue)
+	if redactedKeys[a.Key] {
+		return slog.String(a.Key, redactedValue)
 	}
 	if a.Value.Kind() == slog.KindGroup {
 		grouped := a.Value.Group()

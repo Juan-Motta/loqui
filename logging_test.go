@@ -108,3 +108,32 @@ func TestTheWailsLoggerRedactsArgumentsNestedInAGroup(t *testing.T) {
 		t.Errorf("the rest of the group was lost: %s", out)
 	}
 }
+
+// A binding RESULT can now carry a credential too, and the level is still not a safeguard.
+//
+// This case did not exist while every bound method returned only state: `result` was safe by
+// accident, because nothing put a secret in one. Settings.RevealKey does — that is its whole job —
+// and Wails logs the serialised return value beside the arguments on the very same line
+// (messageprocessor_call.go:131). Found by a cross-engine review of the diff that added it.
+func TestTheWailsLoggerRedactsBindingResults(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(redactArgsHandler{
+		inner: slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}),
+	})
+
+	const secret = "sk-proj-la-clave-que-el-ojo-revela"
+	logger.Debug("Binding call complete:",
+		"id", 99,
+		"method", "SettingsService.RevealKey",
+		"args", `["openai"]`,
+		"result", `{"ok":true,"key":"`+secret+`","error":""}`,
+	)
+
+	out := buf.String()
+	if strings.Contains(out, secret) {
+		t.Fatalf("the log contains the revealed credential: %s", out)
+	}
+	if !strings.Contains(out, "SettingsService.RevealKey") {
+		t.Errorf("the method name was lost: %s", out)
+	}
+}
