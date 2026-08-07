@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -153,6 +154,9 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 		u.Log("LANG-SWITCH", fmt.Sprintf("%v", e.Data))
 	})
 	// The model row's shape and verdict. No user data: a verdict, a class, and which buttons are up.
+	wailsApp.Event.On("ui:model-click", func(e *application.CustomEvent) {
+		u.Log("MODEL-CLICK", fmt.Sprintf("%v", e.Data))
+	})
 	wailsApp.Event.On("ui:model-row", func(e *application.CustomEvent) {
 		u.Log("MODEL-ROW", fmt.Sprintf("%v", e.Data))
 	})
@@ -300,6 +304,18 @@ func startDictation(wailsApp *application.App, tray *application.SystemTray, st 
 	// Opts the history shape reports into reporting the rendered timestamp. Behind its own flag
 	// because that is activity metadata — when the user dictated — and a verification aid must not
 	// widen what an ordinary run writes to the log.
+	// Dev affordance: press one of the model row's buttons. Fired on ui:model-row so the row exists —
+	// it is fetched, not painted from the settings payload, so ui:painted is too early.
+	if which := os.Getenv("LOQUI_DEBUG_MODEL_CLICK"); which != "" {
+		var once sync.Once
+		wailsApp.Event.On("ui:model-row", func(*application.CustomEvent) {
+			once.Do(func() {
+				u.Log("DEBUG", "asking the model row to run "+which)
+				wailsApp.Event.Emit("debug:model-click", which)
+			})
+		})
+	}
+
 	if os.Getenv("LOQUI_DEBUG_TIME_TEXT") == "1" {
 		wailsApp.Event.On("ui:ready", func(*application.CustomEvent) {
 			wailsApp.Event.Emit("debug:time-text", "1")

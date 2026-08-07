@@ -98,12 +98,9 @@ rellenado, o un mirror sirviendo otra cosa del largo justo.
 
 ## Lo que este informe NO cubre
 
-1. **Una descarga real de 465 MB.** No se ha ejecutado contra Hugging Face: son minutos y medio giga
-   por corrida, y lo que quedaría demostrado por encima de los tests es que la URL sigue viva.
-   `status()` deliberadamente **no** hashea —bloquearía la vista segundos en cada repintado— así que
-   el digest se comprueba una vez, al terminar la descarga, y eso sí está cubierto por test.
+1. ~~**Una descarga real de 465 MB.**~~ **EJECUTADA — ver abajo.**
 2. **Cancelar, contra la app.** El botón y su ruta existen y el servicio los expone; provocarlo en
-   vivo exige una descarga real en curso.
+   vivo exige interrumpir una descarga real a mitad, y la que se hizo terminó en 55 s.
 3. **La segunda caja.** El original dibuja en *cada* `.model-box` y menciona dos —Conexiones y el
    tutorial—; este markup tiene una, y el reporte dice `boxes:1`. Es fidelidad del markup heredado, no
    de este código: el módulo ya recorre todas las que encuentre.
@@ -169,3 +166,60 @@ cobertura de rangos ignorados, 206 desalineados, archivos locales demasiado gran
 concurrencia — **así que los seis fallos de arriba estaban en verde**. Seis casos nuevos, todos contra
 un servidor HTTP real, incluidos uno que se cuelga a mitad para probar Cancelar y otro que verifica
 que la ruta canónica está **vacía** mientras la descarga corre.
+
+---
+
+## UC-MODEL-04 — la descarga real, 465 MB desde Hugging Face: PASS
+
+Pedida por el dueño. **Demuestra la única cosa que ningún test podía**: que el sha256 fijado en el
+código es el del archivo que la URL sirve **hoy**. Un test contra un servidor local prueba el
+mecanismo; sólo esto prueba el *pin*.
+
+Conducida pulsando **el botón de la fila**, no el binding por detrás — un probe que se saltara la fila
+verificaría el descargador y no diría nada del control que el usuario aprieta.
+
+```
+16:24:13  MODEL-CLICK  asked:download found:true
+16:24:13  MODEL        download requested
+16:24:13  MODEL-ROW    downloading:true  model-get=absent  model-stop=shown
+          en disco:    ggml-small.bin.part   (248 MB a los 25 s; ~10 MB/s)
+16:25:08  MODEL        download complete and verified
+16:25:08  MODEL-ROW    ok:true  stateClass:ready  model-del=shown  model-stop=absent
+          en disco:    ggml-small.bin  487.601.967 bytes   (sin .part residual)
+```
+
+**Verificado por fuera, no sólo por el propio código:**
+
+```
+shasum -a 256 del archivo descargado: 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
+fijado en internal/store/model.go:    1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
+```
+
+Y lo que sólo una corrida real enseña: **la ruta canónica estuvo vacía durante toda la transferencia**.
+En disco había únicamente `ggml-small.bin.part`. Esa es la garantía por la que se reestructuró el
+descargador — sin ella `dictation.go`, que juzga por existencia, podía lanzar Whisper contra un
+archivo a medias.
+
+### Y Whisper dictó con ese modelo
+
+Con el symlink de desarrollo **oculto**, es decir con el modelo descargado como única copia:
+
+```
+16:27:28  STT-ERR  whisper_init_state: kv cross size = 56.62 MB
+16:27:28  STT-ERR  whisper_init_state: compute buffer (encode) = 39.45 MB
+          "falta el modelo": 0 apariciones
+16:27:33  CTRL     stopEngine gen=1        MIC  peak level this session: 0.10
+```
+
+Las líneas `STT-ERR` son el stderr de whisper.cpp, donde registra su arranque — no son errores. El
+pico de 0.10 es silencio: nadie habló, así que no hay transcripción que mostrar. Lo que queda probado
+es que el modelo descargado **se encuentra y se carga**.
+
+**Un tropiezo, por si vuelve:** la primera corrida dictó con Azure. `LOQUI_DEBUG_DICTATE` disparó un
+segundo antes de que el cambio de motor aterrizara, así que el motor guardado seguía siendo el
+anterior cuando arrancó el engine. Hay que dejar whisper guardado ANTES, no cambiarlo en la misma
+corrida.
+
+**Estado devuelto:** symlink de desarrollo restaurado, motor en `azure`, idioma en `en`, credenciales
+con el mismo sha256. El modelo descargado se deja en la carpeta de datos — es una copia legítima e
+independiente del proyecto Electron, y borrarla gastaría el ancho de banda otra vez para nada.
