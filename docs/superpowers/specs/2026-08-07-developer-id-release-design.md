@@ -170,6 +170,10 @@ The Whisper build step must make every non-system dependency relocatable:
 7. Reject the package if `otool -L`, `otool -D`, or `otool -l` exposes a checkout path, Homebrew
    path, or other unexpected absolute non-system dependency.
 
+Vendored Whisper/ggml links reserve header space for install-name growth. After mutating development
+Mach-O files, the build re-signs each one ad hoc and verifies it so direct `helpers/bin` execution is
+not left with an invalid signature.
+
 Development from `helpers/bin` must continue to work. The implementation may retain a local rpath in
 the development artifact, but the packaged artifact must contain only release-safe references.
 
@@ -202,16 +206,18 @@ explicit signing pass because deep verification is an audit, not an instruction 
 
 ## Release flow
 
-1. **Preflight** — validate host arm64, Apple tools, exactly selected Developer ID identity,
-   notarization profile, source helpers, framework, `info.version` plus matching plist version keys,
-   and a unique temporary staging target.
+1. **Preflight** — deterministically restore generated plist IDs, privacy strings, and versions from
+   `build/config.yml`; then validate host arm64, Apple tools, exactly selected Developer ID identity,
+   notarization profile, source helpers/framework, and a unique temporary staging target.
 2. **Build/package** — use the existing Wails/Taskfile compilation, assemble the standard bundle in a
    staging directory, and keep the public output path untouched. An ad-hoc-signed artifact produced
    by ordinary Wails packaging is staging input only: the release signer replaces its signatures,
    and the intermediate app is neither launched nor published.
-3. **Audit layout/dependencies** — clear extended attributes, then reject Mach-O code under
-   Resources, missing nested code, non-arm64 release code, broken symlinks, external Metal data, and
-   build-machine load paths/install names.
+3. **Audit identity/layout/dependencies** — require the channel's exact bundle ID, non-empty
+   microphone/speech/Apple Events usage strings, matching packaged plist versions, and minimum OS;
+   clear extended attributes, then reject signing-blocking Finder/resource-fork/quarantine metadata,
+   Mach-O code under Resources, missing nested code, non-arm64 release code, broken symlinks,
+   external Metal data, and any load path/install name outside the explicit system/token allowlist.
 4. **Sign inside out** — sign every explicit nested item, the helpers, and the app; capture the
    authority, Team ID, identifiers, DRs, hardened-runtime flags, and timestamps as evidence.
 5. **Verify app** — run strict signature validation. Do not require Gatekeeper acceptance before
@@ -288,8 +294,10 @@ ad-hoc helper's existing TCC record.
 ### Second-Mac evidence
 
 Install the DMG on another Apple Silicon Mac that does not rely on this checkout. Verify launch,
-permissions UI, fn listener, Whisper, and at least one cloud provider. Then install a second signed
-build and confirm the established permissions are not revoked.
+permissions UI (including which process each prompt names), fn listener, Whisper, and at least one
+cloud provider. For offline-ticket evidence, copy the assessed app out of the DMG, eject, disable
+networking, reboot, then assess and launch the copied app. Then install a second signed build and
+confirm the established permissions are not revoked.
 
 If a second Mac is unavailable, implementation and local notarization may proceed, but the E2E ship
 gate remains open and the work is not described as fully distribution-verified.
@@ -312,7 +320,7 @@ gate remains open and the work is not described as fully distribution-verified.
 - The packaged binaries are arm64 and have no dependency on Homebrew, the source checkout, or an
   unbundled third-party dylib/framework.
 - Both app plist version keys equal `info.version`, the standard DMG omits the optional model, and
-  all packaged extended attributes are cleared before signing.
+  signing-blocking extended attributes are absent before signing.
 - Release failure leaves the previous accepted artifact intact and returns nonzero with a specific
   diagnostic.
 - No signing or notarization secret is present in Git, command output, or release evidence.

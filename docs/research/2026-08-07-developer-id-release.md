@@ -91,9 +91,11 @@ Checked: 2026-08-07
 - The current Whisper build has `GGML_METAL_EMBED_LIBRARY=ON`, and local `otool` inspection finds the
   `__DATA,__ggml_metallib` section in `libggml-metal.0.dylib`. The release must assert that embedded
   section instead of copying an external `.metallib` resource.
-- Current helper and Azure framework inputs carry `com.apple.provenance` extended attributes. The
-  assembled app must clear extended attributes before code signing and then be re-audited, so
-  Finder/resource-fork metadata cannot invalidate or contaminate the signature.
+- Current helper and Azure framework inputs carry `com.apple.provenance` extended attributes while
+  current ad-hoc helper signatures still verify, so zero attributes is not a valid signing
+  invariant. Assembly should clear attributes recursively, then specifically reject Finder info,
+  resource forks, and quarantine metadata that can break signing/distribution; benign provenance
+  metadata is not itself a failure.
 
 ### Notarization and DMG
 
