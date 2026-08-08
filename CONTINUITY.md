@@ -1,28 +1,25 @@
 # Continuity — session handoff
 
-- **Focus:** the Loqui Electron/TypeScript port to Go + Wails v3 is finished. The bounded reconnect
-  budget fix is complete on `fix/bounded-reconnect-budget`: one dictation schedules at most six
-  reconnects across successful short-lived connections, Grok in-socket errors use bounded
-  `ServiceError`, and a late terminal `Started` cannot repaint the error overlay.
+- **Focus:** reconnect lifecycle fix complete and ready for local integration into `main`. Failed
+  providers/captures close before backoff, buffered frames stop at detach, late starts are rejected,
+  and reconnect/idle timers are generation-gated.
 
-- **NEXT STEP:** finish integrating `fix/bounded-reconnect-budget` according to the owner's selected
-  branch option. After it lands, start the next bug red in `internal/app`: a retryable reconnect calls
-  `Dictation.StartEngine` without stopping the previous capture, so the old capture/pump can survive
-  while the new one overwrites `d.capture` and `d.pumpDone`.
+- **NEXT STEP:** choose and configure a stable signing identity (fixed self-signed identity or
+  Developer ID). Ad-hoc rebuilds still revoke Accessibility and Input Monitoring permissions.
 
-- **Active workflow:** `.workflow/state.md` (`fix-bug`, phase `ship`). The plan is
-  `docs/plans/bounded-reconnect-budget.md`; the durable diagnosis is
-  `docs/solutions/bounded-reconnect-budget.md`. Design review converged in five rounds; code review in
-  three. `./scripts/task.sh check` exited 0 on 2026-08-07.
+- **Active workflow:** `.workflow/state.md` (`fix-bug`, phase `ship`). Design:
+  `docs/superpowers/specs/2026-08-07-reconnect-capture-lifecycle-design.md`. Durable diagnosis:
+  `docs/solutions/reconnect-capture-lifecycle.md`. The external reviewers returned no valid verdict,
+  so the recorded delayed self-review waiver found and fixed one P1 plus one P2, then converged clean.
+  Seven mutation checks detect their intended regressions. The affected tests, race detector,
+  `./scripts/task.sh check`, and all workflow gates exited 0 on 2026-08-07. The owner selected local
+  merge; do not push or create a PR unless requested separately.
 
-- **Blockers — owner decisions, not code:** choose a fixed self-signed identity vs Developer ID;
-  confirm Apple SpeechAnalyzer transcription with a voice/file input; remove the orphan
-  `com.jualopezmo.loquigo` / `azure-speech` Keychain item.
+- **Blocker:** the owner must choose fixed self-signed identity or Developer ID before the signing
+  work begins.
 
-- **Handoff notes:** OpenAI and ElevenLabs preserve structured post-upgrade error codes but their
-  runtime providers still collapse them into one terminal bucket; map those codes before making any
-  subset retryable. The reconnect callback also has a documented narrow TOCTOU between its locked
-  `Desired()` read and `StartEngine`; solve it with the shared reconnect/capture lifecycle refactor,
-  not by holding the controller mutex across reentrant provider IO.
+- **Provider residual:** OpenAI and ElevenLabs preserve structured post-upgrade error codes but their
+  runtime providers still collapse them into one terminal bucket. Map those codes before making any
+  subset retryable.
 
 - **Updated:** 2026-08-07

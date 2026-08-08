@@ -60,30 +60,19 @@ type Dictation struct {
 	// save/restore and interleave the text.
 	pastes *inject.Queue
 
-	mu       sync.Mutex
-	provider stt.Provider
-	capture  *audio.Capture
-	// pumpDone stops the goroutine feeding audio to the provider.
-	pumpDone chan struct{}
+	mu  sync.Mutex
+	run *engineRun
 	// sessionApp is the frontmost app when this dictation STARTED, used to detect focus
 	// drift before pasting.
 	sessionApp string
 
-	lastActivity time.Time
-	idleTicker   *time.Ticker
-	idleStop     chan struct{}
-	reconnect    *time.Timer
+	reconnect     *reconnectWait
+	scheduleAfter scheduleAfterFunc
 
-	// peakLevel is the loudest microphone level seen this session, 0..1.
-	//
-	// Logged when the session ends, because "did the microphone hear anything at all" is the first
-	// question every empty-transcript report raises and the only one nothing else answers. A peak of
-	// zero says the audio never arrived, which is a different problem from a transcript that came back
-	// empty — and they send you to completely different places.
-	peakLevel float64
-	// metering is whether a session is live and its peak may still move. It exists because levels
-	// arrive from a CHILD PROCESS that outlives the stop by up to 300 ms — see noteLevel.
-	metering bool
+	stoppedThrough  int
+	shuttingDown    bool
+	providerFactory func(int) (stt.Provider, error)
+	captureOpener   captureOpener
 
 	// getSecret overrides the credential read. Only the tests set it — see secretReader.
 	getSecret func(store.KeySlot) (string, error)
@@ -102,15 +91,12 @@ func (d *Dictation) Controller() *session.Controller { return d.controller }
 // ---- session.IO -------------------------------------------------------------
 
 func (d *Dictation) StartEngine(gen int) {
-	d.noteActivity()
-	d.clearTimers()
+	run, ok := d.beginEngineRun(gen)
+	if !ok {
+		return
+	}
 
-	// Opened HERE, at the start, and closed where the peak is reported. Between those two points a
-	// level may move the peak; outside them it is a straggler from a helper that has not died yet.
-	d.mu.Lock()
-	d.peakLevel = 0
-	d.metering = true
-	d.mu.Unlock()
+	d.noteActivity(run)
 
 	// Capture the frontmost app before anything else: the whole point is to compare it
 	// against the app in focus when the paste happens, and by then Loqui may have been
@@ -122,7 +108,7 @@ func (d *Dictation) StartEngine(gen int) {
 		d.mu.Unlock()
 	}()
 
-	provider, err := d.buildProvider()
+	provider, err := d.providerFor(gen)
 	if err != nil {
 		d.ui.Log("STT-ERR", err.Error())
 		// Report it through the same event path a provider would, so the controller
@@ -135,17 +121,22 @@ func (d *Dictation) StartEngine(gen int) {
 		return
 	}
 
-	d.mu.Lock()
-	d.provider = provider
-	d.mu.Unlock()
+	if !d.attachProvider(run, provider) {
+		provider.Stop()
+		return
+	}
 
 	if err := provider.Start(gen, d.controller.ProviderEvent); err != nil {
 		d.ui.Log("STT-ERR", fmt.Sprintf("provider start failed: %v", err))
 		return // the provider already emitted canceled + stopped
 	}
+	if !d.isCurrentRun(run) {
+		return
+	}
 
 	if provider.WantsAudio() {
-		if err := d.startCapture(provider); err != nil {
+		started, err := d.startCapture(run, provider)
+		if err != nil {
 			d.ui.Log("MIC-ERR", err.Error())
 			d.controller.ProviderEvent(stt.Event{
 				Type: stt.Canceled, Gen: gen,
@@ -154,28 +145,24 @@ func (d *Dictation) StartEngine(gen int) {
 			})
 			return
 		}
+		if !started {
+			return
+		}
 	}
 
-	d.startIdleGuard()
+	if !d.startIdleGuard(run) {
+		return
+	}
 	d.ui.Log("CTRL", fmt.Sprintf("startEngine gen=%d", gen))
 }
 
 func (d *Dictation) StopEngine(gen int) {
 	d.ui.Log("CTRL", fmt.Sprintf("stopEngine gen=%d", gen))
-	d.clearTimers()
-	d.stopCapture()
-
-	d.mu.Lock()
-	provider := d.provider
-	d.provider = nil
-	d.mu.Unlock()
-
-	if provider != nil {
-		// Stop is asynchronous by contract: the provider emits Stopped once it has
-		// flushed whatever it still had, and the controller waits for that rather than
-		// assuming teardown is instant. Delivering earlier truncates the dictation.
-		provider.Stop()
+	run, wait := d.detachThrough(gen)
+	if wait != nil {
+		wait.stop()
 	}
+	d.cleanupEngineRun(run)
 }
 
 func (d *Dictation) ShowOverlay() { d.ui.ShowOverlay() }
@@ -229,14 +216,45 @@ func (d *Dictation) DeliverFinal(text, language string, trigger session.Mode) {
 	d.ui.HistoryChanged()
 }
 
-func (d *Dictation) ScheduleReconnect(delay time.Duration, fn func()) {
+func (d *Dictation) ScheduleReconnect(gen int, delay time.Duration, fn func()) {
 	d.ui.Log("RECONNECT", fmt.Sprintf("retry in %s", delay))
+	wait := &reconnectWait{gen: gen}
+
 	d.mu.Lock()
-	if d.reconnect != nil {
-		d.reconnect.Stop()
+	if d.shuttingDown || gen <= d.stoppedThrough {
+		d.mu.Unlock()
+		return
 	}
-	d.reconnect = time.AfterFunc(delay, fn)
+	previous := d.reconnect
+	d.reconnect = wait
 	d.mu.Unlock()
+	if previous != nil {
+		previous.stop()
+	}
+
+	schedule := d.scheduleAfter
+	if schedule == nil {
+		schedule = realScheduleAfter
+	}
+	timer := schedule(delay, func() {
+		d.mu.Lock()
+		valid := !d.shuttingDown && d.reconnect == wait && gen > d.stoppedThrough
+		if d.reconnect == wait {
+			d.reconnect = nil
+		}
+		d.mu.Unlock()
+		if valid {
+			fn()
+		}
+	})
+	wait.attachTimer(timer)
+}
+
+func (d *Dictation) providerFor(gen int) (stt.Provider, error) {
+	if d.providerFactory != nil {
+		return d.providerFactory(gen)
+	}
+	return d.buildProvider(gen)
 }
 
 // ReconnectExhausted records why a retryable session stopped without scheduling again.
@@ -248,10 +266,9 @@ func (d *Dictation) ReconnectExhausted(attempts int) {
 
 // buildProvider resolves the configured engine.
 //
-// Only Azure exists so far; the others land with phase 3. An unimplemented provider is
-// reported as a configuration problem rather than silently substituting a different
-// engine, because dictating into the wrong service is worse than not dictating.
-func (d *Dictation) buildProvider() (stt.Provider, error) {
+// An unknown provider is reported as a configuration problem rather than silently substituting a
+// different engine, because dictating into the wrong service is worse than not dictating.
+func (d *Dictation) buildProvider(gen int) (stt.Provider, error) {
 	settings := d.store.LoadSettings()
 
 	switch settings.Provider {
@@ -293,10 +310,10 @@ func (d *Dictation) buildProvider() (stt.Provider, error) {
 		return d.buildOpenAIProvider()
 
 	case "macos":
-		return d.buildAppleProvider()
+		return d.buildAppleProvider(gen)
 
 	case "whisper":
-		return d.buildWhisperProvider()
+		return d.buildWhisperProvider(gen)
 
 	default:
 		return nil, fmt.Errorf("el motor %q todavía no está portado — elige otro en Ajustes", settings.Provider)
@@ -399,7 +416,7 @@ func (d *Dictation) buildOpenAIProvider() (stt.Provider, error) {
 
 // buildAppleProvider runs Apple's on-device SpeechAnalyzer (macOS 26+): free, offline,
 // private, and single-language per session because Apple has no continuous LID.
-func (d *Dictation) buildAppleProvider() (stt.Provider, error) {
+func (d *Dictation) buildAppleProvider(gen int) (stt.Provider, error) {
 	bin := HelperPath("macos-stt")
 	if bin == "" {
 		return nil, fmt.Errorf("el helper de Apple no está compilado — corre `./scripts/build-macos-stt.sh`")
@@ -418,13 +435,13 @@ func (d *Dictation) buildAppleProvider() (stt.Provider, error) {
 		// The helper opens the microphone itself, so the host cannot meter it. If this helper
 		// reports levels they reach the UI; if it does not, the meter simply stays quiet — which
 		// is the honest outcome, and better than an animation that implies audio is arriving.
-		OnLevel: d.noteLevel,
+		OnLevel: func(level float64) { d.noteLevel(gen, level) },
 	}), nil
 }
 
 // buildWhisperProvider runs whisper.cpp locally: free, offline, and the DEFAULT engine,
 // because it is the only one that works with no account, no key and no network.
-func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
+func (d *Dictation) buildWhisperProvider(gen int) (stt.Provider, error) {
 	bin := HelperPath("whisper-stt")
 	if bin == "" {
 		return nil, fmt.Errorf("el helper de Whisper no está compilado — corre `./scripts/build-whisper-stt.sh`")
@@ -451,7 +468,7 @@ func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
 		Log:        d.ui.Log,
 		OnGPUCrash: d.store.MarkWhisperGPUBroken,
 		// Levels come from the helper because it, not the host, owns the microphone.
-		OnLevel: d.noteLevel,
+		OnLevel: func(level float64) { d.noteLevel(gen, level) },
 	}), nil
 }
 
@@ -460,21 +477,21 @@ func (d *Dictation) buildWhisperProvider() (stt.Provider, error) {
 // Every level goes through here, whoever measured it — the host's own capture for the cloud
 // providers, or the helper's reports for the local engines — so the meter and the peak mean the same
 // thing regardless of which engine ran.
-func (d *Dictation) noteLevel(level float64) {
+func (d *Dictation) noteLevel(gen int, level float64) {
 	d.mu.Lock()
 	// IGNORED WHEN NO SESSION IS RUNNING, and this is a correctness fix rather than tidiness.
 	//
-	// StopEngine resets the peak and then stops the helper, and the Apple one is only signalled 300 ms
+	// StopEngine detaches the run and then stops the helper, and the Apple one is only signalled 300 ms
 	// later (helper/provider.go). Levels arriving in that window used to seed the NEXT session's peak,
 	// so a dictation that heard nothing could be logged as having had audio — destroying the one line
 	// whose whole purpose is telling "no audio reached us" apart from "audio arrived and the engine
 	// returned nothing". Found by a cross-engine review.
-	if !d.metering {
+	if d.run == nil || d.run.gen != gen || gen <= d.stoppedThrough {
 		d.mu.Unlock()
 		return
 	}
-	if level > d.peakLevel {
-		d.peakLevel = level
+	if level > d.run.peakLevel {
+		d.run.peakLevel = level
 	}
 	d.mu.Unlock()
 	d.ui.EmitLevel(level)
@@ -482,82 +499,85 @@ func (d *Dictation) noteLevel(level float64) {
 
 // ---- capture -----------------------------------------------------------------
 
-func (d *Dictation) startCapture(provider stt.Provider) error {
-	cap, err := audio.StartCapture(d.store.LoadSettings().InputDeviceID, nil)
-	if err != nil {
-		return fmt.Errorf("microphone: %w", err)
+func (d *Dictation) openCapture(deviceID string, onLog func(string)) (captureStream, error) {
+	if d.captureOpener != nil {
+		return d.captureOpener(deviceID, onLog)
 	}
-	done := make(chan struct{})
+	return audio.StartCapture(deviceID, onLog)
+}
 
-	d.mu.Lock()
-	d.capture = cap
-	d.pumpDone = done
-	d.mu.Unlock()
+func (d *Dictation) startCapture(run *engineRun, provider stt.Provider) (bool, error) {
+	capture, err := d.openCapture(d.store.LoadSettings().InputDeviceID, nil)
+	if err != nil {
+		if !d.isCurrentRun(run) {
+			return false, nil
+		}
+		return false, fmt.Errorf("microphone: %w", err)
+	}
+	pumpStop := make(chan struct{})
+	if !d.attachCapture(run, capture, pumpStop) {
+		capture.Close()
+		return false, nil
+	}
 
-	go func() {
+	go func(run *engineRun, capture captureStream, pumpStop <-chan struct{}) {
 		for {
 			select {
-			case <-done:
+			case <-pumpStop:
 				return
-			case frame, ok := <-cap.Frames():
+			case frame, ok := <-capture.Frames():
 				if !ok {
 					return
 				}
-				provider.PushAudio(frame.PCM)
-				d.noteLevel(frame.Level)
-				// Any sound at all counts as activity for the idle guard. Using the
-				// transcript instead would stop a session whenever the provider was slow
-				// to recognise, which is exactly when the user is still talking.
-				if frame.Level > 0 {
-					d.noteActivity()
+				if !d.pushFrame(run, provider, frame) {
+					return
 				}
 			}
 		}
-	}()
-	return nil
+	}(run, capture, pumpStop)
+	return true, nil
 }
 
-func (d *Dictation) stopCapture() {
-	d.mu.Lock()
-	cap, done := d.capture, d.pumpDone
-	d.capture, d.pumpDone = nil, nil
-	d.mu.Unlock()
-
-	if done != nil {
-		close(done)
+func (d *Dictation) pushFrame(run *engineRun, provider stt.Provider, frame audio.Frame) bool {
+	if !d.isCurrentRun(run) {
+		return false
 	}
-	if cap != nil {
-		cap.Close()
+	provider.PushAudio(frame.PCM)
+	d.noteLevel(run.gen, frame.Level)
+	// Any sound at all counts as activity for the idle guard. Using the transcript instead
+	// would stop a session whenever the provider was slow to recognise, which is exactly
+	// when the user is still talking.
+	if frame.Level > 0 {
+		d.noteActivity(run)
 	}
-	d.ui.EmitLevel(0)
-
-	// Report what the microphone actually heard. A peak of zero is the single most useful fact when a
-	// dictation produced nothing: it separates "no audio reached us" from "audio arrived and the
-	// engine returned nothing", and no other line in the log distinguishes those.
-	d.mu.Lock()
-	peak := d.peakLevel
-	d.peakLevel = 0
-	// Closed BEFORE the peak is reported, so a late level from a helper that has not died yet cannot
-	// land between the reset and the next session's start.
-	d.metering = false
-	d.mu.Unlock()
-	d.ui.Log("MIC", fmt.Sprintf("peak level this session: %.2f", peak))
+	return true
 }
 
 // ---- timers ------------------------------------------------------------------
 
-func (d *Dictation) noteActivity() {
+func (d *Dictation) noteActivity(run *engineRun) {
 	d.mu.Lock()
-	d.lastActivity = time.Now()
+	if d.shuttingDown || d.run != run || run.gen <= d.stoppedThrough {
+		d.mu.Unlock()
+		return
+	}
+	run.lastActivity = time.Now()
 	d.mu.Unlock()
 }
 
-func (d *Dictation) startIdleGuard() {
+func (d *Dictation) startIdleGuard(run *engineRun) bool {
 	ticker := time.NewTicker(5 * time.Second)
 	stop := make(chan struct{})
 
 	d.mu.Lock()
-	d.idleTicker, d.idleStop = ticker, stop
+	if d.shuttingDown || d.run != run || run.gen <= d.stoppedThrough {
+		d.mu.Unlock()
+		ticker.Stop()
+		close(stop)
+		return false
+	}
+	run.idleTicker = ticker
+	run.idleStop = stop
 	d.mu.Unlock()
 
 	go func() {
@@ -566,50 +586,38 @@ func (d *Dictation) startIdleGuard() {
 			case <-stop:
 				return
 			case <-ticker.C:
+				if !d.isCurrentRun(run) {
+					return
+				}
 				d.mu.Lock()
-				last := d.lastActivity
+				last := run.lastActivity
 				d.mu.Unlock()
 				if d.controller.Desired() && session.IsIdleExpired(last, time.Now(), idleLimit) {
 					d.ui.Log("IDLE", "auto-stop after 60s of silence (billing safety)")
-					d.controller.StopByGuard()
+					d.controller.StopByGuard(run.gen)
 					return
 				}
 			}
 		}
 	}()
-}
-
-func (d *Dictation) clearTimers() {
-	d.mu.Lock()
-	ticker, stop, reconnect := d.idleTicker, d.idleStop, d.reconnect
-	d.idleTicker, d.idleStop, d.reconnect = nil, nil, nil
-	d.mu.Unlock()
-
-	if ticker != nil {
-		ticker.Stop()
-	}
-	if stop != nil {
-		close(stop)
-	}
-	if reconnect != nil {
-		reconnect.Stop()
-	}
+	return true
 }
 
 // Shutdown stops everything on the way out. A global event tap or an open microphone left
 // behind by a quitting app is a system-wide problem, not just ours.
 func (d *Dictation) Shutdown() {
-	d.clearTimers()
-	d.stopCapture()
-
 	d.mu.Lock()
-	provider := d.provider
-	d.provider = nil
+	d.shuttingDown = true
+	run := d.run
+	d.run = nil
+	wait := d.reconnect
+	d.reconnect = nil
 	d.mu.Unlock()
 
-	if provider != nil {
-		provider.Stop()
+	if wait != nil {
+		wait.stop()
 	}
+	d.cleanupEngineRun(run)
 }
 
 // Compile-time proof that the wiring satisfies the tested contract.

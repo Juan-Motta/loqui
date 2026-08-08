@@ -139,6 +139,16 @@ ship commit). See `shared/rules/docs-layout.md`.
 
 ## Unreleased
 
+### Reconnects now replace resources instead of orphaning them
+
+- A retryable failure now closes the failed provider and microphone before waiting for the next
+  attempt. Audio is deliberately not recorded or buffered during backoff.
+- Providers, captures, pumps, idle guards, and reconnect timers are owned by their controller
+  generation, so a stale stop cannot close newer resources and a user stop cannot be undone by a
+  timer or resource that returns late.
+- Retry delays, the cumulative six-retry budget, transcript delivery, and provider error
+  classification are unchanged.
+
 ### Reconnect retries are now a real bound
 
 - One dictation can schedule at most six reconnects even when every replacement connection opens

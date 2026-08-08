@@ -6,6 +6,7 @@
 package session
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -16,15 +17,17 @@ import (
 // fakeIO records every side effect, which is how these tests assert on decisions rather
 // than on internal state.
 type fakeIO struct {
-	starts     []int
-	stops      []int
-	shows      int
-	hides      int
-	overlays   []OverlayState
-	delivered  []delivery
-	reconnects []time.Duration
-	pending    []func()
-	exhausted  []int
+	starts        []int
+	stops         []int
+	shows         int
+	hides         int
+	overlays      []OverlayState
+	delivered     []delivery
+	reconnects    []time.Duration
+	reconnectGens []int
+	pending       []func()
+	exhausted     []int
+	effects       []string
 }
 
 type delivery struct {
@@ -33,17 +36,22 @@ type delivery struct {
 	trigger  Mode
 }
 
-func (f *fakeIO) StartEngine(gen int)        { f.starts = append(f.starts, gen) }
-func (f *fakeIO) StopEngine(gen int)         { f.stops = append(f.stops, gen) }
+func (f *fakeIO) StartEngine(gen int) { f.starts = append(f.starts, gen) }
+func (f *fakeIO) StopEngine(gen int) {
+	f.stops = append(f.stops, gen)
+	f.effects = append(f.effects, fmt.Sprintf("stop:%d", gen))
+}
 func (f *fakeIO) ShowOverlay()               { f.shows++ }
 func (f *fakeIO) HideOverlay()               { f.hides++ }
 func (f *fakeIO) Overlay(state OverlayState) { f.overlays = append(f.overlays, state) }
 func (f *fakeIO) DeliverFinal(text, language string, trigger Mode) {
 	f.delivered = append(f.delivered, delivery{text, language, trigger})
 }
-func (f *fakeIO) ScheduleReconnect(d time.Duration, fn func()) {
+func (f *fakeIO) ScheduleReconnect(gen int, d time.Duration, fn func()) {
+	f.reconnectGens = append(f.reconnectGens, gen)
 	f.reconnects = append(f.reconnects, d)
 	f.pending = append(f.pending, fn)
+	f.effects = append(f.effects, "schedule")
 }
 func (f *fakeIO) ReconnectExhausted(attempts int) {
 	f.exhausted = append(f.exhausted, attempts)
@@ -196,7 +204,7 @@ func TestRequestStopDrainsATrailingFinal(t *testing.T) {
 func TestRecoversFromAStopIssuedWhileStarting(t *testing.T) {
 	c, io := newFixture(ModeHold)
 	c.Press()
-	c.StopByGuard() // before 'started'
+	c.StopByGuard(c.Generation()) // before 'started'
 	if len(io.stops) != 1 {
 		t.Fatalf("stops = %v, want one", io.stops)
 	}
@@ -225,6 +233,27 @@ func TestSetModeOnlyAppliesWhenIdle(t *testing.T) {
 
 // ---- reconnect ---------------------------------------------------------------
 
+func TestRetryStopsFailedEngineBeforeSchedulingReplacement(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	io.effects = nil
+
+	c.ProviderEvent(stt.Event{
+		Type: stt.Canceled, Gen: 1,
+		ErrorCode: "ConnectionFailure",
+	})
+
+	want := []string{"stop:1", "schedule"}
+	if !reflect.DeepEqual(io.effects, want) {
+		t.Fatalf("retry effects = %v, want %v", io.effects, want)
+	}
+	if !c.Desired() || io.hides != 0 || len(io.delivered) != 0 {
+		t.Fatalf("retry ended the dictation: desired=%t hides=%d deliveries=%v",
+			c.Desired(), io.hides, io.delivered)
+	}
+}
+
 func TestReconnectUsesANewGeneration(t *testing.T) {
 	c, io := newFixture(ModeToggle)
 	c.Press()
@@ -237,6 +266,12 @@ func TestReconnectUsesANewGeneration(t *testing.T) {
 	}
 	if len(io.pending) != 1 {
 		t.Fatalf("pending reconnects = %d, want 1", len(io.pending))
+	}
+	if want := []int{1}; !reflect.DeepEqual(io.stops, want) {
+		t.Fatalf("stops = %v, want %v", io.stops, want)
+	}
+	if want := []int{2}; !reflect.DeepEqual(io.reconnectGens, want) {
+		t.Fatalf("reconnect generations = %v, want %v", io.reconnectGens, want)
 	}
 	io.pending[0]()
 	found := false
@@ -261,8 +296,8 @@ func TestReconnectAttemptsAreCapped(t *testing.T) {
 		t.Errorf("scheduled %d reconnects, want exactly %d — unbounded retry is a billing loop",
 			len(io.reconnects), maxReconnects)
 	}
-	if len(io.stops) != 1 || c.Desired() {
-		t.Errorf("stops=%d desired=%t, want one stop and desired=false after the reconnect budget", len(io.stops), c.Desired())
+	if want := []int{1, 2, 3, 4, 5, 6, 7}; !reflect.DeepEqual(io.stops, want) || c.Desired() {
+		t.Errorf("stops=%v desired=%t, want %v and desired=false after the reconnect budget", io.stops, c.Desired(), want)
 	}
 	if want := []int{maxReconnects}; !reflect.DeepEqual(io.exhausted, want) {
 		t.Errorf("reconnect exhaustion signals = %v, want %v", io.exhausted, want)
@@ -297,8 +332,8 @@ func TestReconnectBudgetSurvivesShortLivedSuccessfulConnections(t *testing.T) {
 	if len(io.reconnects) != maxReconnects {
 		t.Errorf("scheduled %d reconnects, want %d", len(io.reconnects), maxReconnects)
 	}
-	if len(io.stops) != 1 || c.Desired() {
-		t.Errorf("stops=%d desired=%t, want one stop and desired=false after the reconnect budget", len(io.stops), c.Desired())
+	if want := []int{1, 2, 3, 4, 5, 6, 7}; !reflect.DeepEqual(io.stops, want) || c.Desired() {
+		t.Errorf("stops=%v desired=%t, want %v and desired=false after the reconnect budget", io.stops, c.Desired(), want)
 	}
 	wantDelays := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second}
 	if !reflect.DeepEqual(io.reconnects, wantDelays) {
@@ -364,8 +399,8 @@ func TestNewDictationGetsAFreshReconnectBudget(t *testing.T) {
 	if got := len(io.reconnects) - beforeReconnects; got != maxReconnects {
 		t.Errorf("new dictation scheduled %d reconnects, want a fresh budget of %d", got, maxReconnects)
 	}
-	if got := len(io.stops) - beforeStops; got != 1 || c.Desired() {
-		t.Errorf("new dictation stops=%d desired=%t, want one stop and desired=false", got, c.Desired())
+	if got := len(io.stops) - beforeStops; got != maxReconnects+1 || c.Desired() {
+		t.Errorf("new dictation stops=%d desired=%t, want %d stops and desired=false", got, c.Desired(), maxReconnects+1)
 	}
 	if got := len(io.exhausted) - beforeExhausted; got != 1 {
 		t.Errorf("new dictation exhaustion signals=%d, want 1", got)
@@ -393,8 +428,8 @@ func TestStaleCancelDoesNotConsumeReconnectBudget(t *testing.T) {
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
 	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
 	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
-	if len(io.reconnects) != 1 || len(io.stops) != 0 {
-		t.Fatalf("stale cancel changed effects: reconnects=%d stops=%d, want 1 and 0", len(io.reconnects), len(io.stops))
+	if want := []int{1}; len(io.reconnects) != 1 || !reflect.DeepEqual(io.stops, want) {
+		t.Fatalf("stale cancel changed effects: reconnects=%d stops=%v, want 1 and %v", len(io.reconnects), io.stops, want)
 	}
 
 	// Six more current-generation cancels consume the five remaining schedules, then stop.
@@ -402,8 +437,8 @@ func TestStaleCancelDoesNotConsumeReconnectBudget(t *testing.T) {
 		c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: c.Generation(), ErrorCode: "ConnectionFailure"})
 	}
 
-	if len(io.reconnects) != maxReconnects || len(io.stops) != 1 {
-		t.Errorf("reconnects=%d stops=%d, want %d reconnects and one stop", len(io.reconnects), len(io.stops), maxReconnects)
+	if want := []int{1, 2, 3, 4, 5, 6, 7}; len(io.reconnects) != maxReconnects || !reflect.DeepEqual(io.stops, want) {
+		t.Errorf("reconnects=%d stops=%v, want %d reconnects and %v", len(io.reconnects), io.stops, maxReconnects, want)
 	}
 }
 
@@ -439,6 +474,9 @@ func TestBackoffGrows(t *testing.T) {
 	if !reflect.DeepEqual(io.reconnects, want) {
 		t.Errorf("delays = %v, want %v", io.reconnects, want)
 	}
+	if want := []int{1, 2, 3}; !reflect.DeepEqual(io.stops, want) {
+		t.Errorf("stops = %v, want %v", io.stops, want)
+	}
 }
 
 func TestNetworkCancelSchedulesAReconnect(t *testing.T) {
@@ -446,8 +484,8 @@ func TestNetworkCancelSchedulesAReconnect(t *testing.T) {
 	c.Press()
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
 	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, Error: "StatusCode: 1006 connection"})
-	if len(io.reconnects) != 1 || len(io.stops) != 0 {
-		t.Errorf("reconnects=%d stops=%d, want 1 and 0", len(io.reconnects), len(io.stops))
+	if want := []int{1}; len(io.reconnects) != 1 || !reflect.DeepEqual(io.stops, want) {
+		t.Errorf("reconnects=%d stops=%v, want 1 and %v", len(io.reconnects), io.stops, want)
 	}
 }
 
@@ -488,8 +526,8 @@ func TestTransientErrorCodeReconnects(t *testing.T) {
 	c.Press()
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
 	c.ProviderEvent(stt.Event{Type: stt.Canceled, Gen: 1, ErrorCode: "ConnectionFailure"})
-	if len(io.reconnects) != 1 || len(io.stops) != 0 {
-		t.Errorf("reconnects=%d stops=%d, want 1 and 0", len(io.reconnects), len(io.stops))
+	if want := []int{1}; len(io.reconnects) != 1 || !reflect.DeepEqual(io.stops, want) {
+		t.Errorf("reconnects=%d stops=%v, want 1 and %v", len(io.reconnects), io.stops, want)
 	}
 }
 
@@ -590,7 +628,7 @@ func TestIdleGuardDeliversWhatWasAlreadySaid(t *testing.T) {
 	c.Press()
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
 	c.ProviderEvent(stt.Event{Type: stt.Final, Gen: 1, Text: "dicho antes del silencio"})
-	c.StopByGuard()
+	c.StopByGuard(c.Generation())
 	if want := []string{"dicho antes del silencio"}; !reflect.DeepEqual(io.texts(), want) {
 		t.Errorf("delivered %v, want %v", io.texts(), want)
 	}
@@ -601,10 +639,28 @@ func TestLateStoppedAfterAGuardStopDoesNotDeliverTwice(t *testing.T) {
 	c.Press()
 	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
 	c.ProviderEvent(stt.Event{Type: stt.Final, Gen: 1, Text: "una vez"})
-	c.StopByGuard()
+	c.StopByGuard(c.Generation())
 	c.ProviderEvent(stt.Event{Type: stt.Stopped, Gen: 1})
 	if len(io.delivered) != 1 {
 		t.Errorf("deliveries = %d, want 1 — pasting twice is worse than not pasting", len(io.delivered))
+	}
+}
+
+func TestStaleIdleGuardCannotStopNewGeneration(t *testing.T) {
+	c, io := newFixture(ModeToggle)
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 1})
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Stopped, Gen: 1})
+	c.Press()
+	c.ProviderEvent(stt.Event{Type: stt.Started, Gen: 2})
+	stops := len(io.stops)
+
+	c.StopByGuard(1)
+
+	if !c.Desired() || len(io.stops) != stops {
+		t.Fatalf("stale idle guard stopped generation 2: desired=%t stops=%v",
+			c.Desired(), io.stops)
 	}
 }
 
@@ -782,13 +838,13 @@ func (r *reentrantIO) StartEngine(gen int) {
 	})
 	r.controller.ProviderEvent(stt.Event{Type: stt.Stopped, Gen: gen})
 }
-func (r *reentrantIO) StopEngine(int)                          {}
-func (r *reentrantIO) ShowOverlay()                            {}
-func (r *reentrantIO) HideOverlay()                            {}
-func (r *reentrantIO) Overlay(OverlayState)                    {}
-func (r *reentrantIO) DeliverFinal(string, string, Mode)       {}
-func (r *reentrantIO) ScheduleReconnect(time.Duration, func()) {}
-func (r *reentrantIO) ReconnectExhausted(int)                  {}
+func (r *reentrantIO) StopEngine(int)                               {}
+func (r *reentrantIO) ShowOverlay()                                 {}
+func (r *reentrantIO) HideOverlay()                                 {}
+func (r *reentrantIO) Overlay(OverlayState)                         {}
+func (r *reentrantIO) DeliverFinal(string, string, Mode)            {}
+func (r *reentrantIO) ScheduleReconnect(int, time.Duration, func()) {}
+func (r *reentrantIO) ReconnectExhausted(int)                       {}
 
 // A provider that delivers a whole dictation synchronously from StartEngine — the local
 // helpers can finish that fast on short audio — must not deadlock either.
@@ -830,5 +886,5 @@ func (s *syncSessionIO) Overlay(OverlayState) {}
 func (s *syncSessionIO) DeliverFinal(text, _ string, _ Mode) {
 	s.delivered = text
 }
-func (s *syncSessionIO) ScheduleReconnect(time.Duration, func()) {}
-func (s *syncSessionIO) ReconnectExhausted(int)                  {}
+func (s *syncSessionIO) ScheduleReconnect(int, time.Duration, func()) {}
+func (s *syncSessionIO) ReconnectExhausted(int)                       {}

@@ -114,7 +114,9 @@ newer run.
 
 The audio pump closes over the run's own capture, provider, and cancellation signal rather than
 reading mutable top-level handles. This prevents a replacement generation from changing the objects
-used by an older pump.
+used by an older pump. Before each provider push it re-checks run ownership, so frames already queued
+inside the capture cannot drain after detach. Activity updates carry the same generation and cannot
+delay a newer run's idle guard.
 
 ### Stop transaction
 
@@ -146,8 +148,8 @@ error text do not change.
 
 ## Test strategy
 
-Tests use provider and capture fakes through narrow app-owned construction seams; they do not open a
-real microphone or contact a provider.
+Tests use provider, capture, and timer fakes through narrow app-owned construction seams; they do not
+open a real microphone, contact a provider, or depend on wall-clock timing.
 
 - A controller regression proves that a retryable cancel stops the failed generation before it
   schedules the reconnect, without hiding the overlay or delivering the buffered transcript.
@@ -159,6 +161,8 @@ real microphone or contact a provider.
   closed instead of published.
 - A stale-stop regression proves that stopping generation `N` cannot close generation `N+1`.
 - A duplicate-stop regression proves teardown is idempotent.
+- A detached-pump regression proves buffered capture frames are dropped before `Provider.PushAudio`,
+  and a stale activity regression proves an old run cannot reset the new run's idle clock.
 - Existing session regressions continue to prove transcript continuity, overlay state, exact backoff,
   six-retry exhaustion, and stale-event rejection.
 - The affected app and session packages run uncached and under Go's race detector, followed by the
@@ -170,8 +174,8 @@ automated concurrency regressions as evidence.
 
 ## Tradeoffs
 
-The chosen design adds explicit lifecycle state and two small construction seams to a class that
-previously stored raw resource handles. That extra state is justified by the concurrency boundary: a
-simple stop-before-retry call cannot close the late-start race. The user may lose speech spoken during
-backoff, but the overlay already reports reconnecting, no hidden audio is retained, and no abandoned
-capture or metered provider survives.
+The chosen design adds explicit lifecycle state and narrow construction seams for provider,
+microphone, and timer creation to a class that previously stored raw resource handles. That extra
+state is justified by the concurrency boundary: a simple stop-before-retry call cannot close the
+late-start race. The user may lose speech spoken during backoff, but the overlay already reports
+reconnecting, no hidden audio is retained, and no abandoned capture or metered provider survives.
