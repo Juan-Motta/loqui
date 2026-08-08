@@ -138,7 +138,6 @@ loqui.app/
       libggml*.dylib
     Resources/
       icons.icns
-      Assets.car                 # when generated
       models/ggml-small.bin      # only with LOQUI_BUNDLE_MODEL=1
     Info.plist
 ```
@@ -148,6 +147,9 @@ loqui.app/
   preserved rather than flattened into duplicate files.
 - `Contents/Resources` contains only non-executable data.
 - Framework copies use a symlink-preserving tool such as `ditto`.
+- `icons.icns` is required. `Assets.car` is intentionally absent: the checked-in Wails asset task
+  generates only the `.icns`, because this project's macOS 26 icon workaround records that an asset
+  catalog degrades the icon. Assembly and audit reject a reintroduced `Assets.car`.
 
 `internal/app.HelperPath` resolves bundled executable helpers from `Contents/Helpers` and keeps the
 existing `helpers/bin` development fallback. `WhisperModelPath` resolves the optional bundled model
@@ -206,10 +208,12 @@ explicit signing pass because deep verification is an audit, not an instruction 
 
 ## Release flow
 
-1. **Preflight** — deterministically restore generated plist IDs, privacy strings, and versions from
-   `build/config.yml`; then validate host arm64, Apple tools, exactly selected Developer ID identity,
-   notarization profile, source helpers/framework, and a unique temporary staging target.
-2. **Build/package** — use the existing Wails/Taskfile compilation, assemble the standard bundle in a
+1. **Preflight** — validate, without mutating the checkout, that generated plist IDs, privacy strings,
+   and versions match `build/config.yml`; then validate host arm64, Apple tools, exactly selected
+   Developer ID identity, notarization profile, source helpers/framework, and a unique temporary
+   staging target.
+2. **Build/package** — use the existing Wails/Taskfile compilation, whose `darwin:build` dependency
+   chain regenerates the production frontend and `icons.icns`; assemble the standard bundle in a
    staging directory, and keep the public output path untouched. An ad-hoc-signed artifact produced
    by ordinary Wails packaging is staging input only: the release signer replaces its signatures,
    and the intermediate app is neither launched nor published.
@@ -242,8 +246,12 @@ explicit signing pass because deep verification is an audit, not an instruction 
 - Missing or ambiguous identity, invalid notarization profile, failed signature, unexpected
   dependency, rejected notarization, failed staple, or failed Gatekeeper assessment exits nonzero.
 - A notary rejection prints the submission ID and the path to the saved log, not a generic failure.
+- Notary-log retrieval is attempted with a bounded retry while `set -e` is suspended; every failure
+  path preserves the raw submission response and any available log before staging cleanup.
 - Logs may contain certificate names, Team IDs, code identifiers, and Apple diagnostic text. They
   must not contain passwords, private keys, or environment dumps.
+- Published text evidence normalizes the unique staging prefix to `$STAGE`, so machine-specific
+  `/Users/...` paths never leak into an otherwise valid evidence set.
 - The release script never falls back to ad-hoc signing.
 
 ## Migration behavior
@@ -268,9 +276,11 @@ ad-hoc helper's existing TCC record.
   cannot silently collapse the two TCC identities again.
 - Release-script tests run against fake Apple tools in a temporary directory. They prove preflight
   rejection, inside-out command order, stable helper identifiers, exact per-executable entitlements,
-  no `--deep` signing, notary warning/error handling, failure propagation, and atomic publication.
+  the exact ad-hoc fallback options, no `--deep` signing, notary warning/error/log-retry handling,
+  real-file-only ticket manifests, failure propagation, and atomic publication.
 - A package audit test examines a real assembled app and fails for Mach-O code in Resources,
-  non-arm64 code, missing required helpers, broken symlinks, or forbidden load/rpath prefixes.
+  non-arm64 code, missing `icons.icns`, unexpected `Assets.car`, missing required helpers, broken
+  symlinks, signing-blocking xattrs, or forbidden load/rpath prefixes.
 - Mutation checks deliberately remove one order/dependency/layout/runtime/timestamp/entitlement
   guard at a time and confirm the focused regression fails.
 

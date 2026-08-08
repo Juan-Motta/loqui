@@ -61,7 +61,9 @@ Checked: 2026-08-07
   checked 2026-08-07.
 - `NSSpeechRecognitionUsageDescription` remains in both app plists for the Apple Speech authorization
   request. No additional Speech entitlement is documented for this non-sandboxed macOS Developer ID
-  path, so one must not be invented; the real signed Apple engine remains an E2E requirement. Source:
+  path, and the exact reviewer-suggested
+  `com.apple.security.personal-information.speech-recognition` string is absent from the installed
+  Xcode 26.6 SDK/specifications. It must not be invented; the real signed Apple engine remains an E2E requirement. Source:
   [NSSpeechRecognitionUsageDescription](https://developer.apple.com/documentation/bundleresources/information-property-list/nsspeechrecognitionusagedescription),
   checked 2026-08-07.
 - The checked-in Wails version is `v3.0.0-alpha2.119` (`go.mod`). Its local `wails3 tool sign`
@@ -72,6 +74,10 @@ Checked: 2026-08-07
   `Contents/Resources/helpers` (`build/darwin/Taskfile.yml`). `internal/app/paths.go` reads all of them
   from that same directory. The release design must separate executable code, dynamic libraries, and
   model data.
+- `build/darwin:build` already depends on the production frontend and icon generators. The icon
+  generator intentionally emits `icons.icns` only and documents that `Assets.car` degrades the icon
+  on macOS 26; release validation must therefore require the `.icns` and reject `Assets.car`, not
+  mistake the intentional absence of an asset catalog for a skipped build.
 
 ### Hidden portability blocker
 
