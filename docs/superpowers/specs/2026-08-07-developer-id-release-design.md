@@ -179,6 +179,11 @@ not left with an invalid signature.
 Development from `helpers/bin` must continue to work. The implementation may retain a local rpath in
 the development artifact, but the packaged artifact must contain only release-safe references.
 
+Release never consumes that ambient development directory. It rebuilds `globe-listener`,
+`macos-stt`, `whisper-stt`, and the native dylibs into unique staging from the current repo commit
+and pinned whisper.cpp commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`, then records both
+commits and every packaged Mach-O SHA-256 as provenance.
+
 ## Signing identities and order
 
 Stable identifiers are fixed as follows:
@@ -197,7 +202,8 @@ The release script signs from the inside out:
 3. The top-level app bundle.
 4. The completed DMG after it is created.
 
-Developer ID code uses a secure timestamp. Developer ID and Apple Development main executables use
+Developer ID code uses a secure timestamp. Apple Development signing explicitly disables network
+timestamping so daily builds work offline. Developer ID and Apple Development main executables use
 Hardened Runtime. Apple's documented resource restrictions require Audio Input on the host,
 `macos-stt`, and `whisper-stt`; the host also requires Apple Events to paste into other apps.
 `globe-listener`, library code, and the framework receive no entitlement file. Ad-hoc packages use
@@ -213,7 +219,8 @@ explicit signing pass because deep verification is an audit, not an instruction 
    Developer ID identity, notarization profile, source helpers/framework, and a unique temporary
    staging target.
 2. **Build/package** — use the existing Wails/Taskfile compilation, whose `darwin:build` dependency
-   chain regenerates the production frontend and `icons.icns`; assemble the standard bundle in a
+   chain regenerates the production frontend and `icons.icns`; rebuild every helper/native dylib
+   into staging from pinned/current sources; assemble the standard bundle in a
    staging directory, and keep the public output path untouched. An ad-hoc-signed artifact produced
    by ordinary Wails packaging is staging input only: the release signer replaces its signatures,
    and the intermediate app is neither launched nor published.
@@ -278,11 +285,11 @@ ad-hoc helper's existing TCC record.
   rejection, inside-out command order, stable helper identifiers, exact per-executable entitlements,
   the exact ad-hoc fallback options, no `--deep` signing, notary warning/error/log-retry handling,
   real-file-only ticket manifests, failure propagation, and atomic publication.
+- Tests prove release assembly accepts only the freshly built staging helper directory and that
+  signature verification rejects any nested Mach-O with a different Developer ID Team ID.
 - A package audit test examines a real assembled app and fails for Mach-O code in Resources,
   non-arm64 code, missing `icons.icns`, unexpected `Assets.car`, missing required helpers, broken
   symlinks, signing-blocking xattrs, or forbidden load/rpath prefixes.
-- Mutation checks deliberately remove one order/dependency/layout/runtime/timestamp/entitlement
-  guard at a time and confirm the focused regression fails.
 
 ### Real local release
 

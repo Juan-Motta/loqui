@@ -94,6 +94,10 @@ Checked: 2026-08-07
   absolute `/opt/homebrew/...` path. Sanitizing only `whisper-stt` is insufficient; every copied real
   dylib must have portable rpaths/install names before signing, and the auditor must inspect
   `otool -L`, `otool -D`, and `LC_RPATH` for every packaged Mach-O.
+- All three helper outputs live in gitignored `helpers/bin`, and the current Whisper script clones
+  the moving upstream default branch. A release that merely checks those files can notarize stale
+  local binaries. Release must rebuild into unique staging, pin whisper.cpp to the measured commit,
+  and record repo/upstream commits plus packaged Mach-O hashes.
 - The current Whisper build has `GGML_METAL_EMBED_LIBRARY=ON`, and local `otool` inspection finds the
   `__DATA,__ggml_metallib` section in `libggml-metal.0.dylib`. The release must assert that embedded
   section instead of copying an external `.metallib` resource.
@@ -152,6 +156,8 @@ and staple the accepted artifact. This is the safer template for Loqui.
 - A repo-owned release script/task should be the single authority for bundle layout, signing order,
   DMG construction, notarization, and verification. It should fail before signing if the selected
   identity, Keychain profile, expected architecture, or required nested binaries are missing.
+- Rebuild every helper during release rather than consuming `helpers/bin`; keep that directory only
+  as the direct-development output.
 - Move helper executables to `Contents/Helpers`, move Whisper/ggml/SDL dylibs to
   `Contents/Frameworks`, and keep the optional model under `Contents/Resources`. Rewrite the
   Whisper helper and every real dylib's SDL/install-name/rpath metadata so no Homebrew or checkout
