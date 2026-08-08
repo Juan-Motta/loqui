@@ -249,14 +249,17 @@ Change `build/darwin/Info.dev.plist` to `com.jualopezmo.loquigo.dev`. In `script
 ```bash
 PRODUCTION_ID="com.jualopezmo.loquigo"
 DEVELOPMENT_ID="com.jualopezmo.loquigo.dev"
+MINIMUM_SYSTEM_VERSION="12.0.0"
 
 set_string build/darwin/Info.plist CFBundleIdentifier "$PRODUCTION_ID"
 set_string build/darwin/Info.dev.plist CFBundleIdentifier "$DEVELOPMENT_ID"
+set_string build/darwin/Info.plist LSMinimumSystemVersion "$MINIMUM_SYSTEM_VERSION"
+set_string build/darwin/Info.dev.plist LSMinimumSystemVersion "$MINIMUM_SYSTEM_VERSION"
 ```
 
 Read `info.version` with the same anchored `awk` expression used by the release script and validate
-it as `MAJOR.MINOR.PATCH`. Default plist write mode sets the two identifiers, shared usage strings, and
-both version keys in both plists. `--check` computes the same expected values and compares every key
+it as `MAJOR.MINOR.PATCH`. Default plist write mode sets the two identifiers, shared usage strings,
+`LSMinimumSystemVersion`, and both version keys in both plists. `--check` computes the same expected values and compares every key
 without writing. Thus a single `build/config.yml` bump has one deterministic maintenance command,
 while release preflight can detect drift without first erasing the evidence.
 
@@ -273,6 +276,8 @@ test "$(plutil -extract CFBundleShortVersionString raw build/darwin/Info.plist)"
 test "$(plutil -extract CFBundleVersion raw build/darwin/Info.plist)" = "$want_version"
 test "$(plutil -extract CFBundleShortVersionString raw build/darwin/Info.dev.plist)" = "$want_version"
 test "$(plutil -extract CFBundleVersion raw build/darwin/Info.dev.plist)" = "$want_version"
+test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.plist)" = "12.0.0"
+test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.dev.plist)" = "12.0.0"
 ./scripts/patch-plists.sh --check
 ```
 
@@ -474,10 +479,12 @@ Create `scripts/macos-bundle.sh` with `set -euo pipefail`, explicit option parsi
    Frameworks. Enumerate with `LC_ALL=C sort` and reject missing or broken chains.
 7. Copy the model with `cp -L` only when `LOQUI_BUNDLE_MODEL=1`.
 8. Enumerate every real packaged Mach-O (main executable, three helpers, every real dylib, and the
-   Azure framework executable) with stable ordering and delete all inherited `LC_RPATH` entries.
-   Give the main executable exactly `@executable_path/../Frameworks`, packaged `whisper-stt`
-   exactly `@loader_path/../Frameworks`, and every real dylib exactly `@loader_path`; the other two
-   helpers and framework executable receive no added rpath.
+   Azure framework executable) with stable ordering. For the main executable, packaged
+   `whisper-stt`, and every real dylib, replace inherited rpaths with their exact bundle forms:
+   `@executable_path/../Frameworks`, `@loader_path/../Frameworks`, and `@loader_path` respectively.
+   For `globe-listener`, `macos-stt`, and the Azure framework executable, preserve existing rpaths
+   that already match the system/token allowlist and delete only forbidden absolute/toolchain/
+   checkout values; do not add new rpaths.
 9. Change the packaged Whisper helper's SDL `/opt/homebrew/...` reference to
    `@rpath/libSDL2-2.0.0.dylib`. Require every real dylib to have an `@rpath/...` ID and set SDL's ID
    explicitly to its `@rpath` name.
@@ -630,8 +637,9 @@ Create `scripts/macos-audit.sh` and enforce these checks in order:
    diagnostics, never as the security boundary. Every dylib ID must begin `@rpath/`.
 7. Every packaged real dylib has only the intentional portable rpath (`@loader_path`); the Whisper
    helper has only `@loader_path/../Frameworks`; the main executable has only
-   `@executable_path/../Frameworks`; every other package-owned Mach-O has no `LC_RPATH` unless an
-   explicit allowlisted requirement is later documented and tested.
+   `@executable_path/../Frameworks`. The two Swift helpers and Azure framework may preserve only
+   rpaths already admitted by the same `/usr/lib/`, `/System/`, and token allowlist; forbidden
+   absolute/toolchain/checkout rpaths fail.
 8. The real `libggml-metal` target contains section `__DATA,__ggml_metallib`; no external Metal
    source or `.metallib` appears under Resources.
 9. `com.apple.ResourceFork`, `com.apple.FinderInfo`, and `com.apple.quarantine` are absent throughout
@@ -706,7 +714,7 @@ Loqui.app
 
 For each helper, assert `--identifier` uses its exact production suffix. Assert the framework signing
 target is the `.framework` bundle root (Apple's documented code-item boundary), while the auditor
-separately resolves its `Versions/A/...` executable. Assert release/development signing applies:
+separately resolves its `Versions/A/...` executable. Assert release signing applies:
 
 - app: `--options runtime --timestamp --entitlements build/darwin/Loqui.entitlements`;
 - `macos-stt` and `whisper-stt`: `--options runtime --timestamp --entitlements build/darwin/LoquiAudioHelper.entitlements`;
@@ -724,6 +732,10 @@ continuity warning, and no `--timestamp`, `--options runtime`, or `--entitlement
 explicit ad-hoc channel and assert its matching identifiers and the same option exclusions. Across
 the script, signing calls contain zero `--deep`; the one read-only final verification call contains
 it exactly once.
+
+The explicit `adhoc` channel signs a production-plist package and therefore uses the literal
+production helper identifiers `com.jualopezmo.loquigo.globe-listener`,
+`com.jualopezmo.loquigo.macos-stt`, and `com.jualopezmo.loquigo.whisper-stt`; it never uses `.dev`.
 
 - [ ] **Step 3: Run signing tests and confirm RED**
 
@@ -764,7 +776,9 @@ the exact keys and reject any extra entitlement. Do not add an undocumented Spee
 
 - [ ] **Step 6: Implement explicit signing order**
 
-Determine helper identifiers from the channel, not from a caller-provided arbitrary string. The app
+Determine helper identifiers from the channel, not from a caller-provided arbitrary string:
+`release` and explicit `adhoc` use the production set; `development`, including its `-` fallback,
+uses `.dev`. The app
 identifier is derived from its audited plist and verified afterwards. Sign:
 
 1. Each real raw dylib file in stable sorted order.
@@ -1138,12 +1152,15 @@ assert_contains build/darwin/Taskfile.yml "OUTPUT: '{{.OUTPUT}}'"
 assert_contains build/darwin/Taskfile.yml "PORTABLE: '{{.PORTABLE | default \"false\"}}'"
 assert_contains build/darwin/Taskfile.yml "common:build:frontend"
 assert_contains build/darwin/Taskfile.yml "common:generate:icons"
+assert_not_contains build/Taskfile.yml "-iconcomposerinput"
+assert_not_contains build/Taskfile.yml "-macassetdir"
 assert_not_contains build/darwin/Taskfile.yml "wails3 tool sign"
 assert_contains scripts/task.sh 'WAILS_VERSION="v3.0.0-alpha2.119"'
 assert_contains scripts/task.sh 'github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}'
 assert_contains build/Taskfile.yml "./scripts/update-build-assets.sh"
 assert_contains scripts/patch-plists.sh "CFBundleShortVersionString"
 assert_contains scripts/patch-plists.sh "CFBundleVersion"
+assert_contains scripts/patch-plists.sh "LSMinimumSystemVersion"
 assert_contains scripts/macos-audit.sh "NSMicrophoneUsageDescription"
 assert_contains scripts/macos-audit.sh "NSSpeechRecognitionUsageDescription"
 assert_contains scripts/macos-audit.sh "NSAppleEventsUsageDescription"
@@ -1270,9 +1287,12 @@ when `security find-identity` still reports zero:
 
 ```bash
 VERSION="$(awk '/^info:/{in_info=1; next} in_info && /^  version:/{gsub(/["'\'' ]/, "", $2); print $2; exit}' build/config.yml)"
+LOQUI_SKIP_MODEL=1 ./scripts/build-macos-helpers.sh
 ./scripts/task.sh package
+[ ! -e build/darwin/Assets.car ]
 ./scripts/macos-audit.sh --channel production --version "$VERSION" bin/loqui.app
 ./scripts/task.sh package
+[ ! -e build/darwin/Assets.car ]
 ./scripts/macos-audit.sh --channel production --version "$VERSION" bin/loqui.app
 
 dev_stage="$(mktemp -d "${TMPDIR:-/tmp}/loqui-dev-package.XXXXXX")"
