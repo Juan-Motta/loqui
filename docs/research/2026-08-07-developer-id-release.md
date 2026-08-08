@@ -97,7 +97,7 @@ Checked: 2026-08-07
 - All three helper outputs live in gitignored `helpers/bin`, and the current Whisper script clones
   the moving upstream default branch. A release that merely checks those files can notarize stale
   local binaries. Release must rebuild into unique staging, pin whisper.cpp to the measured commit,
-  and record repo/upstream commits plus packaged Mach-O hashes.
+  and record repo/upstream revisions, clean/dirty state, plus packaged Mach-O hashes.
 - The current Whisper build has `GGML_METAL_EMBED_LIBRARY=ON`, and local `otool` inspection finds the
   `__DATA,__ggml_metallib` section in `libggml-metal.0.dylib`. The release must assert that embedded
   section instead of copying an external `.metallib` resource.

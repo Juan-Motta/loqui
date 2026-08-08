@@ -182,7 +182,8 @@ the development artifact, but the packaged artifact must contain only release-sa
 Release never consumes that ambient development directory. It rebuilds `globe-listener`,
 `macos-stt`, `whisper-stt`, and the native dylibs into unique staging from the current repo commit
 and pinned whisper.cpp commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`, then records both
-commits and every packaged Mach-O SHA-256 as provenance.
+revisions, an honest clean/dirty marker, and every packaged Mach-O SHA-256 as provenance. Dirty is
+expected for the workflow's pre-commit E2E artifact and is never reported as a clean commit build.
 
 ## Signing identities and order
 

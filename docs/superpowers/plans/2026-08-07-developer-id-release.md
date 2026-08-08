@@ -19,7 +19,8 @@
 - Release artifacts contain no Homebrew, checkout, `/Users/`, `helpers/bin`, or `scripts/whisper-vendor` load/rpath dependency.
 - Every release rebuilds all three helpers and Whisper/ggml/SDL libraries into unique staging from
   current repo sources and one pinned whisper.cpp commit; it never packages ambient `helpers/bin`.
-  Evidence records the repo commit, pinned upstream commit, and SHA-256 of every packaged Mach-O.
+  Evidence records the repo revision with an honest clean/dirty marker, pinned upstream commit, and
+  SHA-256 of every packaged Mach-O.
 - Sign nested code explicitly from the inside out. Never use `codesign --deep` to sign; `codesign --verify --deep --strict` is allowed only as a read-only audit.
 - Developer ID and Apple Development signatures use Hardened Runtime on main executables. The app
   receives Audio Input plus Apple Events entitlements; `macos-stt` and `whisper-stt` receive Audio
@@ -956,8 +957,9 @@ Create `scripts/release-macos.sh` with functions matching the phase names from S
   remaining single line to equal exactly `v3.0.0-alpha2.119` (this pinned CLI writes the version to
   stderr, not stdout);
 - resolve Developer ID before building;
-- require no staged or unstaged tracked-file diff, so the recorded repo commit actually identifies
-  the sources being released; untracked local files are ignored and never packaged;
+- record `git rev-parse HEAD` plus `git describe --always --dirty` rather than requiring a clean
+  tree. A dirty marker is expected before the workflow's single terminal implementation commit and
+  must be carried into the E2E report; it is never misrepresented as a clean commit build;
 - validate the default or selected profile with `xcrun notarytool history --keychain-profile "$profile" --output-format json`;
 - run `./scripts/patch-plists.sh --check` to validate IDs, usage strings, and both version keys
   without mutating the checkout; ordinary asset regeneration/package paths own the write mode;
@@ -1000,8 +1002,9 @@ LOQUI_SKIP_MODEL=1 ./scripts/build-macos-helpers.sh
 `build-helpers` always runs after the main build and before assembly; it compiles all three helpers
 from current repo sources and whisper.cpp commit
 `97c56f1dc1d1100a9d859c865a20c82d22f823ed` into staging. It never consumes ambient
-`helpers/bin`. Record `git rev-parse HEAD`, that upstream commit, and SHA-256 for every staged helper
-and real dylib before assembly.
+`helpers/bin`. Record `git rev-parse HEAD`, `git describe --always --dirty`, that upstream commit,
+and SHA-256 for every staged helper and real dylib before assembly. The binary hashes are the exact
+artifact provenance when the workflow-mandated pre-commit build is dirty.
 
 Then call the bundle via `env -u LOQUI_BUNDLE_MODEL` with `--helpers-dir "$stage/helpers"` and
 confirm the Wails build ran in
