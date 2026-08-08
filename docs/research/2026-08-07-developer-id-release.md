@@ -8,6 +8,7 @@ Checked: 2026-08-07
 2. Can the pinned Wails signing task be the release authority for this bundle?
 3. Where must Loqui's native helpers and dynamic libraries live?
 4. What must be verified before an Apple Silicon DMG can be called distributable?
+5. Which Hardened Runtime entitlements do Loqui's actual executable paths require?
 
 ## Verified findings
 
@@ -43,6 +44,26 @@ Checked: 2026-08-07
   Source:
   [Creating distribution-signed code for macOS](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/),
   checked 2026-08-07.
+- Apple's manual-signing example signs a framework at the `.framework` bundle root, not its
+  `Versions/A` directory. The framework executable is still the path that architecture and load-command
+  auditing must inspect. The same guidance says entitlements belong on main executables and must not
+  be applied to library code. Source: [Creating distribution-signed code for macOS](https://developer.apple.com/documentation/xcode/creating-distribution-signed-code-for-the-mac/),
+  checked 2026-08-07.
+- Hardened Runtime blocks audio input unless the executable claims
+  `com.apple.security.device.audio-input`. It also requires
+  `com.apple.security.automation.apple-events` for a process that prompts to send Apple Events to
+  other apps. Loqui's host captures audio and pastes into other apps; `whisper-stt` and `macos-stt`
+  each capture audio themselves. Thus the host needs both entitlements, the two audio helpers need
+  only Audio Input, and `globe-listener`/libraries/frameworks need neither. Sources:
+  [Configuring the hardened runtime](https://developer.apple.com/documentation/xcode/configuring-the-hardened-runtime),
+  [Audio Input Entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com_apple_security_device_audio-input),
+  and [Apple Events Entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events),
+  checked 2026-08-07.
+- `NSSpeechRecognitionUsageDescription` remains in both app plists for the Apple Speech authorization
+  request. No additional Speech entitlement is documented for this non-sandboxed macOS Developer ID
+  path, so one must not be invented; the real signed Apple engine remains an E2E requirement. Source:
+  [NSSpeechRecognitionUsageDescription](https://developer.apple.com/documentation/bundleresources/information-property-list/nsspeechrecognitionusagedescription),
+  checked 2026-08-07.
 - The checked-in Wails version is `v3.0.0-alpha2.119` (`go.mod`). Its local `wails3 tool sign`
   implementation signs an app with `codesign --force --deep`, then notarizes a ZIP and staples the
   app. That is convenient prior art, but it conflicts with Apple's current inside-out guidance for
@@ -61,6 +82,18 @@ Checked: 2026-08-07
   `/opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib`. The build script relocates the ggml/Whisper
   libraries but does not copy or rewrite SDL. A recipient without that Homebrew installation cannot
   run Whisper even if signing and notarization succeed.
+- Local `otool -l/-D` inspection found a second portability defect: every real Whisper/ggml dylib
+  except `libggml-base` carries an `LC_RPATH` into
+  `scripts/whisper-vendor/whisper.cpp/build/bin`, while Homebrew SDL's own `LC_ID_DYLIB` is its
+  absolute `/opt/homebrew/...` path. Sanitizing only `whisper-stt` is insufficient; every copied real
+  dylib must have portable rpaths/install names before signing, and the auditor must inspect
+  `otool -L`, `otool -D`, and `LC_RPATH` for every packaged Mach-O.
+- The current Whisper build has `GGML_METAL_EMBED_LIBRARY=ON`, and local `otool` inspection finds the
+  `__DATA,__ggml_metallib` section in `libggml-metal.0.dylib`. The release must assert that embedded
+  section instead of copying an external `.metallib` resource.
+- Current helper and Azure framework inputs carry `com.apple.provenance` extended attributes. The
+  assembled app must clear extended attributes before code signing and then be re-audited, so
+  Finder/resource-fork metadata cannot invalidate or contaminate the signature.
 
 ### Notarization and DMG
 
@@ -70,6 +103,14 @@ Checked: 2026-08-07
   for offline Gatekeeper verification. Source:
   [Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow),
   checked 2026-08-07.
+- Apple's accepted-log examples allow `issues` to be `null`, and its guidance says to inspect
+  successful logs for warnings rather than treating every issue as a rejection. Release validation
+  should fail accepted logs only for `severity == "error"`, preserve warnings as evidence, and
+  reject missing/malformed logs. `ticketContents[].path` includes an archive/DMG prefix, so expected
+  code paths must be matched by anchored suffix, not whole-string equality. Sources:
+  [Customizing the notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
+  and [The Pros and Cons of Stapling](https://developer.apple.com/forums/thread/720093), checked
+  2026-08-07.
 - Apple's general DTS guidance is to sign everything inside out, notarize the outermost container,
   and staple that container. A DMG submission's ticket covers the nested app and its code; the notary
   log must still be checked to confirm every expected item was included. Source:
@@ -105,10 +146,15 @@ and staple the accepted artifact. This is the safer template for Loqui.
   identity, Keychain profile, expected architecture, or required nested binaries are missing.
 - Move helper executables to `Contents/Helpers`, move Whisper/ggml/SDL dylibs to
   `Contents/Frameworks`, and keep the optional model under `Contents/Resources`. Rewrite the
-  Whisper helper's SDL and rpath references so no Homebrew or checkout path remains.
+  Whisper helper and every real dylib's SDL/install-name/rpath metadata so no Homebrew or checkout
+  path remains.
 - Give each non-bundled helper a stable explicit identifier derived from
   `com.jualopezmo.loquigo`, then sign libraries/frameworks, helpers, and finally the app. Do not put
   app entitlements on library code.
+- Apply the host entitlement file (Audio Input plus Apple Events) to the app executable and the
+  audio-helper entitlement file (Audio Input only) to `whisper-stt` and `macos-stt` whenever signing
+  with Hardened Runtime. Ad-hoc packages deliberately omit Hardened Runtime, secure timestamps, and
+  entitlements; `globe-listener`, dylibs, and the framework never receive entitlement files.
 - Keep normal local package/dev behavior available, but add a distinct release path that cannot
   silently fall back to ad-hoc signing. A release command either produces a verified notarized DMG
   or exits nonzero without claiming success.
@@ -125,9 +171,6 @@ and staple the accepted artifact. This is the safer template for Loqui.
   from `security find-identity -v -p codesigning`.
 - **Notarization profile name:** create a project-specific Keychain profile with `notarytool
   store-credentials`; validate it before the first upload. No Apple credential belongs in Git.
-- **Exact production entitlements:** start with no extra entitlement claims beyond hardened runtime;
-  run the real signed app and inspect the notary log. Add only an entitlement proven necessary by a
-  failing executable path.
 - **Distribution evidence:** install the accepted DMG on another Apple Silicon Mac and execute the
   main app, fn listener, Whisper, Apple Speech (where supported), and Azure. This is the only proof
   that no build-machine dependency remains.

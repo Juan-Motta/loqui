@@ -18,11 +18,20 @@
 - Executable helpers live under `Contents/Helpers`, frameworks and dylibs under `Contents/Frameworks`, and the optional model under `Contents/Resources/models`. No Mach-O code may remain under Resources.
 - Release artifacts contain no Homebrew, checkout, `/Users/`, `helpers/bin`, or `scripts/whisper-vendor` load/rpath dependency.
 - Sign nested code explicitly from the inside out. Never use `codesign --deep` to sign; `codesign --verify --deep --strict` is allowed only as a read-only audit.
-- Developer ID signatures use secure timestamps; app/helper executables use hardened runtime; library/framework code receives no app entitlement file.
+- Developer ID and Apple Development signatures use Hardened Runtime on main executables. The app
+  receives Audio Input plus Apple Events entitlements; `macos-stt` and `whisper-stt` receive Audio
+  Input only; `globe-listener`, dylibs, and frameworks receive no entitlement file. Ad-hoc signing
+  deliberately uses no Hardened Runtime, timestamp, or entitlements.
+- Assembly sanitizes every real packaged Mach-O load command/install name, preserves dylib symlink
+  chains, clears extended attributes before signing, and re-audits afterwards.
 - `VERSION` is exactly `info.version` from `build/config.yml`; the final image is `bin/release/Loqui-${VERSION}-macos-arm64.dmg`.
+- Both app plists must contain that same version in `CFBundleShortVersionString` and
+  `CFBundleVersion`; a mismatch fails preflight before any Apple service call.
 - A release either publishes an accepted, stapled, verified DMG atomically or exits nonzero while preserving the last successful artifact.
 - Certificate private keys, Apple IDs, app-specific passwords, and notarization credentials remain outside Git and outside release logs.
 - Do not restore provider credentials to Keychain as part of this feature.
+- Release leaves `LOQUI_BUNDLE_MODEL` unset by default. The standard distributable exercises the
+  signed first-use model download/retry path; embedding the model remains an explicit opt-in only.
 - Codex executes the plan inline per `shared/rules/execution.md`; do not dispatch implementation subagents from Codex.
 - The repository ship gate overrides per-task commit defaults: record red/green evidence after each task, but make the implementation commit only after plan review, TDD, code review, E2E disposition, and state gates are green.
 - Every shell test entry point resolves the repository root from its own location and defaults its injectable script variable (`BUNDLE_SCRIPT`, `AUDIT_SCRIPT`, `SIGN_SCRIPT`, or `RELEASE_SCRIPT`) to the corresponding repo script; mutation tests override only that variable.
@@ -33,7 +42,9 @@
 - Create `internal/app/paths_test.go`: deterministic bundle/development/data-directory path tests.
 - Modify `build/darwin/Info.dev.plist`: use the `.dev` bundle identifier.
 - Modify `scripts/patch-plists.sh`: restore the distinct production/dev identifiers after generated asset updates.
-- Modify `scripts/build-whisper-stt.sh`: copy SDL, preserve dylib symlinks, and rewrite the helper to portable `@rpath` references.
+- Create `build/darwin/Loqui.entitlements`: Audio Input and Apple Events for the host app.
+- Create `build/darwin/LoquiAudioHelper.entitlements`: Audio Input for the two microphone-owning helpers.
+- Modify `scripts/build-whisper-stt.sh`: copy SDL, preserve dylib symlinks, and sanitize every helper/dylib load command and install name.
 - Create `scripts/macos-bundle.sh`: assemble production and development bundles in standard locations.
 - Create `scripts/macos-audit.sh`: reject invalid layout, architecture, symlink, and Mach-O dependency state.
 - Create `scripts/macos-sign.sh`: resolve identities and sign apps/DMGs explicitly without `--deep` mutation.
@@ -44,8 +55,11 @@
 - Create `scripts/tests/macos-sign-test.sh`: identity selection, signing order/options/identifiers, and fallback regressions.
 - Create `scripts/tests/release-macos-test.sh`: phase ordering, notary result, log, failure, cleanup, and atomic publication regressions.
 - Create `scripts/tests/macos-release-mutations.sh`: prove the critical signing/layout/dependency/publication guards are detected.
+- Create `scripts/update-build-assets.sh` and `scripts/wails-build-assets.patch`: regenerate pinned
+  Wails assets and deterministically restore Loqui's repo-owned Taskfile/plist customizations.
 - Modify `scripts/task.sh`: install and require the same Wails CLI version pinned by `go.mod`.
 - Modify `build/darwin/Taskfile.yml`: portable build flag, shared bundle assembly, explicit ad-hoc/development signing, and release task.
+- Modify `build/Taskfile.yml`: route generated-asset updates through the regeneration-safe wrapper.
 - Modify `Taskfile.yml`: expose `release:macos` and include shell tests in `check` on macOS.
 - Modify `README.md`: one-time certificate/profile setup, signing channels, release command, and arm64 scope.
 - Modify `docs/CHANGELOG.md`: record stable development identity and Developer ID/notarized DMG behavior after verification.
@@ -289,7 +303,12 @@ run_expect_fail() {
 
 - [ ] **Step 2: Write the failing bundle test**
 
-Create `scripts/tests/macos-bundle-test.sh`. Its fixture root contains minimal production/dev plists, an executable, three helper files, a real dylib plus a symlink, SDL, a model, icons, and a fake framework. Put a recording `install_name_tool` first on `PATH`, set `tool_log="$tmp/tool.log"`, export it as `TOOL_LOG`, and make the fake append `printf '%s\n' "$*" >>"$TOOL_LOG"`. Assert:
+Create `scripts/tests/macos-bundle-test.sh`. Its fixture root contains minimal production/dev
+plists, an executable, three helper files, one real file plus the complete symlink chain for each
+required Whisper/ggml family, SDL, a model, icons, and a fake framework. Put recording
+`install_name_tool` and fixture-aware `otool` commands first on `PATH`; set
+`tool_log="$tmp/tool.log"`, export it as `TOOL_LOG`, and make the mutation fake append
+`printf '%s\n' "$*" >>"$TOOL_LOG"`. Assert:
 
 ```bash
 "$BUNDLE_SCRIPT" --channel development --root "$fixture" \
@@ -307,6 +326,9 @@ assert_eq "$(plutil -extract CFBundleIdentifier raw "$out/Loqui.dev.app/Contents
   "com.jualopezmo.loquigo.dev"
 assert_contains "$tool_log" "-change /opt/homebrew/opt/sdl2/lib/libSDL2-2.0.0.dylib @rpath/libSDL2-2.0.0.dylib"
 assert_contains "$tool_log" "-add_rpath @loader_path/../Frameworks"
+assert_contains "$tool_log" "-id @rpath/libSDL2-2.0.0.dylib"
+assert_contains "$tool_log" "-delete_rpath /fixture/checkout/build/bin"
+assert_contains "$tool_log" "-add_rpath @loader_path"
 
 LOQUI_BUNDLE_MODEL=1 "$BUNDLE_SCRIPT" --channel production --root "$fixture" \
   --executable "$fixture/bin/loqui" --output "$out/Loqui.app"
@@ -314,7 +336,10 @@ assert_file "$out/Loqui.app/Contents/Resources/models/ggml-small.bin"
 [ ! -L "$out/Loqui.app/Contents/Resources/models/ggml-small.bin" ] || fail "model escaped bundle through symlink"
 ```
 
-Also call the script with an unknown channel, missing executable, missing plist, and missing framework; each must fail with a diagnostic that names the missing input.
+Set one fixture extended attribute before assembly and assert the output bundle has none afterwards.
+Also call the script with an unknown channel, missing executable, missing plist, missing framework,
+and a missing/broken member in each required dylib symlink chain; each must fail with a diagnostic
+that names the missing input.
 
 - [ ] **Step 3: Run the bundle test and confirm RED**
 
@@ -331,11 +356,18 @@ Expected: FAIL because `scripts/macos-bundle.sh` does not exist.
 
 In `scripts/build-whisper-stt.sh`:
 
-1. Derive `SDL_PREFIX="$(sdl2-config --prefix)"` and `SDL_DYLIB="$SDL_PREFIX/lib/libSDL2-2.0.0.dylib"`; fail if the file is absent.
-2. Copy Whisper/ggml dylibs with `cp -a` so upstream symlinks remain symlinks.
-3. Copy SDL to `helpers/bin/libSDL2-2.0.0.dylib`.
-4. Replace the absolute SDL load command with `@rpath/libSDL2-2.0.0.dylib`.
-5. Retain exactly one development rpath, `@loader_path`.
+1. Derive `SDL_PREFIX="$(sdl2-config --prefix)"` and
+   `SDL_DYLIB="$SDL_PREFIX/lib/libSDL2-2.0.0.dylib"`; fail if the file is absent.
+2. Copy Whisper/ggml dylibs with `cp -a` so upstream symlinks remain symlinks. Enumerate real files
+   with `find ... -type f -name '*.dylib' -print | LC_ALL=C sort`; never mutate through each symlink.
+3. Copy SDL to `helpers/bin/libSDL2-2.0.0.dylib` and change its ID from the Homebrew path to
+   `@rpath/libSDL2-2.0.0.dylib`.
+4. Replace the helper's absolute SDL load command with `@rpath/libSDL2-2.0.0.dylib`.
+5. For `whisper-stt` and every real Whisper/ggml dylib, delete every existing `LC_RPATH`. Give the
+   helper exactly `@loader_path`; give each real dylib exactly `@loader_path`. Keep upstream
+   `@rpath` `LC_ID_DYLIB` values, and reject any remaining absolute ID/dependency/rpath.
+6. Assert `libggml-metal` contains `__DATA,__ggml_metallib`; the current build embeds Metal and no
+   external `.metallib` is copied.
 
 The mutation block is:
 
@@ -346,7 +378,12 @@ SDL_DYLIB="$SDL_PREFIX/lib/libSDL2-2.0.0.dylib"
 cp -a "$VENDOR"/build/bin/*.dylib "$ROOT/helpers/bin/"
 cp -L "$SDL_DYLIB" "$ROOT/helpers/bin/libSDL2-2.0.0.dylib"
 install_name_tool -change "$SDL_DYLIB" '@rpath/libSDL2-2.0.0.dylib' "$ROOT/helpers/bin/whisper-stt"
+install_name_tool -id '@rpath/libSDL2-2.0.0.dylib' "$ROOT/helpers/bin/libSDL2-2.0.0.dylib"
 ```
+
+Implement the shared rpath-sanitizing helper once in the script and invoke it for the helper and
+each real dylib. Add a final `otool -L/-D/-l` check so build output itself is portable before bundle
+assembly.
 
 - [ ] **Step 5: Implement the bundle assembler**
 
@@ -357,10 +394,19 @@ Create `scripts/macos-bundle.sh` with `set -euo pipefail`, explicit option parsi
 3. Create `Contents/{MacOS,Helpers,Frameworks,Resources}`.
 4. Copy the main executable, selected plist, icon, optional `Assets.car`, and Azure framework (`ditto` preserves framework symlinks).
 5. Copy only the named executable helpers into Helpers.
-6. Copy `*.dylib` with `cp -a` into Frameworks.
+6. Copy the complete, explicitly required `libwhisper`, `libggml`, `libggml-base`, `libggml-cpu`,
+   `libggml-blas`, and `libggml-metal` real-file/symlink families plus SDL with `cp -a` into
+   Frameworks. Enumerate with `LC_ALL=C sort` and reject missing or broken chains.
 7. Copy the model with `cp -L` only when `LOQUI_BUNDLE_MODEL=1`.
-8. On the packaged Whisper copy, delete every existing `LC_RPATH`, add `@loader_path/../Frameworks`, and change any SDL `/opt/homebrew/...` reference to `@rpath/libSDL2-2.0.0.dylib`.
-9. Print the output app path and nothing resembling a successful release claim.
+8. On the packaged Whisper copy, delete every existing `LC_RPATH`, add
+   `@loader_path/../Frameworks`, and change any SDL `/opt/homebrew/...` reference to
+   `@rpath/libSDL2-2.0.0.dylib`.
+9. On every real packaged dylib, delete every existing `LC_RPATH`, add exactly `@loader_path`,
+   require an `@rpath/...` ID, and reject any non-system dependency that is not `@rpath`,
+   `@loader_path`, or `@executable_path`. Set SDL's ID explicitly to its `@rpath` name.
+10. Run `xattr -cr "$output"`, then confirm `xattr -lr "$output"` is empty. This happens before
+    either unsigned audit or signing.
+11. Print the output app path and nothing resembling a successful release claim.
 
 Use a `while read -r old_rpath` loop over `otool -l`; do not pipe into the loop because Bash 3.2 would run it in a subshell.
 
@@ -393,7 +439,10 @@ Record bundle test RED/GREEN and ShellCheck evidence in `.workflow/state.md`.
 
 - [ ] **Step 1: Write the failing audit tests with fake inspection tools**
 
-Create fake `file`, `lipo`, and `otool` dispatchers under a temporary `fake-bin`; behavior is selected by fixture filename (`bad-x86`, `bad-homebrew`, `bad-checkout`, `good`). Build a minimal app fixture with all three helpers, Azure framework, SDL, Whisper/ggml dylibs, and no code under Resources.
+Create fake `file`, `lipo`, and `otool` dispatchers under a temporary `fake-bin`; behavior is
+selected by fixture filename (`bad-x86`, `bad-homebrew`, `bad-id`, `bad-rpath`, `bad-checkout`,
+`missing-metal`, `good`). Build a minimal app fixture with all three helpers, Azure framework, SDL,
+the exact required Whisper/ggml real-file and symlink families, and no code under Resources.
 
 The test cases are exact:
 
@@ -420,12 +469,31 @@ touch "$good_app/Contents/Helpers/bad-checkout"
 run_expect_fail env PATH="$fake_bin:$PATH" "$AUDIT_SCRIPT" "$good_app"
 rm "$good_app/Contents/Helpers/bad-checkout"
 
+touch "$good_app/Contents/Frameworks/bad-id.dylib"
+run_expect_fail env PATH="$fake_bin:$PATH" "$AUDIT_SCRIPT" "$good_app"
+rm "$good_app/Contents/Frameworks/bad-id.dylib"
+
+touch "$good_app/Contents/Frameworks/bad-rpath.dylib"
+run_expect_fail env PATH="$fake_bin:$PATH" "$AUDIT_SCRIPT" "$good_app"
+rm "$good_app/Contents/Frameworks/bad-rpath.dylib"
+
+mv "$good_app/Contents/Frameworks/libggml-metal.0.16.0.dylib" \
+  "$good_app/Contents/Frameworks/missing-metal.dylib"
+run_expect_fail env PATH="$fake_bin:$PATH" "$AUDIT_SCRIPT" "$good_app"
+mv "$good_app/Contents/Frameworks/missing-metal.dylib" \
+  "$good_app/Contents/Frameworks/libggml-metal.0.16.0.dylib"
+
 mv "$good_app/Contents/Helpers/macos-stt" "$good_app/Contents/Helpers/macos-stt.absent"
 run_expect_fail env PATH="$fake_bin:$PATH" "$AUDIT_SCRIPT" "$good_app"
 mv "$good_app/Contents/Helpers/macos-stt.absent" "$good_app/Contents/Helpers/macos-stt"
 ```
 
-The fake `file` reports each executable/dylib/framework binary as Mach-O and `hidden-mach-o` as Mach-O. Fake `lipo -archs` reports `x86_64` only for `bad-x86`, `arm64 x86_64` for the Azure framework, and `arm64` otherwise. Fake `otool -L/-l/-D` emits `/opt/homebrew/...` for `bad-homebrew`, the fixture checkout path for `bad-checkout`, and only `@rpath`, `@loader_path`, `@executable_path`, `/usr/lib`, or `/System/Library` for good files.
+The fake `file` reports each executable/dylib/framework executable as Mach-O and `hidden-mach-o` as
+Mach-O. Fake `lipo -archs` reports `x86_64` only for `bad-x86`, `arm64 x86_64` for the Azure
+framework executable, and `arm64` otherwise. Fake `otool -L/-l/-D` emits `/opt/homebrew/...` for
+`bad-homebrew`, an absolute ID for `bad-id`, a checkout `LC_RPATH` for `bad-rpath`/`bad-checkout`,
+omits `__ggml_metallib` for `missing-metal`, and emits only the allowed portable forms for good
+files.
 
 - [ ] **Step 2: Run the audit test and confirm RED**
 
@@ -442,12 +510,22 @@ Expected: FAIL because `scripts/macos-audit.sh` does not exist.
 
 Create `scripts/macos-audit.sh` and enforce these checks in order:
 
-1. App, plist, main executable, all three helpers, Azure framework executable, SDL, at least one `libwhisper*.dylib`, and all required ggml dylib families exist.
+1. App, plist, main executable, all three helpers, Azure framework executable, SDL, and exactly one
+   valid real-file/symlink chain for each required family (`libwhisper`, `libggml`, `libggml-base`,
+   `libggml-cpu`, `libggml-blas`, `libggml-metal`) exist. Enumerate with `LC_ALL=C sort`.
 2. `find "$app" -type l ! -exec test -e {} \; -print` yields no broken symlink.
 3. Every file under Resources reports non-Mach-O.
 4. Every discovered Mach-O contains `arm64`; main/helper/Whisper/ggml/SDL entries reject additional `x86_64`, while the Azure framework may contain both.
-5. `otool -L`, `otool -D`, and every `LC_RPATH` reject prefixes `/opt/homebrew`, `/usr/local`, `/Users`, repo root, `helpers/bin`, and `scripts/whisper-vendor`.
-6. Load commands must be a system path or begin with `@rpath`, `@loader_path`, or `@executable_path`.
+5. `otool -L`, `otool -D`, and every `LC_RPATH` reject prefixes `/opt/homebrew`, `/usr/local`,
+   `/Users`, repo root, `helpers/bin`, and `scripts/whisper-vendor`. Every dylib ID must begin
+   `@rpath/`; every discovered non-system dependency must begin with `@rpath`, `@loader_path`, or
+   `@executable_path`.
+6. Every packaged real dylib has only the intentional portable rpath (`@loader_path`); the Whisper
+   helper has only `@loader_path/../Frameworks`; the main executable has only the portable framework
+   rpath. No other package-owned Mach-O may contain an absolute non-system rpath.
+7. The real `libggml-metal` target contains section `__DATA,__ggml_metallib`; no external Metal
+   source or `.metallib` appears under Resources.
+8. `xattr -lr "$app"` is empty.
 
 Each failure prints the offending bundle-relative path and value. Print `macos-audit: ok $app` only after all checks pass.
 
@@ -471,6 +549,8 @@ Record malformed-fixture RED/GREEN evidence in `.workflow/state.md`.
 ### Task 4: Resolve stable identities and sign inside out
 
 **Files:**
+- Create: `build/darwin/Loqui.entitlements`
+- Create: `build/darwin/LoquiAudioHelper.entitlements`
 - Create: `scripts/macos-sign.sh`
 - Create: `scripts/tests/macos-sign-test.sh`
 
@@ -486,6 +566,7 @@ Use a fake `security` whose output is controlled by a fixture file. Assert:
 - one Apple Development identity resolves to its SHA-1 hash;
 - two Apple Development identities fail unless `LOQUI_DEV_SIGN_IDENTITY` exactly matches one SHA-1 or full quoted name;
 - zero or two Developer ID Application identities fail unless `LOQUI_SIGN_IDENTITY` matches exactly one;
+- duplicate `security` rows with the same SHA-1 are deduplicated before ambiguity is evaluated;
 - an explicitly configured unknown value always fails and never falls back.
 
 Use fixed fake identities so expected output is literal:
@@ -513,7 +594,19 @@ whisper-stt
 Loqui.app
 ```
 
-For each helper, assert `--identifier` uses its exact production suffix. Assert helpers/app contain `--options runtime --timestamp`; libraries/framework contain `--timestamp` and no `--entitlements`; every line lacks a signing `--deep`. Run development signing and assert the `.dev` helper identifiers. Run ad-hoc signing and assert `--sign -` plus the channel identifiers.
+For each helper, assert `--identifier` uses its exact production suffix. Assert the framework signing
+target is the `.framework` bundle root (Apple's documented code-item boundary), while the auditor
+separately resolves its `Versions/A/...` executable. Assert release/development signing applies:
+
+- app: `--options runtime --timestamp --entitlements build/darwin/Loqui.entitlements`;
+- `macos-stt` and `whisper-stt`: `--options runtime --timestamp --entitlements build/darwin/LoquiAudioHelper.entitlements`;
+- `globe-listener`: `--options runtime --timestamp` and no entitlement file;
+- libraries/framework: `--timestamp`, no `--options runtime`, and no entitlement file.
+
+Run development signing and assert the `.dev` helper identifiers and the same narrow entitlement
+assignment. Run ad-hoc signing and assert `--sign -` plus channel identifiers, with no `--timestamp`,
+`--options runtime`, or `--entitlements`. Across the script, signing calls contain zero `--deep`;
+the one read-only final verification call contains it exactly once.
 
 - [ ] **Step 3: Run signing tests and confirm RED**
 
@@ -537,9 +630,22 @@ identity_records() {
 }
 ```
 
-Normalize all successful selection to the SHA-1 hash. `resolve development` uses `LOQUI_DEV_SIGN_IDENTITY`; `resolve release` uses `LOQUI_SIGN_IDENTITY`. Exact SHA or exact full certificate name is accepted; substring matching is forbidden.
+Pipe records through `LC_ALL=C sort -u -k1,1` so repeated Keychain rows with the same SHA-1 count
+once. Normalize all successful selection to the SHA-1 hash. `resolve development` uses
+`LOQUI_DEV_SIGN_IDENTITY`; `resolve release` uses `LOQUI_SIGN_IDENTITY`. Exact SHA or exact full
+certificate name is accepted; substring matching is forbidden.
 
-- [ ] **Step 5: Implement explicit signing order**
+- [ ] **Step 5: Create and validate the minimal entitlement files**
+
+Create standard XML plists with LF endings and no comments/BOM:
+
+`build/darwin/Loqui.entitlements` contains only Boolean-true
+`com.apple.security.device.audio-input` and `com.apple.security.automation.apple-events`.
+`build/darwin/LoquiAudioHelper.entitlements` contains only Boolean-true
+`com.apple.security.device.audio-input`. Validate both with `plutil -lint`, and add tests that extract
+the exact keys and reject any extra entitlement. Do not add an undocumented Speech entitlement.
+
+- [ ] **Step 6: Implement explicit signing order**
 
 Determine the base identifier from the channel, not from a caller-provided arbitrary string. Sign:
 
@@ -548,15 +654,21 @@ Determine the base identifier from the channel, not from a caller-provided arbit
 3. Helpers in the literal order `globe-listener`, `macos-stt`, `whisper-stt`, each with exact explicit identifier.
 4. The top-level app.
 
-Use arrays for argument construction. Release library/framework args are `--force --timestamp --sign "$identity"`; release helper/app adds `--options runtime`. Development uses the selected Apple Development identity and runtime for executables. Ad-hoc uses `--force --sign -` and explicit helper identifiers. After app signing run:
+Use arrays for argument construction. Release library/framework args are
+`--force --timestamp --sign "$identity"`; release/development executables add `--options runtime`
+and only the entitlement file assigned above. Development uses the selected Apple Development
+identity. Ad-hoc uses `--force --sign -` and explicit identifiers with no Hardened Runtime,
+timestamp, or entitlement file. Use `LC_ALL=C sort` for every filesystem-derived code-item list.
+After app signing run:
 
 ```bash
 codesign --verify --deep --strict --verbose=2 "$app"
 ```
 
-That is the only allowed `--deep` occurrence in the script. DMG signing uses `--force --timestamp --sign "$identity"`.
+That is the only allowed `--deep` occurrence in the script. DMG signing uses
+`--force --timestamp --sign "$identity"` and no entitlements.
 
-- [ ] **Step 6: Run signing tests, syntax checks, and ShellCheck**
+- [ ] **Step 7: Run signing tests, syntax checks, and ShellCheck**
 
 Run:
 
@@ -564,11 +676,12 @@ Run:
 SIGN_SCRIPT=./scripts/macos-sign.sh ./scripts/tests/macos-sign-test.sh
 bash -n scripts/macos-sign.sh scripts/tests/macos-sign-test.sh
 shellcheck -s bash scripts/macos-sign.sh scripts/tests/macos-sign-test.sh
+plutil -lint build/darwin/Loqui.entitlements build/darwin/LoquiAudioHelper.entitlements
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Record the task checkpoint without committing**
+- [ ] **Step 8: Record the task checkpoint without committing**
 
 Record identity ambiguity, fallback, exact identifier, and inside-out GREEN evidence in `.workflow/state.md`.
 
@@ -609,6 +722,11 @@ publish
 
 Separately use fake commands to assert preflight rejects non-arm64 host, missing Apple tool, invalid/ambiguous identity, invalid profile history, missing required helper/framework, and a version that is absent or not `MAJOR.MINOR.PATCH`.
 
+Define `verify-app` narrowly: it performs local `codesign --verify --deep --strict`, then inspects the
+app and each helper for the expected Developer ID authority, secure timestamp, Hardened Runtime flag,
+identifier, and exact entitlement set. It does not run `spctl` before notarization; Gatekeeper is
+reserved for the final stapled DMG.
+
 - [ ] **Step 2: Write failing notary/failure/publication tests**
 
 Cover these exact postconditions:
@@ -616,8 +734,16 @@ Cover these exact postconditions:
 - `status=Invalid` fetches and copies the submission/log to a unique
   `${TMPDIR:-/tmp}/loqui-notary-failure.${SUBMISSION_ID}.*` directory, prints both the submission ID
   and preserved log path, exits nonzero, and never staples/publishes;
-- accepted submission with a non-empty `issues` array fails before staple;
-- accepted submission whose `ticketContents` omits the main app or any of the three helpers fails before staple;
+- malformed submit JSON or a missing/empty `.id` preserves the raw response, prints an actionable
+  diagnostic, and never invokes `notarytool log` with an empty ID;
+- accepted submission with any `.issues[] | select(.severity == "error")` fails before staple;
+- accepted submission with `issues: null`, `issues: []`, or warning-only issues proceeds and
+  preserves those warnings in evidence;
+- accepted submission with missing/null `ticketContents`, or whose suffix-normalized paths omit any
+  expected code item from the signed manifest (main executable, all three helpers, Azure framework
+  executable, SDL, and every real Whisper/ggml dylib), fails before staple;
+- ticket paths such as `Loqui.dmg/Loqui.app/Contents/MacOS/loqui` match the expected anchored suffix,
+  while `OtherLoqui.app/Contents/MacOS/loqui` does not;
 - staple, `hdiutil verify`, `codesign --verify`, or `spctl --assess --type open --context context:primary-signature` failure propagates nonzero;
 - a previous final DMG containing `old accepted artifact` remains byte-identical when any earlier phase fails;
 - successful publication first copies to a hidden temporary file inside `bin/release`, then renames it to `Loqui-0.1.0-macos-arm64.dmg`; no partial final name becomes visible;
@@ -635,15 +761,23 @@ and:
 {
   "jobId":"11111111-1111-1111-1111-111111111111",
   "status":"Accepted",
-  "issues":[],
+  "issues":null,
   "ticketContents":[
-    {"path":"Loqui.app/Contents/MacOS/loqui"},
-    {"path":"Loqui.app/Contents/Helpers/globe-listener"},
-    {"path":"Loqui.app/Contents/Helpers/macos-stt"},
-    {"path":"Loqui.app/Contents/Helpers/whisper-stt"}
+    {"path":"Loqui.dmg/Loqui.app/Contents/MacOS/loqui"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Helpers/globe-listener"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Helpers/macos-stt"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Helpers/whisper-stt"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Frameworks/libSDL2-2.0.0.dylib"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Frameworks/libwhisper.1.9.1.dylib"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Frameworks/libggml.0.16.0.dylib"},
+    {"path":"Loqui.dmg/Loqui.app/Contents/Frameworks/MicrosoftCognitiveServicesSpeech.framework/Versions/A/MicrosoftCognitiveServicesSpeech"}
   ]
 }
 ```
+
+The focused fixture's signed manifest contains only the displayed real dylibs; production derives
+the manifest from the auditor's stable `LC_ALL=C` Mach-O inventory, so every other real ggml-family
+target is required without hard-coding a stale upstream patch version.
 
 - [ ] **Step 3: Run release tests and confirm RED**
 
@@ -662,10 +796,14 @@ Create `scripts/release-macos.sh` with functions matching the phase names from S
 
 - require `uname -m` equals `arm64`;
 - require `security`, `codesign`, `otool`, `lipo`, `install_name_tool`, `hdiutil`, `spctl`, `ditto`, `plutil`, `jq`, `xcrun`, `wails3`, and the repo scripts;
-- require `wails3 version` to print exactly `v3.0.0-alpha2.119`;
+- capture `wails3 version 2>&1`, trim its single trailing newline/optional CR, and require the
+  remaining single line to equal exactly `v3.0.0-alpha2.119` (this pinned CLI writes the version to
+  stderr, not stdout);
 - resolve Developer ID before building;
 - validate the default or selected profile with `xcrun notarytool history --keychain-profile "$profile" --output-format json`;
 - read version with an anchored `awk` expression from the `info:` block and enforce `^[0-9]+\.[0-9]+\.[0-9]+$`;
+- require both `build/darwin/Info.plist` and `Info.dev.plist` to have that exact value for
+  `CFBundleShortVersionString` and `CFBundleVersion` before building;
 - create staging with `mktemp -d "${TMPDIR:-/tmp}/loqui-release.XXXXXX"` and record the exact path for a guarded trap.
 
 Use this exact version extraction so an unrelated commented `version:` cannot win:
@@ -678,7 +816,10 @@ version="$(awk '/^info:/{in_info=1; next} in_info && /^  version:/{gsub(/["'\'' 
 }
 ```
 
-The trap accepts cleanup only when the path matches `${TMPDIR:-/tmp}/loqui-release.` followed by six generated characters and is neither empty nor `/`; otherwise it prints a refusal and leaves the path untouched.
+Normalize `${TMPDIR:-/tmp}` by removing trailing slashes before constructing the template. The trap
+accepts cleanup only when the path matches that normalized prefix plus `loqui-release.` and six
+generated characters and is neither empty nor `/`; otherwise it prints a refusal and leaves the path
+untouched. Use task-specific lowercase local names; do not shadow shell/system variables.
 
 - [ ] **Step 5: Implement build through DMG signing**
 
@@ -688,7 +829,11 @@ The build phase runs the portable arm64 build into staging:
 ./scripts/task.sh darwin:build ARCH=arm64 PORTABLE=true OUTPUT="$stage/loqui"
 ```
 
-Then call the bundle, unsigned audit, release app signing, signed verification, DMG-root staging, and image creation:
+Then call the bundle with `LOQUI_BUNDLE_MODEL` deliberately unset and confirm the Wails build ran in
+its default production mode (production Go tags and frontend, never `DEV=true`). Run unsigned audit, release app
+signing, and signed verification. Create DMG-root staging with `ditto` rather than `cp`, add the
+`/Applications` symlink, and re-run both the bundle auditor and `codesign --verify --deep --strict`
+against the copied app before image creation:
 
 ```bash
 hdiutil create -volname Loqui -srcfolder "$stage/dmg-root" -ov -format UDZO "$stage/Loqui.dmg"
@@ -704,21 +849,30 @@ retrieval on a rejected submission:
 ```bash
 set +e
 xcrun notarytool submit "$stage/Loqui.dmg" \
-  --keychain-profile "$profile" --wait --output-format json >"$stage/notary-submit.json"
+  --keychain-profile "$profile" --wait --timeout 30m \
+  --output-format json >"$stage/notary-submit.json"
 submit_rc=$?
 set -e
-submission_id="$(jq -er '.id' "$stage/notary-submit.json")"
-status="$(jq -er '.status' "$stage/notary-submit.json")"
-xcrun notarytool log "$submission_id" "$stage/notary-log.json" --keychain-profile "$profile"
+submission_id="$(jq -er '.id | select(type == "string" and length > 0)' \
+  "$stage/notary-submit.json" 2>/dev/null || true)"
+status="$(jq -er '.status | select(type == "string" and length > 0)' \
+  "$stage/notary-submit.json" 2>/dev/null || true)"
+[ -n "$submission_id" ] || preserve_submit_and_fail "missing submission id"
+xcrun notarytool log "$submission_id" "$stage/notary-log.json" \
+  --keychain-profile "$profile"
 ```
 
 Fetch the log whenever a submission ID exists, even when `submit_rc` is nonzero or status is not
-Accepted. On rejection, copy only `notary-submit.json` and `notary-log.json` to the guarded failure
-directory before normal staging cleanup. On acceptance, require `submit_rc == 0`, `status ==
-Accepted`, `.issues | length == 0`, and `ticketContents[].path` coverage for the main executable plus
-all three helpers. Assemble submission JSON, notary log, signature metadata, DRs,
+Accepted. On rejection, timeout, malformed output, or log-validation failure, copy only the available
+`notary-submit.json` and `notary-log.json` to the guarded failure directory before normal staging
+cleanup. On acceptance, require `submit_rc == 0`, `status == Accepted`, a valid log whose status is
+also Accepted, zero `severity == "error"` issues (null/empty/warnings are allowed and retained), and
+anchored-suffix `ticketContents[].path` coverage for every entry in the signed Mach-O manifest.
+Missing/null `ticketContents` is a hard evidence failure. Assemble submission JSON, notary log,
+signature metadata, DRs,
 architecture/dependency audit, and checksums under staging. Confirm staged evidence contains no
-environment dump or secret field.
+environment dump or secret field. Generate report dates from the actual execution date rather than a
+hard-coded planning date.
 
 Staple/verify with:
 
@@ -726,8 +880,14 @@ Staple/verify with:
 xcrun stapler staple "$stage/Loqui.dmg"
 xcrun stapler validate "$stage/Loqui.dmg"
 hdiutil verify "$stage/Loqui.dmg"
+codesign --verify --verbose=2 "$stage/Loqui.dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$stage/Loqui.dmg"
 ```
+
+Per Apple's outermost-container guidance, notarize and staple the DMG only; do not add a second app
+submission/staple. Assert the script contains no `stapler staple` call targeting `.app`. The DMG's
+accepted ticket must cover the nested app/helpers, and opening the stapled outer container makes that
+ticket available for later nested-code checks, including first launch without network.
 
 - [ ] **Step 7: Implement same-filesystem atomic publication**
 
@@ -761,8 +921,11 @@ Record rejected-notary, missing-ticket-content, failure propagation, old-artifac
 
 **Files:**
 - Modify: `scripts/task.sh:22-28`
+- Modify: `build/Taskfile.yml:254-258`
 - Modify: `build/darwin/Taskfile.yml:46-71,133-249`
 - Modify: `Taskfile.yml:18-70`
+- Create: `scripts/update-build-assets.sh`
+- Create: `scripts/wails-build-assets.patch`
 - Create: `scripts/tests/macos-release-mutations.sh`
 
 **Interfaces:**
@@ -779,18 +942,24 @@ assert_contains Taskfile.yml "test:macos-release:"
 assert_contains build/darwin/Taskfile.yml "./scripts/macos-bundle.sh"
 assert_contains build/darwin/Taskfile.yml "./scripts/macos-sign.sh app --channel development"
 assert_contains build/darwin/Taskfile.yml "./scripts/release-macos.sh"
+assert_contains build/darwin/Taskfile.yml "DEV: '{{.DEV}}'"
+assert_contains build/darwin/Taskfile.yml "OUTPUT: '{{.OUTPUT}}'"
 assert_not_contains build/darwin/Taskfile.yml "wails3 tool sign"
 assert_contains scripts/task.sh 'WAILS_VERSION="v3.0.0-alpha2.119"'
 assert_contains scripts/task.sh 'github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}'
+assert_contains build/Taskfile.yml "./scripts/update-build-assets.sh"
 ```
 
 Run the focused script and confirm RED because the tasks still delegate to Wails/deep signing and
-the wrapper still installs an unpinned `latest` CLI.
+the wrapper still installs an unpinned `latest` CLI. `DEV` and `OUTPUT` already propagate through
+the current generated `build` task; preserve those verified interfaces rather than adding duplicate
+variables.
 
 - [ ] **Step 2: Pin the Wails build CLI**
 
-Set `WAILS_VERSION="v3.0.0-alpha2.119"` in `scripts/task.sh`. If `wails3` is absent or
-`wails3 version` differs, install exactly
+Set `WAILS_VERSION="v3.0.0-alpha2.119"` in `scripts/task.sh`. Capture
+`wails3 version 2>&1` because this CLI prints its exact one-line version to stderr. If `wails3` is
+absent or the normalized single line differs, install exactly
 `github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}` and verify the installed version before
 executing the task. Never use `@latest` in the release/build wrapper.
 
@@ -809,7 +978,21 @@ CGO_LDFLAGS: >-
 
 Propagate `PORTABLE` from `build` to `build:native`. `package` requests `PORTABLE=true`; bare development builds retain the checkout rpath.
 
-- [ ] **Step 4: Replace inline bundle copying and deep signing**
+- [ ] **Step 4: Make generated build-asset updates regeneration-safe**
+
+Create `scripts/update-build-assets.sh`. It resolves the repo root, invokes the already-pinned
+`wails3 update build-assets ...` command, applies committed `scripts/wails-build-assets.patch` with
+`git apply --check` then `git apply`, runs `scripts/patch-plists.sh`, and executes the same static
+Taskfile/plist contracts as the focused release test. The patch restores all Loqui-owned changes to
+`build/Taskfile.yml` and `build/darwin/Taskfile.yml`, including routing the generated
+`common:update:build-assets` task back through this wrapper. It is pinned to the exact Wails version,
+so patch drift fails loudly instead of silently losing release behavior.
+
+Test the wrapper against copied pristine generated fixtures in a temporary Git repository; assert a
+first regeneration applies the patch, a second run is idempotent, and a deliberately drifted anchor
+fails. Do not run a destructive regeneration against the working tree in the focused unit test.
+
+- [ ] **Step 5: Replace inline bundle copying and deep signing**
 
 Refactor `create:app:bundle` to call:
 
@@ -820,7 +1003,7 @@ Refactor `create:app:bundle` to call:
 
 Refactor `run` to assemble `loqui.dev.app`, call development signing (which handles the explicit ad-hoc warning fallback), then launch it. Delete the old `codesign:adhoc`, Wails `sign`, and Wails `sign:notarize` tasks so no documented path can invoke `--deep` signing.
 
-- [ ] **Step 5: Add top-level release and shell-test tasks**
+- [ ] **Step 6: Add top-level release and shell-test tasks**
 
 Add `darwin:release` calling only `./scripts/release-macos.sh`. Add these top-level tasks:
 
@@ -843,7 +1026,7 @@ test:macos-release:
 
 Call `test:macos-release` from `check` on Darwin. Do not make ordinary `check` contact Apple or require any Keychain identity.
 
-- [ ] **Step 6: Implement mutation checks against temporary script copies**
+- [ ] **Step 7: Implement mutation checks against temporary script copies**
 
 Create `scripts/tests/macos-release-mutations.sh`. The production scripts mark each critical line
 with one unique trailing comment (`# guard: helper-location`, `# guard: forbidden-dependency`,
@@ -857,6 +1040,10 @@ focused case and require the test suite to fail:
 | Remove the forbidden dependency return in `macos-audit.sh` | `bad-homebrew` audit test |
 | Add `--deep` to the app signing argument array | no-deep signing test |
 | Swap helper/app signing calls | signing-order test |
+| Remove `--options runtime` from the app signing args | runtime signing test |
+| Remove `--timestamp` from release executable signing | timestamp signing test |
+| Remove the host or audio-helper `--entitlements` assignment | exact entitlement test |
+| Skip one real dylib's rpath/ID sanitation | forbidden dependency/ID audit test |
 | Replace hidden-candidate rename with direct final copy | old-artifact/atomic publication test |
 
 Define a helper that verifies the marker occurs exactly once before applying the mutation:
@@ -876,7 +1063,7 @@ Use it only on temporary copies. After each mutation, pass the copy through the 
 `BUNDLE_SCRIPT`, `AUDIT_SCRIPT`, `SIGN_SCRIPT`, or `RELEASE_SCRIPT` variable and require the focused
 test process to exit nonzero. A mutant that survives is a test failure.
 
-- [ ] **Step 7: Run the complete automated verification**
+- [ ] **Step 8: Run the complete automated verification**
 
 Run:
 
@@ -890,9 +1077,12 @@ git diff --check
 
 Expected: all PASS. `check` does not prompt for Apple credentials or access the notary service.
 
-- [ ] **Step 8: Build/package twice with the current no-identity state**
+- [ ] **Step 9: Build/package twice and exercise the no-identity fallback deterministically**
 
-Run the following exact local integration sequence before installing Apple identities:
+Run the following local integration sequence before installing Apple identities. The zero-identity
+fallback assertion itself uses the fake `security` fixture so this test remains deterministic after
+the owner installs certificates; observe and record the real machine's zero-identity warning only
+when `security find-identity` still reports zero:
 
 ```bash
 ./scripts/task.sh package
@@ -906,14 +1096,16 @@ dev_stage="$(mktemp -d "${TMPDIR:-/tmp}/loqui-dev-package.XXXXXX")"
   --output "$dev_stage/Loqui.dev.app"
 ./scripts/macos-sign.sh app --channel development --app "$dev_stage/Loqui.dev.app" \
   2>"$dev_stage/signing.stderr"
-grep -F 'TCC continuity is unavailable' "$dev_stage/signing.stderr"
+if security find-identity -v -p codesigning | grep -q '0 valid identities found'; then
+  grep -F 'TCC continuity is unavailable' "$dev_stage/signing.stderr"
+fi
 ```
 
 Use a trap that removes only the validated `loqui-dev-package.*` directory. Confirm both production
 packages pass the auditor and neither production nor development bundle contains code under
 Resources.
 
-- [ ] **Step 9: Record the task checkpoint without committing**
+- [ ] **Step 10: Record the task checkpoint without committing**
 
 Record shell suite, mutation suite, Go suite, full check, package audit, and expected no-identity warning in `.workflow/state.md`.
 
@@ -1000,6 +1192,9 @@ requirement. Assert:
 - app identifier is `com.jualopezmo.loquigo.dev`;
 - helper identifiers use `.dev` suffixes;
 - both candidates have the same Team ID and compatible DR expressions;
+- the app claims exactly Audio Input plus Apple Events, `macos-stt`/`whisper-stt` claim exactly
+  Audio Input, and `globe-listener` claims no entitlements;
+- every executable signed with Apple Development reports the Hardened Runtime flag;
 - no command accesses the Developer ID identity;
 - Accessibility/Input Monitoring grants survive installing/launching the second development candidate after the one-time migration grant.
 
@@ -1052,11 +1247,15 @@ Run:
 ```bash
 hdiutil verify "bin/release/Loqui-${VERSION}-macos-arm64.dmg"
 xcrun stapler validate "bin/release/Loqui-${VERSION}-macos-arm64.dmg"
+codesign --verify --verbose=2 "bin/release/Loqui-${VERSION}-macos-arm64.dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 \
   "bin/release/Loqui-${VERSION}-macos-arm64.dmg"
 ```
 
 Mount the DMG, copy Loqui to `/Applications`, and run `codesign --verify --deep --strict --verbose=2 /Applications/Loqui.app` plus `spctl --assess --type execute --verbose=2 /Applications/Loqui.app`. Confirm Developer ID authority, expected Team ID, hardened runtime on executables, and stable production identifiers.
+Also extract and compare the app/helper entitlement sets to the exact assignments above, verify both
+plist version keys equal `VERSION`, and confirm the installed standard app has no bundled
+`ggml-small.bin`.
 
 - [ ] **Step 6: Execute the local E2E use cases**
 
@@ -1065,7 +1264,9 @@ Write `docs/e2e/use-cases/developer-id-release.md` before the run with these cas
 - clean mount/install/launch through Finder/Gatekeeper;
 - one-time Accessibility, Input Monitoring, microphone, and speech permission migration;
 - fn listener receives the trigger;
-- Whisper transcribes without Homebrew or checkout paths;
+- with no pre-existing data-directory model and no bundled model, the first Whisper attempt exposes
+  the supported download path; interrupt one controlled download, retry it, verify digest/size, then
+  transcribe successfully without Homebrew or checkout paths;
 - Apple STT runs where macOS supports it;
 - Azure and at least one other configured cloud provider complete a dictation;
 - second production release installs over the first without revoking established production grants;
@@ -1075,7 +1276,13 @@ Use `verify-e2e` to execute and write `docs/e2e/reports/2026-08-07-developer-id-
 
 - [ ] **Step 7: Execute or honestly defer the second-Mac journey**
 
-On another Apple Silicon Mac without this checkout and without relying on the build Mac's Homebrew installation, install release 1, grant permissions, exercise fn/Whisper/cloud dictation, then install release 2 and confirm grants remain. If no second Mac is available, the report must say `VERDICT: PARTIAL`, name this exact blocker, and `.workflow/state.md` must leave the E2E gate unchecked.
+On another Apple Silicon Mac without this checkout and without relying on the build Mac's Homebrew
+installation, install release 1, grant permissions, exercise the clean first-use Whisper
+download/retry plus fn/cloud dictation, then install release 2 and confirm grants remain. Assess the
+stapled DMG while offline once to prove the outer ticket is usable without the notary network; restore
+network before the intentionally non-bundled model download. If no second Mac is available, the
+report must say `VERDICT: PARTIAL`, name this exact blocker, and `.workflow/state.md` must leave the
+E2E gate unchecked.
 
 - [ ] **Step 8: Update durable documentation from measured results**
 

@@ -162,8 +162,13 @@ The Whisper build step must make every non-system dependency relocatable:
 3. Rewrite the helper's SDL load command away from `/opt/homebrew/...`.
 4. Give `whisper-stt` an rpath that resolves its dylibs from the app's `Contents/Frameworks` when the
    helper runs from `Contents/Helpers`.
-5. Reject the package if `otool -L` or `otool -l` exposes a checkout path, Homebrew path, or other
-   unexpected absolute non-system dependency.
+5. Rewrite SDL's absolute `LC_ID_DYLIB`, and delete build-tree `LC_RPATH` values from every real
+   Whisper/ggml dylib. Each packaged dylib keeps only a portable `@loader_path` rpath and an
+   `@rpath/...` ID.
+6. Require the embedded `__DATA,__ggml_metallib` section in `libggml-metal`; do not copy an external
+   Metal resource.
+7. Reject the package if `otool -L`, `otool -D`, or `otool -l` exposes a checkout path, Homebrew
+   path, or other unexpected absolute non-system dependency.
 
 Development from `helpers/bin` must continue to work. The implementation may retain a local rpath in
 the development artifact, but the packaged artifact must contain only release-safe references.
@@ -186,9 +191,11 @@ The release script signs from the inside out:
 3. The top-level app bundle.
 4. The completed DMG after it is created.
 
-Developer ID code uses a secure timestamp. Main executables use the hardened runtime. Library code
-does not receive app entitlements. Production starts with no extra entitlement claims; an entitlement
-is added only if a real signed execution path or the notary log proves it necessary.
+Developer ID code uses a secure timestamp. Developer ID and Apple Development main executables use
+Hardened Runtime. Apple's documented resource restrictions require Audio Input on the host,
+`macos-stt`, and `whisper-stt`; the host also requires Apple Events to paste into other apps.
+`globe-listener`, library code, and the framework receive no entitlement file. Ad-hoc packages use
+no Hardened Runtime, timestamp, or entitlements. No undocumented Speech entitlement is claimed.
 
 The script does not use `--deep` to sign. It may use `codesign --verify --deep --strict` after the
 explicit signing pass because deep verification is an audit, not an instruction to mutate nested code.
@@ -196,23 +203,28 @@ explicit signing pass because deep verification is an audit, not an instruction 
 ## Release flow
 
 1. **Preflight** — validate host arm64, Apple tools, exactly selected Developer ID identity,
-   notarization profile, source helpers, framework, version, and a unique temporary staging target.
+   notarization profile, source helpers, framework, `info.version` plus matching plist version keys,
+   and a unique temporary staging target.
 2. **Build/package** — use the existing Wails/Taskfile compilation, assemble the standard bundle in a
    staging directory, and keep the public output path untouched. An ad-hoc-signed artifact produced
    by ordinary Wails packaging is staging input only: the release signer replaces its signatures,
    and the intermediate app is neither launched nor published.
-3. **Audit layout/dependencies** — reject Mach-O code under Resources, missing nested code, non-arm64
-   release code, broken symlinks, and build-machine load paths.
+3. **Audit layout/dependencies** — clear extended attributes, then reject Mach-O code under
+   Resources, missing nested code, non-arm64 release code, broken symlinks, external Metal data, and
+   build-machine load paths/install names.
 4. **Sign inside out** — sign every explicit nested item, the helpers, and the app; capture the
    authority, Team ID, identifiers, DRs, hardened-runtime flags, and timestamps as evidence.
 5. **Verify app** — run strict signature validation. Do not require Gatekeeper acceptance before
    notarization; the pre-notary app is expected to lack an Apple ticket.
-6. **Create DMG** — stage `Loqui.app` and an `/Applications` symlink, create a compressed UDIF image,
-   verify it with `hdiutil`, and sign the image.
+6. **Create DMG** — stage `Loqui.app` with `ditto`, add an `/Applications` symlink, re-audit and
+   reverify the copied app, create a compressed UDIF image, verify it with `hdiutil`, and sign the
+   image.
 7. **Notarize outermost container** — submit the DMG with `notarytool --wait` and the Keychain
    profile. Save the submission ID and fetch the JSON log even when Apple reports `Accepted`.
-8. **Staple and verify** — staple the DMG, validate the ticket, re-run signature/Gatekeeper checks,
-   and inspect the notary log for every expected nested code item.
+8. **Staple and verify** — staple the outermost DMG only, validate the ticket, re-run
+   signature/Gatekeeper checks, and inspect suffix-normalized `ticketContents` for every signed
+   nested code item. Accepted logs fail on error-severity issues but preserve warning-only issues as
+   evidence.
 9. **Publish atomically** — move the accepted image to
    `bin/release/Loqui-${VERSION}-macos-arm64.dmg` only after every check passes.
 
@@ -249,12 +261,12 @@ ad-hoc helper's existing TCC record.
 - Tests assert distinct dev/production bundle IDs and helper identifiers so a generated asset update
   cannot silently collapse the two TCC identities again.
 - Release-script tests run against fake Apple tools in a temporary directory. They prove preflight
-  rejection, inside-out command order, stable helper identifiers, no `--deep` signing, failure
-  propagation, and atomic publication.
+  rejection, inside-out command order, stable helper identifiers, exact per-executable entitlements,
+  no `--deep` signing, notary warning/error handling, failure propagation, and atomic publication.
 - A package audit test examines a real assembled app and fails for Mach-O code in Resources,
   non-arm64 code, missing required helpers, broken symlinks, or forbidden load/rpath prefixes.
-- Mutation checks deliberately remove one order/dependency/layout guard at a time and confirm the
-  focused regression fails.
+- Mutation checks deliberately remove one order/dependency/layout/runtime/timestamp/entitlement
+  guard at a time and confirm the focused regression fails.
 
 ### Real local release
 
@@ -269,7 +281,9 @@ ad-hoc helper's existing TCC record.
 - Submit one DMG and require `Accepted` plus a reviewed notary log.
 - Require successful `codesign`, `spctl`, `stapler validate`, and `hdiutil verify` checks.
 - Mount the DMG, copy the app to `/Applications`, launch it, and exercise the main app,
-  `globe-listener`, Whisper, Apple STT where supported, and Azure without checkout/Homebrew paths.
+  `globe-listener`, a clean first-use Whisper model download plus interrupted-download retry, Apple
+  STT where supported, and Azure without checkout/Homebrew paths. The normal release leaves
+  `LOQUI_BUNDLE_MODEL` unset.
 
 ### Second-Mac evidence
 
@@ -287,6 +301,8 @@ gate remains open and the work is not described as fully distribution-verified.
   is exactly `info.version` from `build/config.yml`.
 - The DMG, app, framework, dylibs, and helpers are signed by the selected Developer ID identity in
   explicit inside-out order; signing uses no `--deep`.
+- Hardened Runtime, secure timestamps, and the narrow host/audio-helper entitlement sets match the
+  executable responsibilities; libraries/frameworks have no entitlement file.
 - The app and all helper designated requirements remain compatible across two rebuilds.
 - Day-to-day signed development uses Apple Development with the `.dev` bundle/helper identifiers and
   does not access the Developer ID identity.
@@ -295,6 +311,8 @@ gate remains open and the work is not described as fully distribution-verified.
 - No executable code is stored under `Contents/Resources`.
 - The packaged binaries are arm64 and have no dependency on Homebrew, the source checkout, or an
   unbundled third-party dylib/framework.
+- Both app plist version keys equal `info.version`, the standard DMG omits the optional model, and
+  all packaged extended attributes are cleared before signing.
 - Release failure leaves the previous accepted artifact intact and returns nonzero with a specific
   diagnostic.
 - No signing or notarization secret is present in Git, command output, or release evidence.
