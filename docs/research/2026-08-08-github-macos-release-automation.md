@@ -99,9 +99,17 @@ Checked: 2026-08-08
 - The tag and public Release should be the final step, after the signed/notarized/stapled DMG and its
   SHA-256 have passed verification. Passing the DMG and checksum to the same `gh release create`
   invocation reduces the window in which a tag or Release exists without its required asset.
+- The installed `gh release create --help` on 2026-08-10 states the exact transaction used when
+  assets are supplied: create a draft, upload assets through separate API calls, then publish. The
+  implementation requires `gh` 2.93.0 or newer and the structural `--latest` flag rather than
+  coupling availability to mutable help prose.
 - GitHub CLI may leave a draft or tag if publication fails partway through. Automatically deleting
   it is unsafe when the client result is ambiguous. Failure handling should inspect and report the
-  residual state, leave it recoverable, and refuse a subsequent normal run until a human resolves it.
+  residual state, leave it recoverable, and refuse a subsequent normal run until a human resolves
+  it. The published-release-by-tag endpoint cannot see a draft, and GitHub exposes draft Releases
+  only to tokens with push access. Therefore the read-only job checks the public Release endpoint,
+  while the protected write job enumerates the authenticated Releases API with pagination and
+  rejects the target tag name in draft state before importing Apple credentials or publishing.
 
 ## Prior art and approach comparison
 
@@ -137,17 +145,19 @@ GitHub publication failures become an observed problem.
 
 ## Design implications
 
-- Use two jobs. `preflight` validates the branch/SHA, version/tag uniqueness, repository checks, and
-  release prerequisites without secrets. `release` depends on it, references the protected
-  Environment, revalidates the SHA and version, builds on a fresh arm64 runner, and publishes last.
+- Use two jobs. `preflight` validates the branch/SHA, public version/tag uniqueness, repository
+  checks, and release prerequisites without secrets. `release` depends on it, references the
+  protected Environment, revalidates the SHA/version and draft absence with write access, builds on
+  a fresh arm64 runner, and publishes last.
 - Pin the checkout to the preflight SHA and use a workflow concurrency group with cancellation
   disabled so two release operators cannot race one another.
 - Pin third-party/official action revisions by immutable commit SHA; keep write permission and Apple
   secrets scoped to the protected release job.
-- Keep the signed DMG and checksum on the GitHub Release. Preserve the existing sanitized detailed
-  evidence as a short-retention Actions artifact rather than attaching it to the Release. Because
-  the repository is public, do not assume that artifact is confidential.
-- Always clean the `.p12`, `.p8`, and temporary Keychain with a final `if: always()` step. Logs and
+- Keep the signed DMG and checksum on the GitHub Release. Preserve sanitized success evidence, and
+  separately sanitized notary-failure evidence when available, as short-retention Actions artifacts
+  rather than attaching them to the Release. Because the repository is public, do not assume that
+  either artifact is confidential.
+- Always clean the `.p12`, `.p8`, and temporary Keychain with a final `if: ${{ always() }}` step. Logs and
   artifacts must contain neither credentials nor decoded secret material.
 - Add explicit CI tests for version/tag preflight, Keychain argument construction, workflow policy,
   and failure-before-publication behavior. The existing local release tests remain the product
@@ -166,3 +176,36 @@ GitHub publication failures become an observed problem.
 - **Repository configuration:** an owner must create the `release` Environment, restrict deployment
   to `main`, add a required reviewer, and enter the five Apple secrets. Those controls cannot be
   fully established by the workflow file itself.
+
+## 2026-08-10 review verification
+
+- A clean worktree reproduced that `./scripts/task.sh check` cannot compile the Go embed until Wails
+  bindings and `frontend/dist` exist. The hosted preflight must therefore run
+  `CI=true ./scripts/task.sh common:build:frontend` before `check`. The shared dependency Task is
+  changed to select `npm ci` under CI and `npm install` locally, so both preflight and the final
+  package build stay lockfile-deterministic without installing twice. Ignored artifacts from a
+  developer checkout are not a valid runner prerequisite.
+- GitHub's official
+  [`macos-26` arm64 image manifest](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)
+  lists GitHub CLI 2.96.0 as of 2026-08-10, above the tested minimum 2.93.0. Runtime preflight still
+  parses and rejects an older CLI so an unexpected image regression fails before credentials.
+- The Environment is a credential boundary, so its branch policy is verified through GitHub's REST
+  API rather than recorded only as a manual claim. GitHub documents creating/updating the
+  Environment with `required_reviewers` and `custom_branch_policies`, then creating an exact `main`
+  deployment branch policy:
+  [environment endpoint](https://docs.github.com/en/rest/deployments/environments) and
+  [deployment branch-policy endpoint](https://docs.github.com/en/rest/deployments/branch-policies),
+  checked 2026-08-10.
+- GitHub confirms Environment secrets are unavailable until protection rules pass and selected
+  branch/tag rules match `GITHUB_REF`:
+  [Deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
+  checked 2026-08-10.
+- The four planned Action SHAs were queried directly through their official GitHub repositories on
+  2026-08-10 and resolve to `actions/checkout` v5.1.0, `actions/setup-go` v6.5.0,
+  `actions/setup-node` v5.0.0, and `actions/upload-artifact` v4.6.2. Workflow comments and policy
+  tests bind the reviewed tag names to those immutable commits.
+- The existing Apple release submits exactly once and retries only `notarytool log`; on a fresh
+  hosted runner, exactly one published evidence directory is therefore the correct invariant.
+  `release-macos.sh` also normalizes physical checkout/staging paths and rejects checkout paths or
+  secret fields before its atomic evidence publication, so the workflow uploads that already
+  sanitized directory instead of inventing a second sanitizer.

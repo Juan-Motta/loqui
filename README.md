@@ -112,6 +112,70 @@ LOQUI_NOTARY_PROFILE=loqui-notary ./scripts/task.sh release:macos
 Success publishes `bin/release/Loqui-<version>-macos-arm64.dmg` only after Developer ID signing,
 notarization, stapling, Gatekeeper assessment, and atomic publication all pass.
 
+## GitHub release automation
+
+The **Release** Action is manual-only and releases the version already merged into `main`. It uses
+the protected Environment `release`; it never edits `build/config.yml`, moves an existing tag, or
+deletes ambiguous remote state.
+
+One-time setup:
+
+1. Export the **Developer ID Application** identity with its private key from Keychain Access as an
+   encrypted `.p12`. Validate it locally with `/usr/bin/openssl pkcs12 -noout`; Apple's parser accepts
+   the legacy algorithms Keychain Access may emit.
+2. Copy its base64 form without writing encoded material into this repository:
+
+   ```bash
+   base64 -i /absolute/path/DeveloperID.p12 | pbcopy
+   ```
+
+   In a private temporary directory, also verify that decoding produces a non-empty `.p12`. Never
+   paste the archive, its base64 form, or its password into logs, issues, commits, or pull requests.
+3. In App Store Connect, create a **Team API key** with notarization access and download its one-time
+   `.p8`. Keep the Key ID and Issuer ID. Individual API keys are intentionally unsupported because
+   the workflow uses the Team-key `--issuer` contract.
+4. Create Environment `release`, restrict deployment branches to exactly `main`, add a required
+   reviewer, and leave **Prevent self-review** disabled while this remains a single-maintainer
+   repository. This provides an operator confirmation, not separation of duties.
+5. Add these five Environment secrets (not repository secrets):
+
+   - `MACOS_CERTIFICATE_P12_BASE64`
+   - `MACOS_CERTIFICATE_PASSWORD`
+   - `APP_STORE_CONNECT_API_KEY_P8`
+   - `APP_STORE_CONNECT_KEY_ID`
+   - `APP_STORE_CONNECT_ISSUER_ID`
+
+   Allow the workflow's protected release job to request `contents: write`; the preflight job stays
+   read-only and cannot access the Environment secrets. Draft Releases are checked during the
+   protected job's revalidation because GitHub does not expose drafts to the read-only token.
+
+For each new release, change the quoted stable version in `build/config.yml` through a normal PR,
+then run:
+
+```bash
+./scripts/patch-plists.sh
+./scripts/task.sh check
+```
+
+After that PR merges, open **Actions → Release → Run workflow**, select `main`, inspect the
+secret-free preflight, and approve the waiting Environment deployment. The repository-wide
+concurrency group serializes releases: do not park an approval indefinitely or dispatch multiple
+replacement runs, because GitHub can cancel an older pending run. On success, verify that the tag
+targets the recorded commit and that the public Release has exactly the DMG, its `.sha256`, and
+generated notes. Success evidence and any available sanitized notarization-failure evidence are
+kept as 14-day Actions artifacts, never as public Release assets.
+
+If publication reports ambiguous residual state, inspect before changing anything:
+
+```bash
+gh release view v0.1.0
+git ls-remote --tags origin refs/tags/v0.1.0
+```
+
+The Action never deletes. Only when inspection proves a partial and unannounced draft/tag may a
+maintainer deliberately run `gh release delete v0.1.0 --cleanup-tag --yes` and dispatch again. Never
+delete a public release; supersede a bad public build with a new patch version.
+
 Development affordances (documented where they are read, not only here):
 
 ```bash

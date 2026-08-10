@@ -5,6 +5,11 @@ release_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 release_output_dir="$release_root_dir/bin/release"
 release_output_dir_physical=""
 profile="${LOQUI_NOTARY_PROFILE:-loqui-notary}"
+notary_keychain="${LOQUI_NOTARY_KEYCHAIN:-}"
+notary_auth_args=(--keychain-profile "$profile")
+if [ -n "$notary_keychain" ]; then
+  notary_auth_args+=(--keychain "$notary_keychain")
+fi
 version=""
 identity=""
 stage=""
@@ -27,6 +32,18 @@ die() { echo "release-macos: $*" >&2; return 1; }
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     die "missing required command: $1"
+    return 1
+  fi
+}
+
+validate_notary_keychain() {
+  [ -n "$notary_keychain" ] || return 0
+  case "$notary_keychain" in
+    /*) ;;
+    *) die "LOQUI_NOTARY_KEYCHAIN must be absolute"; return 1 ;;
+  esac
+  if [ ! -f "$notary_keychain" ]; then
+    die "notary keychain does not exist: $notary_keychain"
     return 1
   fi
 }
@@ -78,11 +95,6 @@ probe_evidence_match() {
       return 1
       ;;
   esac
-}
-
-read_release_version() {
-  awk '/^info:/{in_info=1; next} in_info && /^  version:/{gsub(/["'\'' ]/, "", $2); print $2; exit}' \
-    "$release_root_dir/build/config.yml"
 }
 
 initialize_tmp_roots() {
@@ -356,6 +368,7 @@ cleanup_release() {
 }
 
 phase_preflight() {
+  validate_notary_keychain || return 1
   if ! host_arch="$(uname -m)"; then
     die "could not determine release host architecture"
     return 1
@@ -368,7 +381,7 @@ phase_preflight() {
     xcrun wails3 git cmake swiftc vtool shasum file; do
     require_command "$tool_name" || return 1
   done
-  for required_script in patch-plists.sh build-macos-helpers.sh macos-bundle.sh macos-audit.sh macos-sign.sh; do
+  for required_script in release-version.sh patch-plists.sh build-macos-helpers.sh macos-bundle.sh macos-audit.sh macos-sign.sh; do
     if [ ! -x "$release_root_dir/scripts/$required_script" ]; then
       die "missing executable script: scripts/$required_script"
       return 1
@@ -394,12 +407,8 @@ phase_preflight() {
     return 1
   fi
 
-  if ! version="$(read_release_version)"; then
-    die "could not read info.version"
-    return 1
-  fi
-  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    die "invalid info.version: $version"
+  if ! version="$("$release_root_dir/scripts/release-version.sh" --root "$release_root_dir")"; then
+    die "could not read release version"
     return 1
   fi
   if ! "$release_root_dir/scripts/patch-plists.sh" --check --root "$release_root_dir"; then
@@ -422,7 +431,7 @@ phase_preflight() {
   if ! identity="$("$release_root_dir/scripts/macos-sign.sh" resolve --channel release)"; then
     return 1
   fi
-  if ! xcrun notarytool history --keychain-profile "$profile" --output-format json >/dev/null; then
+  if ! xcrun notarytool history "${notary_auth_args[@]}" --output-format json >/dev/null; then
     die "notary profile '$profile' is invalid or unavailable"
     return 1
   fi
@@ -817,6 +826,7 @@ preserve_notary_failure() {
   failure_id="${1:-missing-id}"
   submit_path="${2:-}"
   log_path="${3:-}"
+  configured_failure_dir="${LOQUI_NOTARY_FAILURE_DIR:-}"
   initialize_tmp_roots || return 1
   if ! failure_dir="$(mktemp -d "$tmp_root_physical/loqui-notary-failure.$failure_id.XXXXXX")"; then
     die "could not preserve notary failure evidence"
@@ -834,13 +844,54 @@ preserve_notary_failure() {
       return 1
     fi
   fi
+  if [ -n "$configured_failure_dir" ]; then
+    case "$configured_failure_dir" in
+      /*) ;;
+      *) die "LOQUI_NOTARY_FAILURE_DIR must be absolute"; return 1 ;;
+    esac
+    configured_failure_parent="$(dirname "$configured_failure_dir")"
+    configured_failure_name="$(basename "$configured_failure_dir")"
+    if [ "$configured_failure_name" = . ] || [ "$configured_failure_name" = .. ]; then
+      die "unsafe LOQUI_NOTARY_FAILURE_DIR: $configured_failure_dir"
+      return 1
+    fi
+    if [ ! -d "$configured_failure_parent" ]; then
+      die "LOQUI_NOTARY_FAILURE_DIR parent does not exist: $configured_failure_parent"
+      return 1
+    fi
+    if ! configured_failure_parent="$(cd "$configured_failure_parent" && pwd -P)"; then
+      die "cannot resolve LOQUI_NOTARY_FAILURE_DIR parent"
+      return 1
+    fi
+    if [ "$configured_failure_parent" = / ]; then
+      die "unsafe LOQUI_NOTARY_FAILURE_DIR parent"
+      return 1
+    fi
+    configured_failure_dir="$configured_failure_parent/$configured_failure_name"
+    if [ -e "$configured_failure_dir" ] || [ -L "$configured_failure_dir" ]; then
+      die "LOQUI_NOTARY_FAILURE_DIR already exists: $configured_failure_dir"
+      return 1
+    fi
+    normalize_evidence_paths "$failure_dir" || return 1
+    probe_evidence_match regex '/Users/|"(password|privateKey|apiKey)"[[:space:]]*:' \
+      "$failure_dir" "notary failure checkout paths or secrets" || return 1
+    if [ "$grep_probe_found" -eq 1 ]; then
+      die "failure evidence contains a checkout path or secret field"
+      return 1
+    fi
+    if ! mv "$failure_dir" "$configured_failure_dir"; then
+      die "could not publish sanitized notary failure evidence"
+      return 1
+    fi
+    failure_dir="$configured_failure_dir"
+  fi
   if ! printf '%s\n' "$failure_dir"; then
     return 1
   fi
 }
 
 phase_submit() {
-  if xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait --timeout 30m \
+  if xcrun notarytool submit "$dmg" "${notary_auth_args[@]}" --wait --timeout 30m \
     --output-format json >"$stage/notary-submit.json"; then
     submit_rc=0
   else
@@ -867,7 +918,7 @@ phase_fetch_log() {
   log_rc=1
   log_attempt=1
   while [ "$log_attempt" -le 3 ]; do
-    if xcrun notarytool log "$submission_id" "$stage/notary-log.json" --keychain-profile "$profile"; then
+    if xcrun notarytool log "$submission_id" "$stage/notary-log.json" "${notary_auth_args[@]}"; then
       log_rc=0
     else
       log_rc=$?
@@ -1012,6 +1063,7 @@ atomic_publish() {
   destination_root="$3"
   publication_version="$4"
   publication_id="$5"
+  publication_dmg_name="$6"
   if [[ ! "$publication_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     die "invalid publication version: $publication_version"
     return 1
@@ -1019,6 +1071,11 @@ atomic_publish() {
   if [[ ! "$publication_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
     || [ "$publication_id" = . ] || [ "$publication_id" = .. ]; then
     die "invalid publication id: $publication_id"
+    return 1
+  fi
+  expected_publication_dmg_name="Loqui-$publication_version-macos-arm64.dmg"
+  if [ "$publication_dmg_name" != "$expected_publication_dmg_name" ]; then
+    die "publication DMG name does not match version: $publication_dmg_name"
     return 1
   fi
   prepare_release_output_dir "$destination_root" || return 1
@@ -1031,7 +1088,7 @@ atomic_publish() {
     die "missing source evidence: $source_evidence"
     return 1
   fi
-  final_dmg="$destination_root/Loqui-$publication_version-macos-arm64.dmg"
+  final_dmg="$destination_root/$publication_dmg_name"
   prepare_evidence_parent "$destination_root" "$publication_version" || return 1
   published_evidence="$evidence_parent/$publication_id"
   if [ -e "$published_evidence" ] || [ -L "$published_evidence" ]; then
@@ -1084,8 +1141,13 @@ atomic_publish() {
 }
 
 phase_publish() {
+  if ! publication_dmg_name="$("$release_root_dir/scripts/release-version.sh" \
+    --root "$release_root_dir" --dmg-name)"; then
+    die "could not derive publication DMG name"
+    return 1
+  fi
   atomic_publish "$dmg" "$stage/evidence" "$release_output_dir" \
-    "$version" "$submission_id" || return 1
+    "$version" "$submission_id" "$publication_dmg_name" || return 1
 }
 
 run_phase() {

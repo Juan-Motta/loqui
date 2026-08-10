@@ -1,0 +1,265 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: macos-26
+    timeout-minutes: 60
+    outputs:
+      sha: ${{ steps.release-metadata.outputs.sha }}
+      version: ${{ steps.release-metadata.outputs.version }}
+      tag: ${{ steps.release-metadata.outputs.tag }}
+      dmg_name: ${{ steps.release-metadata.outputs.dmg_name }}
+    steps:
+      - name: Check out dispatch commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.25.0
+          cache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+
+      - name: Verify native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for formula in cmake jq; do
+            if ! brew list --formula "$formula" >/dev/null 2>&1; then
+              brew install "$formula"
+            fi
+          done
+          {
+            echo '### Hosted toolchain'
+            cmake --version | head -1
+            jq --version
+            gh --version | head -1
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Vendor pinned speech SDK
+        run: ./scripts/vendor-speech-sdk.sh
+
+      - name: Resolve immutable release metadata
+        id: release-metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/github-release.sh preflight
+
+      - name: Build generated frontend inputs
+        run: CI=true ./scripts/task.sh common:build:frontend
+
+      - name: Run repository checks
+        run: ./scripts/task.sh check
+
+  release:
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Check out approved release commit
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.25.0
+          cache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+
+      - name: Verify native tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          for formula in cmake jq; do
+            if ! brew list --formula "$formula" >/dev/null 2>&1; then
+              brew install "$formula"
+            fi
+          done
+          {
+            echo '### Protected toolchain'
+            cmake --version | head -1
+            jq --version
+            gh --version | head -1
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Vendor pinned speech SDK
+        run: ./scripts/vendor-speech-sdk.sh
+
+      - name: Revalidate immutable release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.sha }}
+          EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
+          EXPECTED_TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          ./scripts/github-release.sh preflight \
+            --expect-sha "$EXPECTED_SHA" \
+            --expect-version "$EXPECTED_VERSION" \
+            --expect-tag "$EXPECTED_TAG" \
+            --check-drafts
+
+      - name: Import protected Apple credentials
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APP_STORE_CONNECT_API_KEY_P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "$RUNNER_TEMP" in
+            /*) ;;
+            *) echo 'RUNNER_TEMP is not absolute' >&2; exit 1 ;;
+          esac
+          certificate_path="$RUNNER_TEMP/loqui-developer-id.p12"
+          api_key_path="$RUNNER_TEMP/loqui-notary-api-key.p8"
+          keychain_path="$RUNNER_TEMP/loqui-ci.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          echo "::add-mask::$keychain_password"
+
+          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode >"$certificate_path"
+          printf '%s\n' "$APP_STORE_CONNECT_API_KEY_P8" >"$api_key_path"
+          [ -s "$certificate_path" ] || { echo 'decoded certificate is empty' >&2; exit 1; }
+          [ -s "$api_key_path" ] || { echo 'notary API key is empty' >&2; exit 1; }
+          if ! openssl pkey -in "$api_key_path" -noout >/dev/null 2>&1; then
+            echo 'notary API private key is invalid' >&2
+            exit 1
+          fi
+          chmod 600 "$certificate_path" "$api_key_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          if ! security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" \
+            -A -t cert -f pkcs12 -k "$keychain_path"; then
+            echo 'Developer ID archive could not be imported' >&2
+            exit 1
+          fi
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$keychain_password" "$keychain_path"
+
+          original_keychains=()
+          while IFS= read -r keychain_line; do
+            keychain_line="${keychain_line#*\"}"
+            keychain_line="${keychain_line%\"*}"
+            if [ -n "$keychain_line" ]; then
+              original_keychains+=("$keychain_line")
+            fi
+          done < <(security list-keychains -d user)
+          [ "${#original_keychains[@]}" -gt 0 ] \
+            || { echo 'no original user Keychains found' >&2; exit 1; }
+          security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
+
+          xcrun notarytool store-credentials loqui-ci-notary \
+            --key "$api_key_path" \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --keychain "$keychain_path"
+          rm -f -- "$certificate_path" "$api_key_path"
+
+      - name: Build, sign, and notarize DMG
+        env:
+          LOQUI_NOTARY_PROFILE: loqui-ci-notary
+          LOQUI_NOTARY_KEYCHAIN: ${{ runner.temp }}/loqui-ci.keychain-db
+          LOQUI_NOTARY_FAILURE_DIR: ${{ runner.temp }}/loqui-notary-failure-evidence
+        run: ./scripts/task.sh release:macos
+
+      - name: Upload sanitized notary failure evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loqui-notary-failure-${{ needs.preflight.outputs.tag }}
+          path: ${{ runner.temp }}/loqui-notary-failure-evidence
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: Prepare release assets
+        id: release-assets
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.sha }}
+          EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
+          EXPECTED_TAG: ${{ needs.preflight.outputs.tag }}
+          EXPECTED_DMG_NAME: ${{ needs.preflight.outputs.dmg_name }}
+        run: |
+          ./scripts/github-release.sh prepare \
+            --sha "$EXPECTED_SHA" \
+            --version "$EXPECTED_VERSION" \
+            --tag "$EXPECTED_TAG" \
+            --expect-dmg-name "$EXPECTED_DMG_NAME"
+
+      - name: Upload sanitized release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: loqui-release-evidence-${{ needs.preflight.outputs.tag }}
+          path: ${{ steps.release-assets.outputs.evidence_path }}
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.preflight.outputs.sha }}
+          EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
+          EXPECTED_TAG: ${{ needs.preflight.outputs.tag }}
+          EXPECTED_DMG_NAME: ${{ needs.preflight.outputs.dmg_name }}
+        run: |
+          ./scripts/github-release.sh publish \
+            --sha "$EXPECTED_SHA" \
+            --version "$EXPECTED_VERSION" \
+            --tag "$EXPECTED_TAG" \
+            --expect-dmg-name "$EXPECTED_DMG_NAME"
+
+      - name: Clean temporary Apple credentials
+        if: ${{ always() }}
+        run: |
+          set +e
+          case "$RUNNER_TEMP" in
+            /*) ;;
+            *) echo 'RUNNER_TEMP is not absolute' >&2; exit 1 ;;
+          esac
+          keychain_path="$RUNNER_TEMP/loqui-ci.keychain-db"
+          certificate_path="$RUNNER_TEMP/loqui-developer-id.p12"
+          api_key_path="$RUNNER_TEMP/loqui-notary-api-key.p8"
+          notary_failure_path="$RUNNER_TEMP/loqui-notary-failure-evidence"
+          case "$keychain_path" in
+            "$RUNNER_TEMP"/*) security delete-keychain "$keychain_path" ;;
+          esac
+          for path in "$certificate_path" "$api_key_path"; do
+            case "$path" in
+              "$RUNNER_TEMP"/*) rm -f -- "$path" ;;
+            esac
+          done
+          case "$notary_failure_path" in
+            "$RUNNER_TEMP/loqui-notary-failure-evidence") rm -rf -- "$notary_failure_path" ;;
+          esac
+          exit 0
