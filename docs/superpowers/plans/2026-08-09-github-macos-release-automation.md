@@ -3,7 +3,8 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a manually approved GitHub Action that releases the current `main` version as a signed,
-notarized Apple Silicon DMG, then atomically creates its version tag and public GitHub Release.
+notarized Apple Silicon DMG, then safely creates its version tag and public GitHub Release after all
+assets are uploaded.
 
 **Architecture:** Keep `./scripts/task.sh release:macos` as the Apple product authority. Add tested
 repository seams for version metadata, GitHub preflight/publication, and an optional explicit notary
@@ -16,8 +17,9 @@ GitHub-hosted `macos-26` arm64 runners, Go 1.25.0, Node 24/npm, Apple `security`
 
 ## Global Constraints
 
-- Do not begin Task 1 until `feat/developer-id-release` has a clean full-diff review, passes its
-  second-Mac E2E, is committed through its ship gate, and is present on `main`.
+- Task 1 starts only after `feat/developer-id-release` has a clean full-diff review, passes its
+  second-Mac E2E, is committed through its ship gate, and is present on `main`. This prerequisite
+  was satisfied by PR #1 and `main` commit `5d88c9c` on 2026-08-10.
 - Start implementation from updated `main` on a new `feat/github-macos-release` branch; never change
   code on `main`.
 - Initialize a new `new-feature` `.workflow/state.md`; do not overwrite the active Developer ID state
@@ -33,21 +35,28 @@ GitHub-hosted `macos-26` arm64 runners, Go 1.25.0, Node 24/npm, Apple `security`
   `MAJOR.MINOR.PATCH` value beneath `info:`.
 - A release is valid only while its recorded SHA remains the remote tip of `main`; recheck before
   credentials are decoded and immediately before GitHub publication.
-- Existing tags and Releases are immutable inputs: never overwrite, move, resume, or automatically
-  delete them.
+- Existing tags and Releases are immutable automation inputs: never overwrite, move, resume, or
+  automatically delete them. A human may delete only a verified partial, unannounced publication;
+  a bad public release is superseded by a new patch version.
 - Use GitHub-hosted Apple Silicon `macos-26`, Go 1.25.0, Node 24, the committed npm lockfile, and the
   repository-pinned Wails/Whisper/Azure versions.
 - Run `scripts/vendor-speech-sdk.sh` in both jobs because `third_party/speech-sdk/` is gitignored and
   `release:macos` checks the framework before building.
+- On the clean preflight runner, run `CI=true ./scripts/task.sh common:build:frontend` before
+  invoking `check`; the shared dependency Task selects `npm ci` under CI and preserves local
+  `npm install` behavior outside CI.
 - Keep Apple secrets only in Environment `release`; preflight has `contents: read`, and only the
   protected job has `contents: write`.
-- Pin every referenced Action to a full 40-character commit SHA.
+- Pin every referenced Action to a full 40-character commit SHA with its reviewed version tag in a
+  trailing comment, and verify each pin against the official Action repository before shipping.
 - Preserve Bash 3.2 compatibility, quote all paths, keep shell tracing disabled, and never log secret
   values or environment dumps.
 - The public GitHub Release contains exactly the DMG and `.sha256`. Sanitized evidence is a 14-day
   Actions artifact and must not be treated as confidential in this public repository.
 - Do not claim live GitHub E2E before the workflow exists on the default branch. The bootstrap
   limitation and the selected closure path are recorded in Task 7.
+- The first successful live E2E creates a permanent public release. Obtain separate owner
+  acknowledgment of the exact version and commit as fit for publication immediately before dispatch.
 
 ## File map
 
@@ -55,17 +64,24 @@ GitHub-hosted `macos-26` arm64 runners, Go 1.25.0, Node 24/npm, Apple `security`
 | --- | --- |
 | `scripts/release-version.sh` | Parse and validate the sole release version |
 | `scripts/tests/release-version-test.sh` | Hermetic version-parser matrix |
+| `scripts/tests/testlib.sh` | Shared exact-failure helper used by negative shell contracts |
 | `scripts/release-macos.sh` | Reuse the metadata reader and optionally target a CI Keychain |
 | `scripts/tests/release-macos-test.sh` | Preserve local notarization behavior and prove explicit-Keychain arguments |
 | `scripts/github-release.sh` | Validate GitHub state, prepare assets, publish, verify, and diagnose residual state |
 | `scripts/tests/github-release-test.sh` | Fake-Git/GitHub lifecycle tests with no network or credentials |
 | `.github/workflows/release.yml` | Two-job manual release orchestration and temporary credential lifecycle |
 | `scripts/tests/github-release-workflow-test.sh` | Static workflow policy, permission, ordering, and pin contracts |
+| `build/Taskfile.yml` | Select deterministic `npm ci` for CI package builds while preserving local installs |
 | `Taskfile.yml` | Bind all new shell/policy tests into `test:macos-release` and `check` |
 | `README.md` | Environment secrets, one-time GitHub setup, release operation, and recovery |
 | `docs/e2e/use-cases/github-macos-release.md` | Live and pre-merge journeys with explicit bootstrap limitation |
 | `docs/e2e/reports/2026-08-09-github-macos-release.md` | Execution evidence and final classifications |
 | `docs/CHANGELOG.md` | Ship-time summary after all gates pass |
+| `docs/research/2026-08-08-github-macos-release-automation.md` | Existing sourced external-technology research; update with reviewed API facts |
+| `docs/superpowers/specs/2026-08-09-github-macos-release-automation-design.md` | Existing approved design; keep consistent with review corrections |
+| `docs/superpowers/plans/2026-08-09-github-macos-release-automation.md` | This reviewed implementation plan |
+| `.workflow/state.md` | Active gates, review record, bootstrap choice, and live status |
+| `CONTINUITY.md` | Session handoff updated before each outward handoff |
 
 ---
 
@@ -74,21 +90,28 @@ GitHub-hosted `macos-26` arm64 runners, Go 1.25.0, Node 24/npm, Apple `security`
 **Files:**
 - Create: `scripts/release-version.sh`
 - Create: `scripts/tests/release-version-test.sh`
-- Modify: `scripts/release-macos.sh:23-26,66-67`
-- Modify: `scripts/tests/release-macos-test.sh:15-32`
-- Modify: `Taskfile.yml:34-44`
+- Modify: `scripts/tests/testlib.sh`
+- Modify: `scripts/release-macos.sh` (`read_release_version`, preflight reader, required scripts,
+  and publication filename input)
+- Modify: `scripts/tests/release-macos-test.sh` (preflight config/script fixtures, malformed-version
+  diagnostic, and every `atomic_publish` call)
+- Modify: `Taskfile.yml:34-46`
 
 **Interfaces:**
-- Consumes: `scripts/release-version.sh [--root ABSOLUTE_REPO_ROOT]`
-- Produces: exactly one `MAJOR.MINOR.PATCH` line on stdout; nonzero with a prefixed diagnostic on
+- Consumes: `scripts/release-version.sh [--root ABSOLUTE_REPO_ROOT] [--dmg-name]`
+- Produces: exactly one `MAJOR.MINOR.PATCH` line on stdout, or the canonical
+  `Loqui-MAJOR.MINOR.PATCH-macos-arm64.dmg` with `--dmg-name`; nonzero with a prefixed diagnostic on
   stderr for missing, duplicate, empty, unquoted, single-quoted, prerelease, or malformed values.
 - Produces for later tasks: `scripts/release-macos.sh` calls this script rather than owning another
   YAML parser.
 
 - [ ] **Step 1: Add the failing parser matrix**
 
-Create `scripts/tests/release-version-test.sh` using the existing `testlib.sh` helpers. The matrix is
-exact and includes a valid config plus every rejected shape:
+First add `run_expect_fail_msg EXPECTED_STDERR COMMAND...` to `scripts/tests/testlib.sh`. It invokes
+the command in an explicit `if`, captures stdout/stderr plus the real status, rejects an unexpected
+success and reserved fake status `97`, and requires the expected fixed stderr substring. It never
+uses `set +e`. Then create `scripts/tests/release-version-test.sh`; the matrix is exact and includes
+a valid config plus every rejected shape:
 
 ```bash
 #!/usr/bin/env bash
@@ -112,6 +135,7 @@ write_config() {
 valid="$tmp/valid"
 write_config "$valid" $'version: \'3\'\ninfo:\n  productName: "Loqui"\n  version: "1.2.3"\nwindows:\n  version: "9.9.9"'
 assert_eq "$("$script" --root "$valid")" "1.2.3"
+assert_eq "$("$script" --root "$valid" --dmg-name)" "Loqui-1.2.3-macos-arm64.dmg"
 
 invalid_cases=(missing duplicate empty unquoted single-quoted prerelease prefixed trailing leading-zero)
 for case_name in "${invalid_cases[@]}"; do
@@ -128,11 +152,13 @@ for case_name in "${invalid_cases[@]}"; do
     leading-zero) body=$'info:\n  version: "01.2.3"' ;;
   esac
   write_config "$fixture" "$body"
-  run_expect_fail "$script" --root "$fixture"
+  run_expect_fail_msg "info.version must appear once as quoted MAJOR.MINOR.PATCH" \
+    "$script" --root "$fixture"
 done
 
-run_expect_fail "$script" --root "$tmp/absent-root"
-run_expect_fail "$script" --root relative-root
+run_expect_fail_msg "missing $tmp/absent-root/build/config.yml" \
+  "$script" --root "$tmp/absent-root"
+run_expect_fail_msg "root must be absolute" "$script" --root relative-root
 echo "release-version-test: PASS"
 ```
 
@@ -155,14 +181,15 @@ require the exact quoted stable format:
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [ "${1:-}" = "--root" ]; then
-  [ "$#" -eq 2 ] || { echo "release-version: usage: $0 [--root REPO_ROOT]" >&2; exit 2; }
-  root="$2"
-elif [ "$#" -ne 0 ]; then
-  echo "release-version: usage: $0 [--root REPO_ROOT]" >&2
-  exit 2
-fi
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+output_mode=version
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --root) [ "$#" -ge 2 ] || exit 2; root="$2"; shift 2 ;;
+    --dmg-name) output_mode=dmg-name; shift ;;
+    *) echo "release-version: usage: $0 [--root REPO_ROOT] [--dmg-name]" >&2; exit 2 ;;
+  esac
+done
 
 case "$root" in /*) ;; *) echo "release-version: root must be absolute" >&2; exit 2 ;; esac
 
@@ -188,24 +215,61 @@ if ! version="$(awk '
   exit 1
 fi
 
-printf '%s\n' "$version"
+if [ "$output_mode" = dmg-name ]; then
+  printf 'Loqui-%s-macos-arm64.dmg\n' "$version"
+else
+  printf '%s\n' "$version"
+fi
 ```
 
 Use `chmod +x scripts/release-version.sh scripts/tests/release-version-test.sh`.
 
-- [ ] **Step 4: Make the local release consume the shared reader**
+- [ ] **Step 4: Add local-release integration tests and verify RED**
+
+Before changing production, update the preflight config/script fixtures and malformed-version
+diagnostic described below. Add the wrong-version publication case with the exact causal assertion:
+
+```bash
+run_expect_fail_msg "publication DMG name does not match version" \
+  guarded_atomic_publish "$source_dmg" "$source_evidence" "$destination_root" \
+  0.1.0 submission-123 Loqui-9.9.9-macos-arm64.dmg
+```
+
+Stub `atomic_publish`, call the real `phase_publish`, and assert the exact six literal arguments and
+their order. Run `bash scripts/tests/release-macos-test.sh` and observe RED because the shared reader,
+new argument, equality guard, and forwarding do not exist yet.
+
+- [ ] **Step 5: Make the local release consume the shared reader and canonical name**
 
 Remove `read_release_version()` from `scripts/release-macos.sh`. In `phase_preflight`, use:
 
 ```bash
-version="$("$release_root_dir/scripts/release-version.sh" --root "$release_root_dir")" \
-  || die "could not read release version"
+if version="$("$release_root_dir/scripts/release-version.sh" --root "$release_root_dir")"; then
+  :
+else
+  die "could not read release version"
+  return 1
+fi
 ```
 
-Add `release-version.sh` to the release script's required executable list and add a static assertion
-to `release-macos-test.sh` that the shared reader is referenced.
+Add `release-version.sh` to the release script's required executable list. Preserve the existing
+`BASH_SOURCE` main guard. In `release-macos-test.sh`, copy/source the guarded script under a fixture
+root, change the happy-path preflight fixture to the required quoted version, include an executable
+fixture `release-version.sh`, update the old malformed-version expectation to the shared reader's
+diagnostic, give `build/config.yml` duplicate `info.version` entries, call real `phase_preflight`,
+and require it to stop with the shared reader's diagnostic before any build/notary/publication
+sentinel. Also retain a static assertion that the shared reader is referenced.
 
-- [ ] **Step 5: Bind and run the focused GREEN suite**
+Compute the canonical DMG name once through `release-version.sh --dmg-name` in `phase_publish` and
+pass it as a new final argument to `atomic_publish`. The latter validates the basename and uses it
+for the destination instead of redeclaring the filename template. Update all existing focused
+`atomic_publish` calls with literal canonical names so their adversarial path/rollback coverage is
+preserved. Its validation must require exact equality with
+`Loqui-$publication_version-macos-arm64.dmg`. Although that equality repeats the shape as a
+validation boundary, only the shared reader produces names. Task 4 consumes this shared behavior;
+it does not reopen `release-macos.sh`.
+
+- [ ] **Step 6: Bind and run the focused GREEN suite**
 
 Add `./scripts/tests/release-version-test.sh` before `release-macos-test.sh` in
 `test:macos-release`, then run:
@@ -219,7 +283,7 @@ shellcheck -x -s bash scripts/release-version.sh scripts/release-macos.sh \
 
 Expected: both tests print `PASS`; ShellCheck exits zero.
 
-- [ ] **Step 6: Record the task checkpoint without committing**
+- [ ] **Step 7: Record the task checkpoint without committing**
 
 Run:
 
@@ -236,8 +300,9 @@ Do not commit while the ship-gate checklist is open.
 ### Task 2: Add an explicit temporary-Keychain seam to notarization
 
 **Files:**
-- Modify: `scripts/release-macos.sh:4-18,46-79,223-252`
-- Modify: `scripts/tests/release-macos-test.sh:8-32,128-139`
+- Modify: `scripts/release-macos.sh` (notary auth initialization/validation and the `history`,
+  `submit`, and `log` invocations)
+- Modify: `scripts/tests/release-macos-test.sh` (source guard and exact auth-array probes)
 
 **Interfaces:**
 - Consumes: optional `LOQUI_NOTARY_KEYCHAIN=/absolute/path/to/keychain-db`.
@@ -248,8 +313,9 @@ Do not commit while the ship-gate checklist is open.
 
 - [ ] **Step 1: Add failing exact-argument tests**
 
-Before changing production code, extend `release-macos-test.sh` with subshell probes that source the
-script under both environments:
+Before changing production code, first assert the existing `BASH_SOURCE` guard remains at the end of
+`release-macos.sh`; sourcing is safe only because that guard prevents `main` from running. Extend
+`release-macos-test.sh` with subshell probes that source the script under both environments:
 
 ```bash
 default_auth="$(bash -c '. "$1"; printf "<%s>\n" "${notary_auth_args[@]}"' \
@@ -263,11 +329,11 @@ ci_auth="$(LOQUI_NOTARY_PROFILE=loqui-ci-notary LOQUI_NOTARY_KEYCHAIN="$ci_keych
 assert_eq "$ci_auth" \
   "$(printf '<%s>\n' --keychain-profile loqui-ci-notary --keychain "$ci_keychain")"
 
-assert_eq "$(grep -F -c '"${notary_auth_args[@]}"' "$release_script")" "3"
 ```
 
 Also call a focused `validate_notary_keychain` helper and assert that relative and missing absolute
-paths fail before `notarytool` can run.
+paths fail before `notarytool` can run. Assert each of the `history`, `submit`, and `log` command
+blocks contains the array exactly once rather than counting matching lines globally.
 
 - [ ] **Step 2: Run the test and verify RED**
 
@@ -292,8 +358,14 @@ Add a focused validator and call it at the start of `phase_preflight`:
 ```bash
 validate_notary_keychain() {
   [ -n "$notary_keychain" ] || return 0
-  case "$notary_keychain" in /*) ;; *) die "LOQUI_NOTARY_KEYCHAIN must be absolute" ;; esac
-  [ -f "$notary_keychain" ] || die "notary keychain does not exist: $notary_keychain"
+  case "$notary_keychain" in
+    /*) ;;
+    *) die "LOQUI_NOTARY_KEYCHAIN must be absolute"; return 1 ;;
+  esac
+  if [ ! -f "$notary_keychain" ]; then
+    die "notary keychain does not exist: $notary_keychain"
+    return 1
+  fi
 }
 ```
 
@@ -357,17 +429,38 @@ export GH_TOKEN=fake-token
 export GITHUB_OUTPUT="$tmp/outputs" GITHUB_STEP_SUMMARY="$tmp/summary"
 export FAKE_HEAD_SHA="$sha" FAKE_MAIN_SHA="$sha"
 export FAKE_GH_STATE="$tmp/gh-state" FAKE_CALLS="$tmp/calls"
-export LOQUI_RELEASE_ROOT="$tmp/repo" LOQUI_RELEASE_VERSION_SCRIPT="$tmp/fake-version"
 export PATH="$tmp/fake-bin:$PATH"
-printf '#!/usr/bin/env bash\nprintf "0.1.0\\n"\n' >"$tmp/fake-version"
-chmod +x "$tmp/fake-version"
+mkdir -p "$tmp/repo/scripts"
+cp "$repo_root/scripts/github-release.sh" "$tmp/repo/scripts/github-release.sh"
+cp "$repo_root/scripts/release-version.sh" "$tmp/repo/scripts/release-version.sh"
+mkdir -p "$tmp/repo/build"
+printf '%s\n' 'info:' '  version: "0.1.0"' >"$tmp/repo/build/config.yml"
+script="$tmp/repo/scripts/github-release.sh"
+chmod +x "$tmp/repo/scripts/"*.sh
 ```
 
+The copied production CLI derives its own fixture root normally, so tests exercise the real command
+entry point without a root/version environment variable or command-line seam. Its committed
+`BASH_SOURCE` guard remains independently asserted because focused function probes source it.
+
 The fake `git` implements only `rev-parse HEAD` and `ls-remote` for `main`/the version tag. The fake
-`gh` implements `release view`, `release create`, and `api repos/Juan-Motta/loqui`; every invocation
-is appended with shell-escaped arguments to `FAKE_CALLS`.
+`gh` implements `--version`, `release create --help`, `release view`, `release create`, the successful
+repository probe, an optional paginated Releases listing that includes drafts for the protected
+write-token revalidation, and an `api -i` published-Release lookup with an HTTP status line; every
+invocation is appended with shell-escaped arguments to `FAKE_CALLS`.
 
 Add these cases, resetting fake state between each:
+
+```bash
+reset_fakes() {
+  rm -rf "$FAKE_GH_STATE"
+  mkdir -p "$FAKE_GH_STATE"
+  : >"$FAKE_CALLS"
+}
+```
+
+Call `reset_fakes` before every case and require `$FAKE_CALLS` to be empty before the command under
+test. Every unhandled fake subcommand exits with reserved status `97`.
 
 ```bash
 "$script" preflight
@@ -378,19 +471,32 @@ assert_contains "$GITHUB_OUTPUT" "dmg_name=Loqui-0.1.0-macos-arm64.dmg"
 assert_contains "$GITHUB_STEP_SUMMARY" "0.1.0"
 assert_contains "$GITHUB_STEP_SUMMARY" "$sha"
 
-GITHUB_REF=refs/heads/feature run_expect_fail "$script" preflight
-FAKE_HEAD_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa run_expect_fail "$script" preflight
-FAKE_MAIN_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb run_expect_fail "$script" preflight
-FAKE_TAG_SHA="$sha" run_expect_fail "$script" preflight
-FAKE_RELEASE_EXISTS=1 run_expect_fail "$script" preflight
-FAKE_RELEASE_QUERY_FAIL=1 run_expect_fail "$script" preflight
-run_expect_fail "$script" preflight --expect-version 0.1.1
-run_expect_fail "$script" preflight --expect-tag v0.1.1
+GITHUB_REF=refs/heads/feature run_expect_fail_msg "requires refs/heads/main" "$script" preflight
+FAKE_HEAD_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  run_expect_fail_msg "checkout HEAD does not match dispatch SHA" "$script" preflight
+FAKE_MAIN_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  run_expect_fail_msg "remote main does not match dispatch SHA" "$script" preflight
+FAKE_TAG_SHA="$sha" run_expect_fail_msg "tag already exists" "$script" preflight
+FAKE_RELEASE_EXISTS=1 run_expect_fail_msg "GitHub Release already exists" "$script" preflight
+FAKE_RELEASE_QUERY_FAIL=1 \
+  run_expect_fail_msg "cannot verify GitHub Release absence" "$script" preflight
+FAKE_REPOSITORY_QUERY_FAIL=1 \
+  run_expect_fail_msg "cannot verify GitHub repository access" "$script" preflight
+FAKE_MAIN_QUERY_FAIL=1 run_expect_fail_msg "cannot read remote main" "$script" preflight
+FAKE_GH_TOO_OLD=1 run_expect_fail_msg "gh 2.93.0 or newer is required" "$script" preflight
+FAKE_GH_NO_LATEST=1 run_expect_fail_msg "gh release create lacks --latest" "$script" preflight
+FAKE_DRAFT_EXISTS=1 "$script" preflight
+assert_not_contains "$FAKE_CALLS" '<--paginate>'
+FAKE_DRAFT_EXISTS=1 \
+  run_expect_fail_msg "draft GitHub Release already exists" "$script" preflight --check-drafts
+FAKE_RELEASE_LIST_FAIL=1 \
+  run_expect_fail_msg "cannot list GitHub Releases" "$script" preflight --check-drafts
+run_expect_fail_msg "version expectation mismatch" "$script" preflight --expect-version 0.1.1
+run_expect_fail_msg "tag expectation mismatch" "$script" preflight --expect-tag v0.1.1
 ```
 
-For the release-absence probe, fake `gh api repos/Juan-Motta/loqui/releases/tags/v0.1.0` returns an
-`(HTTP 404)` diagnostic. Other nonzero diagnostics represent authentication/network failure and
-must fail closed.
+The repository probe must succeed first. For the release-absence probe, fake `gh api -i` returns an
+HTTP 404 status line; HTTP 401/403/5xx, missing status, and command/network failures must fail closed.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -400,58 +506,88 @@ Expected: nonzero because `scripts/github-release.sh` does not exist.
 
 - [ ] **Step 3: Implement command dispatch and invariant helpers**
 
-Create the executable script with a test-only root/version seam, strict SHA/repository validation,
-and command dispatch:
+Create the executable script with strict SHA/repository validation and command dispatch. It exposes
+no test-only root/version seam:
 
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="${LOQUI_RELEASE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-version_script="${LOQUI_RELEASE_VERSION_SCRIPT:-$root/scripts/release-version.sh}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+version_script="$root/scripts/release-version.sh"
 
-die() { echo "github-release: $*" >&2; return 1; }
+die() { printf 'github-release: %s\n' "$*" >&2; exit 1; }
 is_sha() { [[ "$1" =~ ^[0-9a-f]{40}$ ]]; }
-write_output() { [ -z "${GITHUB_OUTPUT:-}" ] || printf '%s=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"; }
+write_output() {
+  [ -n "${GITHUB_OUTPUT:-}" ] || return 0
+  printf '%s=%s\n' "$1" "$2" >>"$GITHUB_OUTPUT"
+}
 
 remote_main_sha() {
-  git ls-remote origin refs/heads/main | awk '$2 == "refs/heads/main" {print $1}'
+  if remote_output="$(git ls-remote origin refs/heads/main 2>&1)"; then
+    :
+  else
+    die "cannot read remote main: $remote_output"
+  fi
+  main_sha="$(printf '%s\n' "$remote_output" |
+    awk '$2 == "refs/heads/main" {print $1}')"
+  is_sha "$main_sha" || die "remote main did not resolve to one commit"
+  printf '%s\n' "$main_sha"
 }
 
 assert_tag_absent() {
   tag="$1"
-  set +e
-  tag_refs="$(git ls-remote --tags origin "refs/tags/$tag")"
-  tag_rc=$?
-  set -e
-  [ "$tag_rc" -eq 0 ] || die "cannot verify tag absence for $tag"
+  if tag_refs="$(git ls-remote --tags origin "refs/tags/$tag" 2>&1)"; then
+    :
+  else
+    die "cannot verify tag absence for $tag: $tag_refs"
+  fi
   [ -z "$tag_refs" ] || die "tag already exists: $tag"
 }
 
 assert_release_absent() {
   tag="$1"
-  set +e
-  release_probe="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>&1)"
-  release_rc=$?
-  set -e
-  if [ "$release_rc" -eq 0 ]; then die "GitHub Release already exists: $tag"; fi
-  printf '%s\n' "$release_probe" | grep -F '(HTTP 404)' >/dev/null \
-    || die "cannot verify GitHub Release absence for $tag"
+  check_drafts="$2"
+  if ! gh api "repos/$GITHUB_REPOSITORY" --silent >/dev/null; then
+    die "cannot verify GitHub repository access"
+  fi
+  if [ "$check_drafts" -eq 1 ]; then
+    if release_rows="$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+      --jq '.[] | [.tag_name, .draft] | @tsv' 2>&1)"; then
+      :
+    else
+      die "cannot list GitHub Releases: $release_rows"
+    fi
+    if printf '%s\n' "$release_rows" | awk -F '\t' -v tag="$tag" '$1 == tag && $2 == "true" {found=1} END {exit !found}'; then
+      die "draft GitHub Release already exists: $tag"
+    fi
+  fi
+  if release_probe="$(gh api -i "repos/$GITHUB_REPOSITORY/releases/tags/$tag" 2>&1)"; then
+    die "GitHub Release already exists: $tag"
+  fi
+  release_status="$(printf '%s\n' "$release_probe" |
+    awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/{print $2; exit}')"
+  [ "$release_status" = 404 ] || die "cannot verify GitHub Release absence for $tag"
 }
 ```
 
 Implement `preflight` so it:
 
-1. parses the three optional expectations with a rejecting `case` loop;
+1. parses the three optional expectations plus the flag-only `--check-drafts` with a rejecting
+   `case` loop; draft enumeration is disabled in the read-only job and required in protected
+   revalidation;
 2. validates `GITHUB_REPOSITORY` as `owner/name`, both SHAs as 40 lowercase hex, and ref exactly;
-3. compares checked-out `HEAD`, dispatch SHA, remote `main`, and optional expected SHA;
-4. reads version and derives tag/DMG name;
-5. compares optional expected version/tag;
-6. calls both fail-closed absence assertions;
-7. writes the four outputs and non-secret preflight summary only after all checks pass.
+3. parses the first `gh --version` line as numeric `MAJOR.MINOR.PATCH`, compares its components
+   numerically, requires version 2.93.0 or newer, and verifies the structural
+   `gh release create --help` flag `--latest` exists;
+4. compares checked-out `HEAD`, dispatch SHA, remote `main`, and optional expected SHA;
+5. reads version and derives tag/DMG name;
+6. compares optional expected version/tag;
+7. calls both fail-closed absence assertions, including draft enumeration only when requested;
+8. writes the four outputs and non-secret preflight summary only after all checks pass.
 
-The fake `gh api` returns an exact `(HTTP 404)` diagnostic for an absent Release and a different
-nonzero diagnostic for network/authentication failure. Do not treat every nonzero result as absent.
+Do not use `set +e`, prose diagnostics, or an unguarded pipeline to infer command state. Every
+expected nonzero is captured through an explicit `if command; then ... else rc=$?; ... fi` branch.
 
 - [ ] **Step 4: Run the preflight matrix GREEN**
 
@@ -479,11 +615,11 @@ Add `./scripts/tests/github-release-test.sh` to `test:macos-release`, run it thr
 
 **Interfaces:**
 - Consumes command:
-  `scripts/github-release.sh prepare --sha SHA --version VERSION --tag TAG`.
+  `scripts/github-release.sh prepare --sha SHA --version VERSION --tag TAG --expect-dmg-name NAME`.
 - Produces outputs: absolute `dmg_path`, `checksum_path`, `evidence_path`, lowercase `checksum`, and
   `submission_id` from the sole evidence-directory basename.
 - Consumes command:
-  `scripts/github-release.sh publish --sha SHA --version VERSION --tag TAG`.
+  `scripts/github-release.sh publish --sha SHA --version VERSION --tag TAG --expect-dmg-name NAME`.
 - Produces: a public non-prerelease GitHub Release, exact tag target, two exact assets, and a summary
   URL; on ambiguous failure it reports residual tag/Release state and never deletes.
 
@@ -492,20 +628,30 @@ Add `./scripts/tests/github-release-test.sh` to `test:macos-release`, run it thr
 Build a valid local publication fixture:
 
 ```bash
-release_root="$LOQUI_RELEASE_ROOT/bin/release"
+release_root="$tmp/repo/bin/release"
 dmg_name=Loqui-0.1.0-macos-arm64.dmg
 put_file "$release_root/$dmg_name" "signed-notarized-fixture" 644
 put_file "$release_root/evidence/0.1.0/submission-123/notary-log.json" '{"status":"Accepted"}' 644
 : >"$GITHUB_OUTPUT"
-"$script" prepare --sha "$sha" --version 0.1.0 --tag v0.1.0
+"$script" prepare --sha "$sha" --version 0.1.0 --tag v0.1.0 \
+  --expect-dmg-name "$dmg_name"
 assert_file "$release_root/$dmg_name.sha256"
 (cd "$release_root" && shasum -a 256 -c "$dmg_name.sha256")
 assert_contains "$GITHUB_OUTPUT" "evidence_path=$release_root/evidence/0.1.0/submission-123"
 assert_contains "$GITHUB_OUTPUT" "submission_id=submission-123"
 ```
 
-Then cover failures for missing DMG, wrong tag/version pairing, zero evidence directories, two
-evidence directories, and a corrupted checksum.
+Pass the literal `--expect-dmg-name "$dmg_name"` in the happy path. Then cover failures for a
+mismatched expected DMG name, missing DMG, wrong tag/version pairing, zero evidence directories, two
+evidence directories, and a corrupted checksum. Call `reset_fakes` before every case, recreate
+mutable fixture files rather than inheriting state, and make every negative use
+`run_expect_fail_msg` with its unique causal diagnostic; a nonzero status alone is insufficient.
+Every unhandled fake Git/GitHub command exits with reserved status 97.
+
+The one-directory contract is intentional: `release-macos.sh` performs exactly one `notarytool
+submit`; its bounded retry applies only to `notarytool log`, and every Actions job has a fresh
+filesystem. Rejecting two directories catches contaminated or ambiguous output rather than trying to
+guess a winner.
 
 For publication, make fake `gh release create` create `$FAKE_GH_STATE/published` and make subsequent
 `release view --json` return:
@@ -516,14 +662,19 @@ For publication, make fake `gh release create` create `$FAKE_GH_STATE/published`
 
 Assert the logged create call has `--target` plus the exact SHA, `--title` plus `Loqui 0.1.0`,
 `--generate-notes`, `--latest`, and both asset paths. Add negative cases for draft, prerelease,
-wrong target, missing/extra asset, stale `main` at final preflight, and a create failure.
+wrong target, missing/extra asset, stale `main` at final preflight, create failure, authenticated tag
+API returning the wrong SHA, and tag visibility delayed for two attempts versus missing after all
+three attempts. Production defaults `LOQUI_GITHUB_RELEASE_RETRY_DELAY_SECONDS` to two; tests set
+that narrowly scoped verification-delay variable to zero. It never changes build, credential, or
+publication behavior.
 
-Finally assert production source contains none of these destructive forms:
+Finally use anchored command-line regexes to assert production contains no invocation of these
+destructive forms while still allowing README/summary prose to describe manual recovery:
 
 ```bash
-assert_not_contains "$script" "release delete"
-assert_not_contains "$script" "push --delete"
-assert_not_contains "$script" "tag -d"
+if grep -E '^[[:space:]]*(gh release delete([[:space:]]|$)|gh release delete-asset([[:space:]]|$)|git push --delete([[:space:]]|$)|git push[^#]*:[[:space:]]*refs/tags/|git tag -d([[:space:]]|$)|gh api[^#]*(--method|-X)[[:space:]]+DELETE)' "$script"; then
+  fail "production script contains an automatic deletion command"
+fi
 ```
 
 - [ ] **Step 2: Run the expanded suite and verify RED**
@@ -534,11 +685,16 @@ Expected: failure on unknown `prepare`/`publish` commands.
 
 - [ ] **Step 3: Implement deterministic asset preparation**
 
-Add shared option parsing that requires SHA/version/tag and verifies `tag == v$version` plus the
-metadata reader's current version. Implement `prepare` around exact paths:
+Add shared option parsing that requires SHA/version/tag/expected-DMG-name and verifies
+`tag == v$version`, the metadata reader's current version, and the shared reader's canonical name
+equals the caller's expected name. Implement `prepare` around exact paths:
 
 ```bash
-dmg_name="Loqui-$version-macos-arm64.dmg"
+if dmg_name="$("$version_script" --root "$root" --dmg-name)"; then
+  :
+else
+  die "could not derive canonical DMG name"
+fi
 dmg_path="$root/bin/release/$dmg_name"
 checksum_path="$dmg_path.sha256"
 evidence_root="$root/bin/release/evidence/$version"
@@ -564,15 +720,26 @@ Require the evidence basename to be a non-empty safe identifier, then write all 
 after verification. Append version, SHA, tag, checksum, notarization submission ID, and
 `loqui-release-evidence-$tag` to `GITHUB_STEP_SUMMARY` without including any evidence body.
 
+The existing `release-macos.sh` publication path obtains the same canonical filename through
+`release-version.sh --dmg-name`; focused tests assert both production paths call that shared
+producer. `atomic_publish` intentionally repeats the literal shape only as an equality-validation
+boundary against its version argument; it does not produce an alternate name.
+
 - [ ] **Step 4: Implement final revalidation and one-shot publication**
 
-Before publication, run the same preflight invariants with exact expectations while suppressing
-duplicate output writes. Re-verify the checksum, then make one `gh` call:
+Before publication, run the same preflight invariants with exact expectations and `--check-drafts`
+while suppressing duplicate output writes. Re-verify the checksum, then make one `gh` call:
+
+The reviewed GitHub CLI 2.93.0 explicitly documents that this single command first creates a draft,
+uploads assets with separate API calls, and publishes only after those uploads succeed. Preflight
+requires that version or newer rather than coupling availability to mutable help prose. Therefore an
+upload failure leaves an unannounced mutable draft rather than a
+public partial Release; do not replace this with a hand-rolled second publication transaction.
 
 ```bash
 gh release create "$tag" \
-  "$dmg_path#$dmg_name" \
-  "$checksum_path#$dmg_name.sha256" \
+  "$dmg_path" \
+  "$checksum_path" \
   --repo "$GITHUB_REPOSITORY" \
   --target "$sha" \
   --title "Loqui $version" \
@@ -580,17 +747,26 @@ gh release create "$tag" \
   --latest
 ```
 
-If it exits nonzero, query the exact remote tag and `gh release view` with `set +e`, append their
-presence/absence plus a recovery warning to `GITHUB_STEP_SUMMARY`, and return the original failure.
-Do not mutate remote state.
+Invoke `gh release create` in an explicit `if`; on failure, capture its original status, query the
+exact remote tag, the paginated authenticated Releases API (including drafts), and `gh release view`
+in their own checked `if` branches, append their presence/absence plus a recovery warning to
+`GITHUB_STEP_SUMMARY`, and `exit` with the original status. Do not use `set +e` and do not mutate
+remote state.
 
 On success:
 
-- require `git ls-remote origin refs/tags/$tag` to equal `sha`;
+- query `gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag"` up to three times with a two-second
+  delay; accept a lightweight `commit` object or dereference an annotated `tag` object, then require
+  the terminal commit SHA to equal `sha`;
 - query `gh release view --json url,isDraft,isPrerelease,tagName,targetCommitish,assets`;
 - use `jq -e` to require `isDraft == false`, `isPrerelease == false`, exact tag/target, and the sorted
   asset names equal exactly `[DMG, checksum]`;
 - append version, SHA, checksum, and URL to `GITHUB_STEP_SUMMARY`.
+
+Every post-publication verification failure first queries and appends the Release URL, tag, and SHA
+plus the explicit warning `the Release is PUBLISHED — do not delete; verify manually with gh release
+view`. It then exits nonzero without mutation, so a red verification cannot be mistaken for a
+pre-publication failure.
 
 - [ ] **Step 5: Run GREEN publication tests**
 
@@ -616,6 +792,7 @@ write occurs before final preflight and no deletion command exists. Do not commi
 **Files:**
 - Create: `.github/workflows/release.yml`
 - Create: `scripts/tests/github-release-workflow-test.sh`
+- Modify: `build/Taskfile.yml:19-30`
 - Modify: `Taskfile.yml:34-44`
 
 **Interfaces:**
@@ -623,11 +800,11 @@ write occurs before final preflight and no deletion command exists. Do not commi
 - Consumes Environment: `release` with five named secrets and a required reviewer.
 - Produces: temporary `loqui-ci-notary` profile in an explicit Keychain, local release artifacts,
   14-day sanitized evidence artifact, and the final GitHub Release.
-- Uses pinned Action commits verified on 2026-08-09:
-  `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09`,
-  `actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16`,
-  `actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444`, and
-  `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02`.
+- Uses pinned Action commits verified against their official repositories on 2026-08-10:
+  `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0`,
+  `actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0`,
+  `actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0`, and
+  `actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2`.
 
 - [ ] **Step 1: Write the failing workflow-policy test**
 
@@ -636,41 +813,67 @@ blocks by their two-space job indentation, then assert:
 
 ```bash
 assert_contains "$workflow" "workflow_dispatch:"
-assert_not_contains "$workflow" "push:"
-assert_not_contains "$workflow" "pull_request:"
-assert_not_contains "$workflow" "schedule:"
+assert_not_contains "$workflow" "inputs:"
 assert_contains "$workflow" "group: macos-release"
 assert_contains "$workflow" "cancel-in-progress: false"
 assert_contains "$preflight_job" "runs-on: macos-26"
+assert_contains "$preflight_job" "./scripts/github-release.sh preflight"
 assert_not_contains "$preflight_job" "environment:"
-assert_not_contains "$preflight_job" 'secrets.'
 assert_not_contains "$preflight_job" "contents: write"
+assert_contains "$preflight_job" "timeout-minutes: 60"
 assert_contains "$release_job" "needs: preflight"
+assert_contains "$release_job" "runs-on: macos-26"
 assert_contains "$release_job" "environment: release"
 assert_contains "$release_job" "contents: write"
-assert_contains "$release_job" "if: always()"
+assert_contains "$release_job" "timeout-minutes: 120"
+assert_contains "$release_job" 'if: ${{ always() }}'
 assert_contains "$release_job" "./scripts/vendor-speech-sdk.sh"
 assert_contains "$release_job" "./scripts/task.sh release:macos"
 assert_contains "$release_job" "retention-days: 14"
 ```
 
+Extract the `on:` block by indentation and require its only key to be an empty `workflow_dispatch`;
+deny `inputs:` and every other trigger rather than maintaining a trigger denylist. Explicitly assert
+that none of the five Apple secret names occurs in preflight; `${{ github.token }}`
+is allowed only on its `gh` step. Reject any four-space job-level `if:` in `release`, require exactly
+that the named final cleanup step has `if: ${{ always() }}`. Do not assert a global count of
+conditional steps. Require the release job's permission keys to equal exactly `contents: write`.
+Require the release job checkout `ref:` to equal `${{ needs.preflight.outputs.sha }}` rather than a
+moving branch or dispatch ref.
+
 For every non-comment `uses:` line, extract the suffix after `@` and require exactly 40 lowercase
-hex characters. Use line-number checks to prove order:
+hex characters plus a reviewed `# vMAJOR.MINOR.PATCH` comment. Use line-number checks to prove order:
 
 ```text
 revalidate < credential import < release:macos < prepare < upload-artifact < publish < cleanup
 ```
 
-Also require each of the five secret names exactly once in the protected job and zero times in the
-preflight block.
+Also require exactly one `${{ secrets.NAME }}` expression for each of the five names, all in the
+single credential-setup step `env:` block, and zero Apple-secret expressions in preflight. Require
+`CI=true ./scripts/task.sh common:build:frontend` before the preflight `check` command. The real Task
+behavior test proves this invokes `npm ci`; do not duplicate dependency installation in a separate
+workflow step. The publisher exposes no root/version test seams, so there are no test-only
+environment controls for the workflow to misuse. Require `EXPECTED_DMG_NAME` to be mapped from
+`needs.preflight.outputs.dmg_name` and passed through `--expect-dmg-name` in both prepare and publish.
+
+The same test also executes the real `common:install:frontend:deps:npm` Task with `-f` and a
+narrow fake `npm` that records arguments. Under `CI=true`, require the install command to be exactly
+`npm ci`; under `CI=false`, require exactly `npm install`. Ignore the separate `npm version`
+precondition call. This proves the final `release:macos` build remains lockfile-deterministic in CI
+while preserving the existing local developer behavior.
 
 - [ ] **Step 2: Run the policy test and verify RED**
 
 Run `bash scripts/tests/github-release-workflow-test.sh`.
 
-Expected: failure because `.github/workflows/release.yml` does not exist.
+Expected: failure because `.github/workflows/release.yml` does not exist; after adding only an empty
+fixture workflow, RED must also show the current Task invokes `npm install` under `CI=true`.
 
 - [ ] **Step 3: Add the manual trigger, preflight job, and immutable outputs**
+
+First change `build/Taskfile.yml` so the npm dependency task runs `npm ci` when `CI=true` and the
+existing `npm install` otherwise. Keep its directory, sources, generates, and precondition intact.
+Rerun the focused test to make this behavior GREEN while the missing workflow assertions remain RED.
 
 Create the workflow header and first job with these exact policies:
 
@@ -690,6 +893,7 @@ concurrency:
 jobs:
   preflight:
     runs-on: macos-26
+    timeout-minutes: 60
     outputs:
       sha: ${{ steps.release-metadata.outputs.sha }}
       version: ${{ steps.release-metadata.outputs.version }}
@@ -699,12 +903,15 @@ jobs:
 
 Add pinned checkout with `ref: ${{ github.sha }}`, `fetch-depth: 0`, and
 `persist-credentials: false`; pinned Go setup with `go-version: 1.25.0` and `cache: false`; pinned
-Node setup with `node-version: 24`; dependency setup with
-`HOMEBREW_NO_AUTO_UPDATE=1 brew install cmake jq`, `npm ci --prefix frontend`, and
-`./scripts/vendor-speech-sdk.sh`.
+Node setup with `node-version: 24`. For CMake and jq, use checked `brew list --formula` branches and
+install only a missing formula; record `cmake --version`, `jq --version`, and `gh --version` in the
+step summary. The official `macos-26` arm64 image manifest records GitHub CLI 2.96.0 as of
+2026-08-10, above the repository's tested minimum 2.93.0; the script still fails closed if a future
+image violates that baseline. Run `./scripts/vendor-speech-sdk.sh`.
 
 Run `./scripts/github-release.sh preflight` in step `id: release-metadata`, with `GH_TOKEN` scoped to
-that step, then run `./scripts/task.sh check`. Do not reference Environment or secrets.
+that step as `${{ github.token }}`. Then run `CI=true ./scripts/task.sh common:build:frontend` and
+`./scripts/task.sh check` in that order. Do not reference Environment or Apple secrets.
 
 - [ ] **Step 4: Add protected release setup and stale-run revalidation**
 
@@ -714,21 +921,27 @@ Define the second job:
   release:
     needs: preflight
     runs-on: macos-26
+    timeout-minutes: 120
     environment: release
     permissions:
       contents: write
 ```
 
-Repeat checkout/toolchain/dependency setup at the exact preflight SHA. Before credential setup, run:
+Repeat checkout/toolchain/dependency setup at the exact preflight SHA. Before credential setup, map
+the immutable outputs into step-local environment variables and run (never interpolate `${{ }}`
+directly into shell source):
 
 ```bash
 ./scripts/github-release.sh preflight \
-  --expect-sha "${{ needs.preflight.outputs.sha }}" \
-  --expect-version "${{ needs.preflight.outputs.version }}" \
-  --expect-tag "${{ needs.preflight.outputs.tag }}"
+  --expect-sha "$EXPECTED_SHA" \
+  --expect-version "$EXPECTED_VERSION" \
+  --expect-tag "$EXPECTED_TAG" \
+  --check-drafts
 ```
 
-Scope `GH_TOKEN` only to this revalidation step.
+Scope `GH_TOKEN: ${{ github.token }}` only to this revalidation step. The release job itself has no
+job-level `if`; GitHub's default failed-`needs` behavior must prevent it from running when preflight
+fails.
 
 - [ ] **Step 5: Implement temporary credential setup without logging secrets**
 
@@ -737,6 +950,7 @@ generate the Keychain password in memory, and export only non-secret paths:
 
 ```bash
 set -euo pipefail
+umask 077
 certificate_path="$RUNNER_TEMP/loqui-developer-id.p12"
 api_key_path="$RUNNER_TEMP/loqui-notary-api-key.p8"
 keychain_path="$RUNNER_TEMP/loqui-ci.keychain-db"
@@ -745,16 +959,35 @@ echo "::add-mask::$keychain_password"
 
 printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode >"$certificate_path"
 printf '%s\n' "$APP_STORE_CONNECT_API_KEY_P8" >"$api_key_path"
+[ -s "$certificate_path" ] || { echo "decoded certificate is empty" >&2; exit 1; }
+[ -s "$api_key_path" ] || { echo "notary API key is empty" >&2; exit 1; }
+if ! openssl pkey -in "$api_key_path" -noout >/dev/null 2>&1; then
+  echo "notary API private key is invalid" >&2
+  exit 1
+fi
 chmod 600 "$certificate_path" "$api_key_path"
 
 security create-keychain -p "$keychain_password" "$keychain_path"
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$keychain_password" "$keychain_path"
-security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" \
-  -A -t cert -f pkcs12 -k "$keychain_path"
+if ! security import "$certificate_path" -P "$MACOS_CERTIFICATE_PASSWORD" \
+  -A -t cert -f pkcs12 -k "$keychain_path"; then
+  echo "Developer ID archive could not be imported" >&2
+  exit 1
+fi
 security set-key-partition-list -S apple-tool:,apple: -s \
   -k "$keychain_password" "$keychain_path"
-security list-keychains -d user -s "$keychain_path"
+
+original_keychains=()
+while IFS= read -r keychain_line; do
+  keychain_line="${keychain_line#*\"}"
+  keychain_line="${keychain_line%\"*}"
+  if [ -n "$keychain_line" ]; then
+    original_keychains+=("$keychain_line")
+  fi
+done < <(security list-keychains -d user)
+[ "${#original_keychains[@]}" -gt 0 ] || { echo "no original user Keychains found" >&2; exit 1; }
+security list-keychains -d user -s "$keychain_path" "${original_keychains[@]}"
 
 xcrun notarytool store-credentials loqui-ci-notary \
   --key "$api_key_path" \
@@ -765,9 +998,13 @@ xcrun notarytool store-credentials loqui-ci-notary \
 rm -f -- "$certificate_path" "$api_key_path"
 ```
 
-The step name contains no secret interpolation, and `set -x` is forbidden. Delete the decoded
-`.p12` and `.p8` immediately after their material is imported into the temporary Keychain; the final
-cleanup step repeats those exact paths only as a failure fallback.
+The step name contains no secret interpolation, and `set -x` is forbidden. `security import`
+necessarily receives the `.p12` password through its `-P` argument; the accepted residual is limited
+to this single-tenant ephemeral runner, and the value is masked. Apple's `security` commands also
+necessarily receive the generated ephemeral Keychain password through `-p`/`-k`; it is masked,
+exists only in the protected job process, and is never persisted as a secret. Delete the decoded `.p12` and `.p8`
+immediately after their material is imported into the temporary Keychain; the final cleanup step
+repeats those exact paths only as a failure fallback.
 
 - [ ] **Step 6: Invoke the existing release and prepare/upload evidence**
 
@@ -779,21 +1016,31 @@ LOQUI_NOTARY_KEYCHAIN="$RUNNER_TEMP/loqui-ci.keychain-db" \
 ./scripts/task.sh release:macos
 ```
 
-Then run `scripts/github-release.sh prepare` with exact preflight outputs in a step with
-`id: release-assets`. Upload only `${{ steps.release-assets.outputs.evidence_path }}` via the pinned
+Then map the four exact preflight outputs into step-local `EXPECTED_SHA`, `EXPECTED_VERSION`,
+`EXPECTED_TAG`, and `EXPECTED_DMG_NAME`, and run `scripts/github-release.sh prepare` with those shell variables in a step
+with `id: release-assets`. Upload only `${{ steps.release-assets.outputs.evidence_path }}` via the pinned
 artifact action, naming it `loqui-release-evidence-${{ needs.preflight.outputs.tag }}`, with
 `retention-days: 14` and `if-no-files-found: error`.
 
+Do not upload a broad failure glob. Set `LOQUI_NOTARY_FAILURE_DIR` to the exact runner-temporary
+failure-evidence directory. The release script normalizes its copied JSON, scans for original paths
+and secret fields, and atomically exposes the configured directory only after those checks pass.
+Upload that exact path in a failure-only pinned artifact step with 14-day retention and
+`if-no-files-found: warn`; cleanup removes the same exact path after the upload attempt.
+
 - [ ] **Step 7: Publish last and add unconditional safe cleanup**
 
-Call `scripts/github-release.sh publish` with exact outputs and step-scoped `GH_TOKEN`. It is the
-only remote write.
+Map the same four exact preflight outputs into step-local variables and call
+`scripts/github-release.sh publish` with those variables plus step-scoped
+`GH_TOKEN: ${{ github.token }}`. It is the only remote write; no `${{ }}` expression is interpolated
+inside its shell source.
 
-Add the final `if: always()` step. Disable `errexit` for best-effort cleanup and accept only exact
+Add the final `if: ${{ always() }}` step. Disable `errexit` for best-effort cleanup and accept only exact
 runner-temp paths:
 
 ```bash
 set +e
+case "$RUNNER_TEMP" in /*) ;; *) echo "RUNNER_TEMP is not absolute" >&2; exit 1 ;; esac
 keychain_path="$RUNNER_TEMP/loqui-ci.keychain-db"
 certificate_path="$RUNNER_TEMP/loqui-developer-id.p12"
 api_key_path="$RUNNER_TEMP/loqui-notary-api-key.p8"
@@ -837,7 +1084,7 @@ the workflow diff for accidental triggers or job-wide secret/token environments.
 **Interfaces:**
 - Documents Environment `release`, five exact secret names, same-maintainer review setting, workflow
   token permission, version preparation, manual operation, and residual-state inspection.
-- Produces E2E case IDs `GMR-CLI-01` through `GMR-CLI-04` and `GMR-LIVE-01` through `GMR-LIVE-03`.
+- Produces E2E case IDs `GMR-CLI-01` through `GMR-CLI-04` and `GMR-LIVE-01` through `GMR-LIVE-04`.
 
 - [ ] **Step 1: Add a failing documentation-contract section to the workflow policy test**
 
@@ -868,14 +1115,26 @@ section covering:
    base64 -i /absolute/path/DeveloperID.p12 | pbcopy
    ```
 
-3. Create an App Store Connect API key with notarization access and retain the one-time `.p8`.
+   Before uploading, validate the `.p12` locally with `/usr/bin/openssl pkcs12 -noout` (the Apple
+   system parser accepts legacy algorithms used by Keychain Access) and validate that the base64
+   decodes to a non-empty file in a private temporary directory. CI uses Apple's `security import`
+   as the authoritative parser rather than Homebrew OpenSSL. Never paste either form into a log,
+   issue, PR, or repository file.
+
+3. Create a **Team** App Store Connect API key with notarization access and retain the one-time
+   `.p8`; the workflow intentionally passes `--issuer`, which is required for Team keys and must not
+   be used with an Individual API key.
 4. Create Environment `release`, restrict deployment to `main`, select a required reviewer, and
-   leave “Prevent self-review” disabled for this single-maintainer repository.
+   leave “Prevent self-review” disabled for this single-maintainer repository. State plainly that
+   this is an operator confirmation, not separation of duties.
 5. Add the five exact Environment secrets and allow the requested `contents: write` workflow token.
 6. Prepare a new version through a normal PR by changing `build/config.yml`, running
    `./scripts/patch-plists.sh`, and passing `./scripts/task.sh check`.
 7. After merge, open **Actions → Release → Run workflow**, select `main`, inspect preflight, and
    approve the waiting Environment deployment.
+   The repository-wide concurrency group serializes releases: do not park an approval indefinitely,
+   and do not dispatch multiple replacement runs because GitHub may cancel an older pending run even
+   when `cancel-in-progress` is false.
 8. Verify the tag target, DMG, checksum, and generated notes.
 9. If publication reports ambiguous residual state, inspect with:
 
@@ -884,25 +1143,33 @@ section covering:
    git ls-remote --tags origin refs/tags/v0.1.0
    ```
 
-   Deliberate deletion or repair remains a maintainer decision; the Action does not automate it.
+   The Action never deletes. If and only if inspection proves the state is partial and unannounced,
+   a maintainer may deliberately run `gh release delete v0.1.0 --cleanup-tag --yes` and re-dispatch.
+   Never delete a public release; supersede a bad public build with a new patch version.
 
 - [ ] **Step 3: Write exact E2E journeys before executing them**
 
 Create `docs/e2e/use-cases/github-macos-release.md` with these cases and observable outcomes:
 
-- `GMR-CLI-01`: hermetic preflight succeeds only for equal checkout/dispatch/remote-main SHA.
+- `GMR-CLI-01`: hermetic preflight succeeds only for equal checkout/dispatch/remote-main SHA; the
+  read-only mode skips drafts and protected `--check-drafts` revalidation rejects them.
 - `GMR-CLI-02`: malformed/existing version states fail before a publication call.
 - `GMR-CLI-03`: local CI-Keychain argument construction affects all and only three `notarytool`
   calls; local profile-only behavior remains.
 - `GMR-CLI-04`: workflow policy proves manual-only trigger, protected secrets, least privilege,
   pinned Actions, phase order, and cleanup.
 - `GMR-LIVE-01`: first default-branch run passes preflight, waits for approval, signs/notarizes,
-  publishes exact tag/SHA/assets, and exposes sanitized 14-day evidence.
+  publishes exact tag/SHA/assets, and exposes sanitized 14-day evidence, only after the owner
+  acknowledges the exact version and commit as fit for permanent public distribution.
 - `GMR-LIVE-02`: a second run at the unchanged version fails in preflight before Environment
   approval.
 - `GMR-LIVE-03`: logs, summaries, Release assets, and evidence contain no `.p12`/`.p8` contents,
   password, decoded secret, or environment dump; sanitized evidence additionally contains no
   checkout path.
+- `GMR-LIVE-04`: a dispatch from a throwaway branch fails the repository preflight's exact
+  `refs/heads/main` invariant and never reaches the protected job. The Environment's exact `main`
+  deployment policy is independently verified through GitHub's API; this case does not claim to
+  exercise a policy that preflight intentionally prevents it from reaching.
 
 State explicitly that `GMR-LIVE-*` cannot execute until the workflow file exists on the default
 branch; do not label those cases PASS from static evidence.
@@ -964,8 +1231,9 @@ shellcheck -x -s bash scripts/release-version.sh scripts/release-macos.sh script
 git diff --check
 ```
 
-Expected: every command exits zero. Record command, timestamp, exit status, and salient output in the
-E2E report.
+Also resolve each reviewed Action tag through the official GitHub API and require its commit to equal
+the pinned SHA. Expected: every command exits zero. Record command, timestamp, exit status, resolved
+Action tags/SHAs, and salient output in the E2E report.
 
 - [ ] **Step 3: Obtain a clean cross-engine code review**
 
@@ -975,13 +1243,26 @@ code-review gate only when no P0/P1/P2 remains.
 
 - [ ] **Step 4: Configure and independently inspect the GitHub Environment**
 
-The owner creates Environment `release`, limits it to `main`, configures the required reviewer,
-adds the five secrets, and confirms Actions may grant `contents: write`. Record only secret names,
-presence, reviewer policy, and branch policy—never values—in the E2E report.
+Create/update Environment `release`, limit it to the custom `main` branch policy, configure the
+required reviewer with `prevent_self_review: false`, add the five secrets, and confirm Actions may
+grant job-scoped `contents: write`. Independently inspect and save non-secret API output from:
+
+```bash
+gh api repos/Juan-Motta/loqui/environments/release \
+  --jq '{protection_rules: .protection_rules, branch_policy: .deployment_branch_policy}'
+gh api repos/Juan-Motta/loqui/environments/release/deployment-branch-policies
+gh secret list --env release --repo Juan-Motta/loqui
+gh secret list --repo Juan-Motta/loqui
+```
+
+Require a required-reviewer rule, custom-branch policy, exactly one branch rule named `main`, and all
+five Environment secret names. Require none of the five names at repository scope. This repository
+is owned by a personal account rather than an organization, so organization-scoped Actions secrets
+do not apply. Record only names/presence/policy—never values—in the E2E report.
 
 - [ ] **Step 5: Record the unavoidable default-branch bootstrap status honestly**
 
-Before merge, execute `GMR-CLI-01..04` and write their actual outcomes. Mark `GMR-LIVE-01..03` as
+Before merge, execute `GMR-CLI-01..04` and write their actual outcomes. Mark `GMR-LIVE-01..04` as
 `FAIL_INFRA` with the precise GitHub constraint: a newly added `workflow_dispatch` workflow cannot
 receive a dispatch until its file exists on the default branch.
 
@@ -1008,19 +1289,20 @@ do not present the deterministic checker as green.
 - [ ] **Step 7: Create the scoped bootstrap implementation commit**
 
 Only after the explicit Step 6 approval, create the implementation commit. Do not add a ship-time
-changelog entry yet because the live path is still unverified. Run:
+changelog entry yet because the live path is still unverified. Verify every listed path exists, then
+run:
 
 ```bash
-git add .github/workflows/release.yml Taskfile.yml README.md \
+git add .github/workflows/release.yml Taskfile.yml build/Taskfile.yml README.md \
   scripts/release-version.sh scripts/release-macos.sh scripts/github-release.sh \
-  scripts/tests/release-version-test.sh scripts/tests/release-macos-test.sh \
+  scripts/tests/testlib.sh scripts/tests/release-version-test.sh scripts/tests/release-macos-test.sh \
   scripts/tests/github-release-test.sh scripts/tests/github-release-workflow-test.sh \
   docs/research/2026-08-08-github-macos-release-automation.md \
   docs/superpowers/specs/2026-08-09-github-macos-release-automation-design.md \
   docs/superpowers/plans/2026-08-09-github-macos-release-automation.md \
   docs/e2e/use-cases/github-macos-release.md \
-  docs/e2e/reports/2026-08-09-github-macos-release.md \
-  .workflow/state.md CONTINUITY.md
+  docs/e2e/reports/2026-08-10-github-macos-release.md \
+  CONTINUITY.md
 git diff --cached --check
 git commit -m "feat: automate protected macOS releases"
 ```
@@ -1045,8 +1327,11 @@ redirection. Do not claim that `finish-branch` or the complete ship gate passed.
 
 - [ ] **Step 9: Execute and close the live default-branch E2E immediately after merge**
 
-Once the workflow exists on `main`, dispatch **Release** at `main`, observe secret-free preflight,
-approve Environment `release`, and execute `GMR-LIVE-01..03`. Verify:
+Once the workflow exists on `main`, fetch the merged default branch and derive the version from that
+exact remote state. Before dispatch, tell the owner that the next action permanently publishes the
+exact version and SHA and obtain a separate acknowledgment that it is fit for public distribution.
+Then dispatch **Release** at `main`, observe secret-free preflight, approve Environment `release`, and
+execute `GMR-LIVE-01..04`. Verify:
 
 ```bash
 gh release view "v$(./scripts/release-version.sh)" \
@@ -1055,21 +1340,27 @@ git ls-remote origin "refs/tags/v$(./scripts/release-version.sh)"
 ```
 
 Download the DMG and checksum to a unique temporary directory, run `shasum -a 256 -c`, scan logs for
-secret material, and scan sanitized evidence for both secret material and checkout paths. Then
-dispatch the unchanged version a second time and verify it fails before Environment approval.
+secret material, and scan sanitized evidence for both secret material and checkout paths. Apply a
+controlled `com.apple.quarantine` attribute to the CLI-downloaded DMG (the CLI itself is not expected
+to add browser quarantine), assess the DMG with Gatekeeper, mount it read-only, and run `codesign
+--verify --deep --strict` plus Gatekeeper assessment on the contained app before detaching it. Then
+dispatch the unchanged version a second time and verify it fails before Environment approval. Use a
+throwaway branch based on the released SHA to confirm the exact-main repository preflight blocks a
+non-`main` dispatch before the protected job; independently re-read the Environment branch-policy
+API as evidence for its exact `main` rule. Remove the throwaway branch only after recording the run
+evidence.
 
 If any live case fails, do not call the automation complete; open a focused hotfix workflow from
 `main` and preserve the failed-run URL/evidence.
 
 - [ ] **Step 10: Close E2E and the changelog in an evidence-only PR**
 
-After all `GMR-LIVE-*` cases pass, update local `main`, immediately create
-`docs/github-release-live-evidence`, and only then edit files:
+After all `GMR-LIVE-*` cases pass, fetch the merged remote default branch, immediately create
+`docs/github-release-live-evidence` from `origin/main`, and only then edit files:
 
 ```bash
-git switch main
-git pull --ff-only
-git switch -c docs/github-release-live-evidence
+git fetch origin
+git switch -c docs/github-release-live-evidence origin/main
 ```
 
 Update the E2E report from `FAIL_INFRA` to its evidence-backed verdict, check the E2E box in
@@ -1079,7 +1370,7 @@ Run the gate checker again; it must now exit zero. Then run:
 
 ```bash
 git add docs/e2e/reports/2026-08-09-github-macos-release.md \
-  docs/CHANGELOG.md .workflow/state.md CONTINUITY.md
+  docs/CHANGELOG.md CONTINUITY.md
 git diff --cached --check
 git commit -m "docs: record GitHub release verification"
 git push -u origin docs/github-release-live-evidence
