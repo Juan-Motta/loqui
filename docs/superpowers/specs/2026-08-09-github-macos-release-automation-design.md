@@ -1,6 +1,6 @@
 # GitHub macOS release automation design
 
-Status: approved in conversation on 2026-08-09
+Status: approved in conversation on 2026-08-09; review corrections incorporated on 2026-08-10
 
 Research: `docs/research/2026-08-08-github-macos-release-automation.md`
 
@@ -17,14 +17,10 @@ failed build or Apple verification must never create a tag or public Release.
 
 ## Sequencing constraint
 
-This automation depends on the Developer ID pipeline currently implemented on
-`feat/developer-id-release`. That feature still has an open full-diff review gate and a second-Mac
-E2E gate. The automation implementation starts only after that feature is complete and present on
-`main`, from a new feature branch created from the updated `main`.
-
-This document may be reviewed while those gates remain open, but it does not authorize changing the
-active Developer ID workflow state, committing its dirty worktree, or implementing CI on that
-branch.
+This automation depends on the Developer ID pipeline formerly implemented on
+`feat/developer-id-release`. Its review, second-Mac E2E, and ship gates passed, and PR #1 placed it on
+`main` as commit `5d88c9c` on 2026-08-10. Automation implementation starts from that commit on the
+separate `feat/github-macos-release` branch.
 
 ## Confirmed product decisions
 
@@ -74,6 +70,7 @@ workflow_dispatch on main
 preflight (macos-26, no Environment, contents:read)
   - validate ref, remote-main SHA, version, tag and Release absence
   - install the pinned toolchain and dependencies
+  - generate bindings and build frontend/dist from the clean checkout
   - run ./scripts/task.sh check
   - expose immutable SHA/version/tag outputs
           |
@@ -122,9 +119,10 @@ scripts.
 ### Release metadata reader
 
 A small repository script is the single parser for `info.version` in `build/config.yml`. It prints
-one validated `MAJOR.MINOR.PATCH` value and exits nonzero for an absent, duplicate, empty, quoted
-incorrectly, or non-stable-semver value. Both `scripts/release-macos.sh` and CI preflight use this
-reader so artifact, tag, and plist expectations cannot drift between parsers.
+one validated `MAJOR.MINOR.PATCH` value, or the canonical DMG filename with `--dmg-name`, and exits
+nonzero for an absent, duplicate, empty, quoted incorrectly, or non-stable-semver value. Both
+`scripts/release-macos.sh` and CI preflight use this reader so artifact, tag, and plist expectations
+cannot drift between parsers.
 
 The derived names are deterministic:
 
@@ -147,11 +145,16 @@ Preflight requires:
 1. `GITHUB_REF` is exactly `refs/heads/main`.
 2. `GITHUB_SHA` is a full commit SHA and matches the checked-out `HEAD`.
 3. `git ls-remote origin refs/heads/main` returns that same SHA.
-4. The metadata reader returns a stable semantic version.
-5. Neither `refs/tags/v<version>` nor a GitHub Release named by that tag exists.
+4. GitHub CLI is numeric version 2.93.0 or newer and exposes the structural `--latest` flag; the
+   official `macos-26` arm64 image manifest currently provides 2.96.0.
+5. An authenticated repository probe succeeds before interpreting a Release lookup as absent.
+6. The metadata reader returns a stable semantic version and canonical DMG name.
+7. Neither `refs/tags/v<version>` nor a published GitHub Release named by that tag exists. The
+   secret-free job cannot reliably observe drafts because its token is read-only.
 
 The release job invokes the same checks with the preflight SHA, version, and tag as immutable
-expectations. Any mismatch is a hard failure.
+expectations and enables the paginated draft check while its token has `contents: write`. Any
+mismatch or existing draft is a hard failure before Apple credentials are imported.
 
 ### Existing macOS release pipeline
 
@@ -182,6 +185,11 @@ but the public repository means it must not be treated as confidential. Evidence
 before publication; a failed audit-trail upload blocks publication but does not invalidate the local
 DMG.
 
+If notarization fails, `release:macos` copies only the submission and notary-log JSON into a
+configured CI directory, normalizes checkout/staging paths, applies the same secret-field scan, and
+atomically exposes the directory only after those checks pass. A failure-only artifact step uploads
+that exact directory with 14-day retention and never uploads a broad temporary-directory glob.
+
 The workflow then performs its final remote-main/tag/Release check and calls `gh release create`
 once with:
 
@@ -192,8 +200,9 @@ once with:
 - latest-release selection;
 - both required assets attached in the same command.
 
-It does not create or push the tag separately. After the command succeeds, it queries the Release
-and verifies that it is public, names the expected tag, and lists both exact asset names. A failed
+It does not create or push the tag separately. After the command succeeds, it queries the
+authenticated GitHub API with a bounded retry to verify the tag target, then queries the Release and
+verifies that it is public, names the expected tag, and lists both exact asset names. A failed
 post-publication verification fails the workflow and reports the Release URL/state; it does not
 delete anything automatically.
 
@@ -223,14 +232,19 @@ Both jobs use the same explicit setup contract where relevant:
 - Apple Silicon `macos-26`;
 - Go 1.25, matching `go.mod`;
 - Node 24, compatible with the committed Vite engine requirement;
-- `npm ci` against `frontend/package-lock.json`;
+- GitHub CLI 2.93.0 or newer (the selected image currently documents 2.96.0);
+- `CI=true ./scripts/task.sh common:build:frontend` before `check`, so a clean runner generates
+  Wails bindings and `frontend/dist`; the shared npm dependency Task selects `npm ci` against the
+  committed lockfile whenever `CI=true`, so the protected
+  `release:macos` package build remains lockfile-deterministic while local development retains
+  `npm install`;
 - repository-pinned Wails through `scripts/task.sh`;
 - `scripts/vendor-speech-sdk.sh` before either job invokes a task, because the pinned native Azure
   framework is intentionally gitignored and `release:macos` requires it during its own preflight;
 - CMake, jq, and the native Apple/Xcode tools required by release preflight. SDL2 is built from the
   exact repo-pinned source SHA by the existing helper builder.
 
-Preflight runs `./scripts/task.sh check`. The protected job does not repeat the entire check suite,
+Preflight builds the frontend and then runs `./scripts/task.sh check`. The protected job does not repeat the entire check suite,
 but `release:macos` performs its own clean product build and release-critical tests/audits. Both jobs
 checkout the exact same commit with persisted Git credentials disabled unless a later step requires
 authenticated GitHub access explicitly.
@@ -244,6 +258,12 @@ The repository owner creates a GitHub Environment named `release` with:
 - deployment branches restricted to `main`;
 - at least one required reviewer;
 - the five Environment secrets below.
+
+Setup is verified through GitHub's API rather than accepted from prose: the Environment response
+must show the required-reviewer rule and custom branch policy, and its deployment-branch-policy list
+must contain exactly the `main` branch rule. A negative live case dispatches from a throwaway branch
+and confirms the repository's exact-main preflight prevents the protected job from being reached;
+the Environment policy itself is independently evidenced by the API inspection.
 
 For a single-maintainer repository, “Prevent self-review” remains disabled so the maintainer can
 approve their own manually dispatched release. If a second trusted maintainer becomes responsible
@@ -266,15 +286,16 @@ The release runner:
 
 1. creates private temporary paths under `RUNNER_TEMP`;
 2. generates a random per-run Keychain password;
-3. decodes the `.p12` and writes the `.p8` without printing either value;
+3. sets `umask 077`, decodes the `.p12`, writes the `.p8`, and validates both are non-empty without
+   printing either value;
 4. creates and unlocks a temporary Keychain;
 5. imports the Developer ID identity and configures `apple-tool:`/`apple:` partition access;
-6. makes that Keychain the signing search list;
+6. prepends that Keychain to the runner's existing user search list;
 7. stores a validated `loqui-ci-notary` profile in that same Keychain using key ID and issuer ID;
 8. exports `LOQUI_NOTARY_PROFILE=loqui-ci-notary` and the explicit Keychain path only to the
    repository release command.
 
-An `if: always()` cleanup step deletes the decoded files and temporary Keychain whether setup,
+An `if: ${{ always() }}` cleanup step deletes the decoded files and temporary Keychain whether setup,
 build, Apple submission, evidence upload, or GitHub publication succeeds or fails. Cleanup uses
 exact paths created by the workflow, never `$HOME`, `~`, a glob, or an unresolved variable.
 
@@ -310,8 +331,8 @@ The following failures exit nonzero without creating a tag or public Release:
 - missing/sensitive evidence or failed evidence upload;
 - `main` moving before final publication.
 
-Apple failures preserve the existing sanitized diagnostics according to `release:macos`; credential
-cleanup still runs afterward.
+Apple failures preserve sanitized diagnostics according to `release:macos`; credential cleanup
+still runs afterward.
 
 ### During GitHub publication
 
@@ -319,10 +340,20 @@ cleanup still runs afterward.
 a draft or tag even when the client exits nonzero. The workflow responds by querying tag and Release
 state and writing a concise diagnostic to the job summary.
 
+The protected release job enumerates the authenticated Releases API with pagination so an existing
+draft carrying the target tag name is visible even though the published-release-by-tag endpoint
+returns 404 and no Git ref exists yet. The read-only job retains the published-by-tag and Git-ref
+checks as independent guards without claiming draft visibility.
+
 It never runs automatic `gh release delete`, `git push --delete`, or equivalent cleanup because a
 client-side failure can be ambiguous after the server successfully publishes. A subsequent ordinary
-run will fail its uniqueness preflight until the maintainer inspects and deliberately resolves the
-residual state.
+run will pass the read-only job but fail the protected draft/published uniqueness revalidation until
+the maintainer inspects and deliberately resolves the residual state.
+
+The automation treats existing versions as immutable. Documentation may describe an explicit human
+remediation only for a partial, unannounced publication: inspect the exact remote state first, then
+deliberately delete the incomplete Release and its tag before retrying. A published release is never
+deleted or replaced; a bad public build is superseded by a new patch version.
 
 ### After successful publication
 
@@ -339,6 +370,7 @@ Tests use temporary repositories and fake `git`, `gh`, `security`, and `xcrun` c
 - exact version parsing and malformed/duplicate/missing version failures;
 - `main`-only dispatch and checked-out/remote SHA equality;
 - missing versus existing tag and Release states;
+- repository-probe, HTTP-status, network, and authenticated tag-verification failures;
 - immutable preflight output and release-time expectation mismatches;
 - explicit Keychain propagation to `history`, `submit`, and `log`;
 - preservation of the local no-Keychain-argument behavior;
@@ -361,6 +393,8 @@ A static contract test parses or narrowly inspects `.github/workflows/release.ym
 - only release receives `contents: write`;
 - concurrency does not cancel an in-flight release;
 - cleanup is unconditional;
+- `if: ${{ always() }}` occurs only on the final cleanup step, never at job scope;
+- clean-checkout frontend generation precedes `check`;
 - publication follows `release:macos`, checksum verification, evidence upload, and final revalidation;
 - every referenced Action is pinned by a full commit SHA.
 
@@ -369,7 +403,9 @@ merged.
 
 ### Real integration
 
-The first manual run from `main` is the end-to-end proof. It must show:
+The first manual run from `main` is the end-to-end proof and creates an irreversible public release.
+Immediately before dispatch, the owner must separately acknowledge the exact version and commit as
+fit for public distribution. It must show:
 
 1. secret-free preflight passes on a clean hosted runner;
 2. the job pauses for the `release` Environment approval;
@@ -379,6 +415,10 @@ The first manual run from `main` is the end-to-end proof. It must show:
 6. the Release is public and has exactly the DMG and checksum assets;
 7. the evidence artifact exists with 14-day retention;
 8. a subsequent run for the same version fails before approval because the tag/Release exists.
+9. a throwaway-branch dispatch fails the repository's exact-main preflight before the protected job,
+   while API evidence independently confirms the Environment permits exactly `main`;
+10. a freshly downloaded DMG passes its checksum, controlled-quarantine Gatekeeper assessment,
+    read-only mount, contained-app signature verification, and contained-app Gatekeeper assessment.
 
 No test workflow receives production Apple secrets on a pull request. The real integration occurs
 only through the approved manual workflow after the implementation is merged to `main`.

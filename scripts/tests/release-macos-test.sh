@@ -123,6 +123,25 @@ assert_contains "$snapshot_tree" 'L payload.txt payload-link'
 # shellcheck source=scripts/release-macos.sh
 . "$release_script"
 
+assert_contains "$release_script" 'if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi'
+default_auth="$(bash -c '. "$1"; printf "<%s>\\n" "${notary_auth_args[@]}"' \
+  _ "$release_script")"
+assert_eq "$default_auth" $'<--keychain-profile>\n<loqui-notary>'
+
+ci_keychain="$tmp/loqui-ci.keychain-db"
+: >"$ci_keychain"
+ci_auth="$(LOQUI_NOTARY_PROFILE=loqui-ci-notary LOQUI_NOTARY_KEYCHAIN="$ci_keychain" \
+  bash -c '. "$1"; printf "<%s>\\n" "${notary_auth_args[@]}"' _ "$release_script")"
+assert_eq "$ci_auth" \
+  "$(printf '<%s>\n' --keychain-profile loqui-ci-notary --keychain "$ci_keychain")"
+
+run_expect_fail_msg 'LOQUI_NOTARY_KEYCHAIN must be absolute' \
+  env LOQUI_NOTARY_KEYCHAIN=relative bash -c '. "$1"; validate_notary_keychain' \
+  _ "$release_script"
+run_expect_fail_msg 'notary keychain does not exist' \
+  env LOQUI_NOTARY_KEYCHAIN="$tmp/missing.keychain-db" \
+  bash -c '. "$1"; validate_notary_keychain' _ "$release_script"
+
 assert_test_tmp_path() {
   guarded_path="$1"
   case "$guarded_path" in
@@ -255,7 +274,7 @@ mkdir -p "$preflight_root/scripts" "$preflight_root/build/darwin" \
   "$preflight_root/helpers" \
   "$preflight_root/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Versions/A" \
   "$preflight_bin"
-printf '%s\n' 'info:' '  version: 0.1.0' >"$preflight_root/build/config.yml"
+printf '%s\n' 'info:' '  version: "0.1.0"' >"$preflight_root/build/config.yml"
 for preflight_source in \
   build/darwin/Info.plist build/darwin/Info.dev.plist build/darwin/icons.icns \
   helpers/macos-globe-listener.swift helpers/macos-stt.swift helpers/whisper-stt.cpp \
@@ -265,6 +284,10 @@ done
 for preflight_script in build-macos-helpers.sh macos-bundle.sh macos-audit.sh; do
   put_file "$preflight_root/scripts/$preflight_script" '#!/bin/bash'
 done
+printf '%s\n' \
+  '#!/bin/bash' \
+  "exec '$repo_root/scripts/release-version.sh' \"\$@\"" \
+  >"$preflight_root/scripts/release-version.sh"
 printf '%s\n' \
   '#!/bin/bash' \
   '[ "${PATCH_PLISTS_RC:-0}" -eq 0 ] || printf "%s\n" "plist fixture rejected" >&2' \
@@ -357,7 +380,7 @@ malformed_version_root="$tmp/preflight-malformed-version-root"
 cp -R "$preflight_root" "$malformed_version_root"
 printf '%s\n' 'info:' '  version: not-a-version' >"$malformed_version_root/build/config.yml"
 PREFLIGHT_FIXTURE_ROOT="$malformed_version_root" expect_failure preflight-malformed-version \
-  'invalid info.version: not-a-version' run_preflight_fixture
+  'info.version must appear once as quoted MAJOR.MINOR.PATCH' run_preflight_fixture
 
 or_list_phase_log="$tmp/or-list-phases.txt"
 or_list_expected_phases="$tmp/or-list-expected-phases.txt"
@@ -798,7 +821,7 @@ run_file_probe_before_publish() {
   release_output_dir="$release_root_dir/bin/release"
   FILE_PROBE_RC=72 PATH="$probe_bin:$PATH" phase_check_log || return 1
   guarded_atomic_publish "$dmg" "$stage/evidence" "$release_output_dir" \
-    0.1.0 file-probe-id
+    0.1.0 file-probe-id Loqui-0.1.0-macos-arm64.dmg
 }
 expect_failure packaged-file-probe-error 'could not inspect file type' \
   run_file_probe_before_publish
@@ -809,7 +832,7 @@ run_secret_grep_before_publish() {
   release_output_dir="$release_root_dir/bin/release"
   GREP_PROBE_MODE=regex-error PATH="$probe_bin:$PATH" phase_check_log || return 1
   guarded_atomic_publish "$dmg" "$stage/evidence" "$release_output_dir" \
-    0.1.0 grep-probe-id
+    0.1.0 grep-probe-id Loqui-0.1.0-macos-arm64.dmg
 }
 expect_failure evidence-secret-grep-error 'could not scan evidence for checkout paths or secrets' \
   run_secret_grep_before_publish
@@ -1068,9 +1091,21 @@ saved_release_output_dir="$release_output_dir"
 release_root_dir="$(cd "$publish_repo" && pwd -P)"
 publish_root="$release_root_dir/bin/release"
 release_output_dir="$publish_root"
+
+wrong_name_repo="$tmp/wrong-name-publish-repo"
+mkdir "$wrong_name_repo"
+wrong_name_root="$(cd "$wrong_name_repo" && pwd -P)"
+saved_wrong_name_release_root="$release_root_dir"
+release_root_dir="$wrong_name_root"
+run_expect_fail_msg "publication DMG name does not match version" \
+  guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" \
+  "$wrong_name_root/bin/release" 0.1.0 wrong-name-id Loqui-9.9.9-macos-arm64.dmg
+release_root_dir="$saved_wrong_name_release_root"
+
 run_atomic_publish_failure() {
   FAIL_FINAL_MV=1 PATH="$publish_bin:$PATH" guarded_atomic_publish \
-    "$publish_source_dmg" "$publish_evidence" "$publish_root" 0.1.0 failed-id
+    "$publish_source_dmg" "$publish_evidence" "$publish_root" 0.1.0 failed-id \
+    Loqui-0.1.0-macos-arm64.dmg
 }
 set +e
 run_atomic_publish_failure >"$tmp/atomic-final-rename.out" 2>&1
@@ -1163,7 +1198,8 @@ chmod +x "$mktemp_collision_bin/mktemp"
 set +e
 MKTEMP_COLLISION_PATH="$collision_dmg" PATH="$mktemp_collision_bin:$PATH" \
   guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" "$publish_root" \
-    0.1.0 collision-allocation-id >"$tmp/mktemp-collision-publish.out" 2>&1
+    0.1.0 collision-allocation-id Loqui-0.1.0-macos-arm64.dmg \
+    >"$tmp/mktemp-collision-publish.out" 2>&1
 mktemp_collision_rc=$?
 set -e
 [ "$mktemp_collision_rc" -ne 0 ] || fail "failed exclusive allocation unexpectedly published"
@@ -1189,7 +1225,8 @@ hidden_dmg_candidate_owned=0
 hidden_evidence_candidate_owned=0
 set +e
 guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" "$release_output_dir" \
-  0.1.0 evidence-symlink-id >"$tmp/evidence-symlink-publish.out" 2>&1
+  0.1.0 evidence-symlink-id Loqui-0.1.0-macos-arm64.dmg \
+  >"$tmp/evidence-symlink-publish.out" 2>&1
 evidence_symlink_publish_rc=$?
 set -e
 [ "$evidence_symlink_publish_rc" -ne 0 ] \
@@ -1213,7 +1250,8 @@ hidden_dmg_candidate_owned=0
 hidden_evidence_candidate_owned=0
 set +e
 guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" "$release_output_dir" \
-  0.1.0 version-symlink-id >"$tmp/version-symlink-publish.out" 2>&1
+  0.1.0 version-symlink-id Loqui-0.1.0-macos-arm64.dmg \
+  >"$tmp/version-symlink-publish.out" 2>&1
 version_symlink_publish_rc=$?
 set -e
 [ "$version_symlink_publish_rc" -ne 0 ] \
@@ -1237,7 +1275,7 @@ hidden_dmg_candidate_owned=0
 hidden_evidence_candidate_owned=0
 set +e
 guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" "$release_output_dir" \
-  0.1.0 symlink-id >"$tmp/symlink-publish.out" 2>&1
+  0.1.0 symlink-id Loqui-0.1.0-macos-arm64.dmg >"$tmp/symlink-publish.out" 2>&1
 symlink_publish_rc=$?
 set -e
 [ "$symlink_publish_rc" -ne 0 ] || fail "symlinked release output unexpectedly published"
@@ -1250,6 +1288,25 @@ hidden_evidence_candidate_owned=0
 release_output_dir="$saved_release_output_dir"
 release_root_dir="$saved_release_root_dir"
 stage=""
+
+phase_publish_args="$tmp/phase-publish-args"
+original_atomic_publish="$(declare -f atomic_publish)"
+atomic_publish() {
+  printf '<%s>\n' "$@" >"$phase_publish_args"
+}
+dmg="$tmp/phase-publish.dmg"
+stage="$tmp/phase-publish-stage"
+release_output_dir="$tmp/phase-publish-output"
+release_root_dir="$repo_root"
+version=0.1.0
+submission_id=phase-publish-id
+phase_publish
+phase_publish_expected="$tmp/phase-publish-expected"
+printf '<%s>\n' \
+  "$dmg" "$stage/evidence" "$release_output_dir" 0.1.0 phase-publish-id \
+  Loqui-0.1.0-macos-arm64.dmg >"$phase_publish_expected"
+diff -u "$phase_publish_expected" "$phase_publish_args"
+eval "$original_atomic_publish"
 
 phase_log="$tmp/phases"
 export LOQUI_PHASE_LOG="$phase_log"
@@ -1332,7 +1389,8 @@ put_file "$source_dmg" 'new accepted artifact'
 put_file "$evidence/report.txt" evidence
 set +e
 fresh_clone_published="$(guarded_atomic_publish "$source_dmg" "$evidence" \
-  "$release_output_dir" 0.1.0 fresh-clone-id 2>"$tmp/fresh-clone-publish.out")"
+  "$release_output_dir" 0.1.0 fresh-clone-id Loqui-0.1.0-macos-arm64.dmg \
+  2>"$tmp/fresh-clone-publish.out")"
 fresh_clone_publish_rc=$?
 set -e
 [ "$fresh_clone_publish_rc" -eq 0 ] || fail "fresh-clone publication could not create bin/release"
@@ -1349,13 +1407,42 @@ release_root="$release_output_dir"
 final_dmg="$release_root/Loqui-0.1.0-macos-arm64.dmg"
 put_file "$final_dmg" 'old accepted artifact'
 published_path="$(guarded_atomic_publish "$source_dmg" "$evidence" "$release_root" 0.1.0 \
-  11111111-1111-1111-1111-111111111111)"
+  11111111-1111-1111-1111-111111111111 Loqui-0.1.0-macos-arm64.dmg)"
 assert_eq "$published_path" "$final_dmg"
 assert_contains "$final_dmg" 'new accepted artifact'
 assert_file "$release_root/evidence/0.1.0/11111111-1111-1111-1111-111111111111/report.txt"
 if find "$release_root" -maxdepth 1 -name '.*candidate*' -print | grep -q .; then
   fail "atomic publication left a hidden candidate"
 fi
+
+failure_evidence_stage="$tmp/failure-evidence-stage"
+failure_evidence_repo="$tmp/failure-evidence-repo"
+mkdir -p "$failure_evidence_stage" "$failure_evidence_repo"
+stage="$(cd "$failure_evidence_stage" && pwd -P)"
+stage_lexical="$stage"
+release_root_dir="$(cd "$failure_evidence_repo" && pwd -P)"
+submit="$tmp/ci-notary-submit.json"
+log="$tmp/ci-notary-log.json"
+printf '{"id":"ci-id","status":"Invalid","path":"%s/artifact"}\n' "$stage" >"$submit"
+printf '{"status":"Invalid","path":"%s/source"}\n' "$release_root_dir" >"$log"
+configured_failure_dir="$test_tmp_physical/ci-notary-failure-evidence"
+failure_dir="$(LOQUI_NOTARY_FAILURE_DIR="$configured_failure_dir" \
+  TMPDIR="$tmp" preserve_notary_failure ci-id "$submit" "$log")"
+assert_eq "$failure_dir" "$configured_failure_dir"
+assert_file "$configured_failure_dir/notary-submit.json"
+assert_file "$configured_failure_dir/notary-log.json"
+assert_contains "$configured_failure_dir/notary-submit.json" '"path":"$STAGE/artifact"'
+assert_contains "$configured_failure_dir/notary-log.json" '"path":"$REPO/source"'
+assert_not_contains "$configured_failure_dir/notary-submit.json" "$stage"
+assert_not_contains "$configured_failure_dir/notary-log.json" "$release_root_dir"
+
+printf '%s\n' '{"id":"secret-id","password":"must-not-upload"}' >"$submit"
+LOQUI_NOTARY_FAILURE_DIR="$test_tmp_physical/ci-notary-secret-evidence"
+export LOQUI_NOTARY_FAILURE_DIR
+expect_failure notary-failure-secret 'failure evidence contains a checkout path or secret field' \
+  preserve_notary_failure secret-id "$submit" "$log"
+assert_absent "$LOQUI_NOTARY_FAILURE_DIR"
+unset LOQUI_NOTARY_FAILURE_DIR
 
 submit="$tmp/notary-submit.json"
 printf '%s\n' '{"id":"bad-id","status":"Invalid"}' >"$submit"
