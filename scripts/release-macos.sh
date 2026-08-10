@@ -1,0 +1,1134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+release_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+release_output_dir="$release_root_dir/bin/release"
+release_output_dir_physical=""
+profile="${LOQUI_NOTARY_PROFILE:-loqui-notary}"
+version=""
+identity=""
+stage=""
+stage_lexical=""
+tmp_root_lexical=""
+tmp_root_physical=""
+app=""
+dmg=""
+submission_id=""
+submission_status=""
+submit_rc=1
+log_rc=1
+signed_manifest=""
+hidden_dmg_candidate=""
+hidden_evidence_candidate=""
+hidden_dmg_candidate_owned=0
+hidden_evidence_candidate_owned=0
+
+die() { echo "release-macos: $*" >&2; return 1; }
+require_command() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    die "missing required command: $1"
+    return 1
+  fi
+}
+
+probe_macho_file() {
+  macho_probe_path="$1"
+  macho_probe_is_macho=0
+  if ! macho_probe_output="$(file -b "$macho_probe_path" 2>&1)"; then
+    die "could not inspect file type: $macho_probe_path"
+    return 1
+  fi
+  case "$macho_probe_output" in
+    *Mach-O*) macho_probe_is_macho=1 ;;
+  esac
+}
+
+probe_evidence_match() {
+  grep_probe_kind="$1"
+  grep_probe_pattern="$2"
+  grep_probe_root="$3"
+  grep_probe_label="$4"
+  grep_probe_found=0
+  grep_probe_rc=0
+  case "$grep_probe_kind" in
+    fixed)
+      if LC_ALL=C grep -R -F -- "$grep_probe_pattern" "$grep_probe_root" >/dev/null; then
+        grep_probe_rc=0
+      else
+        grep_probe_rc=$?
+      fi
+      ;;
+    regex)
+      if LC_ALL=C grep -R -E -- "$grep_probe_pattern" "$grep_probe_root" >/dev/null; then
+        grep_probe_rc=0
+      else
+        grep_probe_rc=$?
+      fi
+      ;;
+    *)
+      die "invalid evidence probe kind: $grep_probe_kind"
+      return 1
+      ;;
+  esac
+  case "$grep_probe_rc" in
+    0) grep_probe_found=1 ;;
+    1) grep_probe_found=0 ;;
+    *)
+      die "could not scan evidence for $grep_probe_label"
+      return 1
+      ;;
+  esac
+}
+
+read_release_version() {
+  awk '/^info:/{in_info=1; next} in_info && /^  version:/{gsub(/["'\'' ]/, "", $2); print $2; exit}' \
+    "$release_root_dir/build/config.yml"
+}
+
+initialize_tmp_roots() {
+  requested_tmp="${TMPDIR:-/tmp}"
+  if [ ! -d "$requested_tmp" ]; then
+    die "temporary root is not a directory: $requested_tmp"
+    return 1
+  fi
+  if ! tmp_root_lexical="$(cd "$requested_tmp" && pwd -L)"; then
+    die "cannot resolve temporary root: $requested_tmp"
+    return 1
+  fi
+  if ! tmp_root_physical="$(cd "$requested_tmp" && pwd -P)"; then
+    die "cannot resolve physical temporary root: $requested_tmp"
+    return 1
+  fi
+  if [ -z "$tmp_root_physical" ] || [ "$tmp_root_physical" = / ]; then
+    die "unsafe physical temporary root: $tmp_root_physical"
+    return 1
+  fi
+}
+
+initialize_release_stage() {
+  initialize_tmp_roots || return 1
+  if ! stage_lexical="$(mktemp -d "$tmp_root_lexical/loqui-release.XXXXXX")"; then
+    die "could not create release staging directory"
+    return 1
+  fi
+  if ! stage="$(cd "$stage_lexical" && pwd -P)"; then
+    die "could not resolve physical staging directory: $stage_lexical"
+    return 1
+  fi
+  if ! safe_stage_path "$stage"; then
+    die "unsafe staging path: $stage"
+    return 1
+  fi
+}
+
+safe_stage_path() {
+  candidate_stage="$1"
+  [ -n "$tmp_root_physical" ] && [ -d "$candidate_stage" ] || return 1
+  [ "${candidate_stage%/*}" = "$tmp_root_physical" ] || return 1
+  case "${candidate_stage##*/}" in
+    loqui-release.??????) ;;
+    *) return 1 ;;
+  esac
+  candidate_stage_physical="$(cd "$candidate_stage" && pwd -P)" || return 1
+  [ "$candidate_stage" = "$candidate_stage_physical" ]
+}
+
+safe_release_candidate_path() {
+  candidate_path="$1"
+  candidate_kind="$2"
+  [ -n "$candidate_path" ] && [ -n "$release_output_dir_physical" ] || return 1
+  [ "${candidate_path%/*}" = "$release_output_dir_physical" ] || return 1
+  [ -d "$release_output_dir_physical" ] && [ ! -L "$release_output_dir_physical" ] || return 1
+  candidate_parent_physical="$(cd "${candidate_path%/*}" && pwd -P)" || return 1
+  [ "$candidate_parent_physical" = "$release_output_dir_physical" ] || return 1
+  candidate_name="${candidate_path##*/}"
+  case "$candidate_kind:$candidate_name" in
+    dmg:.Loqui-*.candidate.??????|evidence:.evidence-*.candidate.??????) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+prepare_release_output_dir() {
+  requested_output_dir="$1"
+  release_output_dir_physical=""
+  if ! repo_physical="$(cd "$release_root_dir" && pwd -P)"; then
+    die "cannot resolve physical repository root: $release_root_dir"
+    return 1
+  fi
+  if [ "$release_root_dir" != "$repo_physical" ]; then
+    die "repository root is not physical: $release_root_dir"
+    return 1
+  fi
+  expected_bin_dir="$repo_physical/bin"
+  expected_output_dir="$expected_bin_dir/release"
+  if [ "$requested_output_dir" != "$expected_output_dir" ]; then
+    die "release output must be $expected_output_dir"
+    return 1
+  fi
+  if [ -e "$expected_bin_dir" ] || [ -L "$expected_bin_dir" ]; then
+    if [ ! -d "$expected_bin_dir" ] || [ -L "$expected_bin_dir" ]; then
+      die "release bin path is not a physical directory: $expected_bin_dir"
+      return 1
+    fi
+  else
+    if ! mkdir "$expected_bin_dir"; then
+      die "could not create release bin directory: $expected_bin_dir"
+      return 1
+    fi
+  fi
+  if ! bin_physical="$(cd "$expected_bin_dir" && pwd -P)"; then
+    die "cannot resolve physical release bin directory: $expected_bin_dir"
+    return 1
+  fi
+  if [ "$bin_physical" != "$expected_bin_dir" ]; then
+    die "release bin directory resolves outside the repository: $expected_bin_dir"
+    return 1
+  fi
+
+  if [ -e "$expected_output_dir" ] || [ -L "$expected_output_dir" ]; then
+    if [ ! -d "$expected_output_dir" ] || [ -L "$expected_output_dir" ]; then
+      die "release output is not a physical directory: $expected_output_dir"
+      return 1
+    fi
+  else
+    if ! mkdir "$expected_output_dir"; then
+      die "could not create release output: $expected_output_dir"
+      return 1
+    fi
+  fi
+  if ! release_output_dir_physical="$(cd "$expected_output_dir" && pwd -P)"; then
+    die "cannot resolve physical release output: $expected_output_dir"
+    return 1
+  fi
+  if [ "$release_output_dir_physical" != "$expected_output_dir" ]; then
+    release_output_dir_physical=""
+    die "release output resolves outside the repository: $expected_output_dir"
+    return 1
+  fi
+}
+
+prepare_evidence_parent() {
+  destination_root="$1"
+  publication_version="$2"
+  evidence_root="$destination_root/evidence"
+  evidence_parent="$evidence_root/$publication_version"
+
+  if [ "$destination_root" != "$release_output_dir_physical" ]; then
+    die "evidence destination is not the physical release output: $destination_root"
+    return 1
+  fi
+  if [ -e "$evidence_root" ] || [ -L "$evidence_root" ]; then
+    if [ ! -d "$evidence_root" ] || [ -L "$evidence_root" ]; then
+      die "release evidence directory is not physical: $evidence_root"
+      return 1
+    fi
+  else
+    if ! mkdir "$evidence_root"; then
+      die "could not create release evidence directory: $evidence_root"
+      return 1
+    fi
+  fi
+  if ! evidence_root_physical="$(cd "$evidence_root" && pwd -P)"; then
+    die "cannot resolve physical release evidence directory: $evidence_root"
+    return 1
+  fi
+  if [ "$evidence_root_physical" != "$evidence_root" ]; then
+    die "release evidence directory resolves outside release output: $evidence_root"
+    return 1
+  fi
+
+  if [ -e "$evidence_parent" ] || [ -L "$evidence_parent" ]; then
+    if [ ! -d "$evidence_parent" ] || [ -L "$evidence_parent" ]; then
+      die "version evidence directory is not physical: $evidence_parent"
+      return 1
+    fi
+  else
+    if ! mkdir "$evidence_parent"; then
+      die "could not create version evidence directory: $evidence_parent"
+      return 1
+    fi
+  fi
+  if ! evidence_parent_physical="$(cd "$evidence_parent" && pwd -P)"; then
+    die "cannot resolve physical version evidence directory: $evidence_parent"
+    return 1
+  fi
+  if [ "$evidence_parent_physical" != "$evidence_parent" ]; then
+    die "version evidence directory resolves outside release output: $evidence_parent"
+    return 1
+  fi
+}
+
+replace_literal_in_file() {
+  evidence_file="$1"
+  literal_path="$2"
+  replacement="$3"
+  [ -n "$literal_path" ] || return 0
+  literal_pattern="$literal_path"
+  literal_pattern="${literal_pattern//\\/\\\\}"
+  literal_pattern="${literal_pattern//\*/\\*}"
+  literal_pattern="${literal_pattern//\?/\\?}"
+  literal_pattern="${literal_pattern//\[/\\[}"
+  literal_pattern="${literal_pattern//\]/\\]}"
+  normalized_file="$evidence_file.normalize.$$"
+  if ! while IFS= read -r evidence_line || [ -n "$evidence_line" ]; do
+    evidence_line="${evidence_line//$literal_pattern/$replacement}"
+    printf '%s\n' "$evidence_line"
+  done <"$evidence_file" >"$normalized_file"; then
+    die "could not normalize evidence file: $evidence_file"
+    return 1
+  fi
+  if ! mv "$normalized_file" "$evidence_file"; then
+    die "could not replace normalized evidence file: $evidence_file"
+    return 1
+  fi
+}
+
+normalize_evidence_paths() {
+  evidence_dir="$1"
+  if [ ! -d "$evidence_dir" ]; then
+    die "missing evidence directory: $evidence_dir"
+    return 1
+  fi
+  if [ -z "$stage" ] || [ -z "$stage_lexical" ]; then
+    die "release staging paths are not initialized"
+    return 1
+  fi
+  if ! evidence_files="$(find "$evidence_dir" -type f -print | LC_ALL=C sort)"; then
+    die "could not enumerate evidence files: $evidence_dir"
+    return 1
+  fi
+  while read -r evidence_file; do
+    [ -n "$evidence_file" ] || continue
+    replace_literal_in_file "$evidence_file" "$stage" "\$STAGE" || return 1
+    if [ "$stage_lexical" != "$stage" ]; then
+      replace_literal_in_file "$evidence_file" "$stage_lexical" "\$STAGE" || return 1
+    fi
+    replace_literal_in_file "$evidence_file" "$release_root_dir" "\$REPO" || return 1
+  done <<<"$evidence_files"
+
+  for original_path in "$stage" "$stage_lexical" "$release_root_dir"; do
+    [ -n "$original_path" ] || continue
+    probe_evidence_match fixed "$original_path" "$evidence_dir" \
+      "unnormalized path: $original_path" || return 1
+    if [ "$grep_probe_found" -eq 1 ]; then
+      die "evidence contains an unnormalized path: $original_path"
+      return 1
+    fi
+  done
+  probe_evidence_match fixed "/private\$STAGE" "$evidence_dir" \
+    "malformed marker /private\$STAGE" || return 1
+  if [ "$grep_probe_found" -eq 1 ]; then
+    die "evidence contains malformed /private\$STAGE path"
+    return 1
+  fi
+}
+
+cleanup_release() {
+  if [ "$hidden_dmg_candidate_owned" -eq 1 ] && [ -n "$hidden_dmg_candidate" ]; then
+    if safe_release_candidate_path "$hidden_dmg_candidate" dmg; then
+      if rm -f "$hidden_dmg_candidate"; then
+        hidden_dmg_candidate_owned=0
+      else
+        echo "release-macos: failed DMG candidate cleanup: $hidden_dmg_candidate" >&2
+      fi
+    else
+      echo "release-macos: refusing unsafe DMG candidate cleanup: $hidden_dmg_candidate" >&2
+    fi
+  fi
+  if [ "$hidden_evidence_candidate_owned" -eq 1 ] && [ -n "$hidden_evidence_candidate" ]; then
+    if safe_release_candidate_path "$hidden_evidence_candidate" evidence; then
+      if rm -rf "$hidden_evidence_candidate"; then
+        hidden_evidence_candidate_owned=0
+      else
+        echo "release-macos: failed evidence candidate cleanup: $hidden_evidence_candidate" >&2
+      fi
+    else
+      echo "release-macos: refusing unsafe evidence candidate cleanup: $hidden_evidence_candidate" >&2
+    fi
+  fi
+  if [ -n "$stage" ]; then
+    if safe_stage_path "$stage"; then
+      rm -rf "$stage" || echo "release-macos: failed stage cleanup: $stage" >&2
+    else
+      echo "release-macos: refusing unsafe stage cleanup: $stage" >&2
+    fi
+  fi
+}
+
+phase_preflight() {
+  if ! host_arch="$(uname -m)"; then
+    die "could not determine release host architecture"
+    return 1
+  fi
+  if [ "$host_arch" != arm64 ]; then
+    die "release host must be arm64"
+    return 1
+  fi
+  for tool_name in security codesign otool lipo install_name_tool hdiutil spctl ditto plutil jq \
+    xcrun wails3 git cmake swiftc vtool shasum file; do
+    require_command "$tool_name" || return 1
+  done
+  for required_script in patch-plists.sh build-macos-helpers.sh macos-bundle.sh macos-audit.sh macos-sign.sh; do
+    if [ ! -x "$release_root_dir/scripts/$required_script" ]; then
+      die "missing executable script: scripts/$required_script"
+      return 1
+    fi
+  done
+  for required_source in \
+    build/darwin/Info.plist build/darwin/Info.dev.plist build/darwin/icons.icns \
+    helpers/macos-globe-listener.swift helpers/macos-stt.swift helpers/whisper-stt.cpp \
+    third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Versions/A/MicrosoftCognitiveServicesSpeech; do
+    if [ ! -e "$release_root_dir/$required_source" ]; then
+      die "missing required source: $required_source"
+      return 1
+    fi
+  done
+
+  if ! wails_version="$(wails3 version 2>&1)"; then
+    die "could not read wails3 version"
+    return 1
+  fi
+  wails_version="${wails_version%$'\r'}"
+  if [ "$wails_version" != v3.0.0-alpha2.119 ]; then
+    die "wails3 version is '$wails_version', expected v3.0.0-alpha2.119"
+    return 1
+  fi
+
+  if ! version="$(read_release_version)"; then
+    die "could not read info.version"
+    return 1
+  fi
+  if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    die "invalid info.version: $version"
+    return 1
+  fi
+  if ! "$release_root_dir/scripts/patch-plists.sh" --check --root "$release_root_dir"; then
+    return 1
+  fi
+  for plist_name in Info.plist Info.dev.plist; do
+    plist_path="$release_root_dir/build/darwin/$plist_name"
+    for version_key in CFBundleShortVersionString CFBundleVersion; do
+      if ! plist_version="$(plutil -extract "$version_key" raw "$plist_path" 2>/dev/null)"; then
+        die "could not read $plist_name $version_key"
+        return 1
+      fi
+      if [ "$plist_version" != "$version" ]; then
+        die "$plist_name $version_key is '$plist_version', expected '$version'"
+        return 1
+      fi
+    done
+  done
+
+  if ! identity="$("$release_root_dir/scripts/macos-sign.sh" resolve --channel release)"; then
+    return 1
+  fi
+  if ! xcrun notarytool history --keychain-profile "$profile" --output-format json >/dev/null; then
+    die "notary profile '$profile' is invalid or unavailable"
+    return 1
+  fi
+
+  initialize_release_stage || return 1
+  if ! mkdir -p "$stage/evidence-work"; then
+    die "could not create release evidence workspace"
+    return 1
+  fi
+  if ! git -C "$release_root_dir" rev-parse HEAD >"$stage/evidence-work/repo-head.txt"; then
+    die "could not record repository HEAD"
+    return 1
+  fi
+  if ! git -C "$release_root_dir" describe --always --dirty >"$stage/evidence-work/repo-describe.txt"; then
+    die "could not record repository description"
+    return 1
+  fi
+}
+
+phase_build() {
+  if ! "$release_root_dir/scripts/task.sh" darwin:build ARCH=arm64 PORTABLE=true OUTPUT="$stage/loqui"; then
+    return 1
+  fi
+  if [ ! -f "$stage/loqui" ]; then
+    die "portable build did not produce $stage/loqui"
+    return 1
+  fi
+  if [ ! -f "$release_root_dir/build/darwin/icons.icns" ]; then
+    die "icon generation did not produce icons.icns"
+    return 1
+  fi
+  if [ -e "$release_root_dir/build/darwin/Assets.car" ]; then
+    die "forbidden Assets.car was generated"
+    return 1
+  fi
+}
+
+phase_build_helpers() {
+  sdl_vendor="$stage/sdl-src"
+  if ! LOQUI_HELPERS_OUTPUT_DIR="$stage/helpers" \
+  LOQUI_WHISPER_VENDOR_DIR="$stage/whisper-src" \
+  LOQUI_SDL_VENDOR_DIR="$sdl_vendor" \
+  LOQUI_SKIP_MODEL=1 "$release_root_dir/scripts/build-macos-helpers.sh"; then
+    return 1
+  fi
+  if ! printf '%s\n' 97c56f1dc1d1100a9d859c865a20c82d22f823ed >"$stage/evidence-work/whisper-commit.txt"; then
+    die "could not record whisper.cpp commit"
+    return 1
+  fi
+  if ! actual_sdl_commit="$(git -C "$sdl_vendor" rev-parse HEAD)"; then
+    die "could not read staged SDL commit"
+    return 1
+  fi
+  if [ "$actual_sdl_commit" != 5d249570393f7a37e037abf22cd6012a4cc56a71 ]; then
+    die "built SDL commit is $actual_sdl_commit, expected 5d249570393f7a37e037abf22cd6012a4cc56a71"
+    return 1
+  fi
+  if ! printf '%s\n' "$actual_sdl_commit" >"$stage/evidence-work/sdl-commit.txt"; then
+    die "could not record staged SDL commit"
+    return 1
+  fi
+  if ! : >"$stage/evidence-work/staged-helper-sha256.txt"; then
+    die "could not initialize staged helper checksums"
+    return 1
+  fi
+  if ! helper_files="$(find "$stage/helpers" -type f -print | LC_ALL=C sort)"; then
+    die "could not enumerate staged helper files"
+    return 1
+  fi
+  while read -r native_file; do
+    [ -n "$native_file" ] || continue
+    probe_macho_file "$native_file" || return 1
+    [ "$macho_probe_is_macho" -eq 1 ] || continue
+    if ! shasum -a 256 "$native_file" >>"$stage/evidence-work/staged-helper-sha256.txt"; then
+      die "could not checksum staged helper: $native_file"
+      return 1
+    fi
+  done <<<"$helper_files"
+}
+
+phase_bundle() {
+  app="$stage/Loqui.app"
+  if ! env -u LOQUI_BUNDLE_MODEL "$release_root_dir/scripts/macos-bundle.sh" \
+    --channel production --root "$release_root_dir" --executable "$stage/loqui" \
+    --helpers-dir "$stage/helpers" --output "$app" >/dev/null; then
+    return 1
+  fi
+}
+
+phase_audit_unsigned() {
+  if ! "$release_root_dir/scripts/macos-audit.sh" --channel production --version "$version" "$app" \
+    >"$stage/evidence-work/unsigned-audit.txt"; then
+    return 1
+  fi
+}
+
+phase_sign_app() {
+  if ! "$release_root_dir/scripts/macos-sign.sh" app --channel release --app "$app" --identity "$identity"; then
+    return 1
+  fi
+}
+
+entitlement_count() {
+  if ! entitlement_xml="$(plutil -convert xml1 -o - "$1" 2>/dev/null)"; then
+    return 1
+  fi
+  printf '%s\n' "$entitlement_xml" | awk '/<key>/{count++} END{print count+0}'
+}
+
+verify_entitlements() {
+  code_path="$1"
+  expected_kind="$2"
+  entitlement_dump="$stage/entitlements.$$.plist"
+  if ! codesign -d --entitlements :- "$code_path" >"$entitlement_dump" 2>/dev/null; then
+    if ! : >"$entitlement_dump"; then
+      die "could not initialize entitlement dump: ${code_path#"$app"/}"
+      return 1
+    fi
+  fi
+  case "$expected_kind" in
+    none)
+      if [ -s "$entitlement_dump" ]; then
+        if ! actual_entitlement_count="$(entitlement_count "$entitlement_dump")" \
+          || [ "$actual_entitlement_count" -ne 0 ]; then
+          die "unexpected entitlements: ${code_path#"$app"/}"
+          return 1
+        fi
+      fi
+      ;;
+    audio)
+      if ! actual_entitlement_count="$(entitlement_count "$entitlement_dump")" \
+        || [ "$actual_entitlement_count" -ne 1 ]; then
+        die "wrong audio-helper entitlement count: ${code_path#"$app"/}"
+        return 1
+      fi
+      if ! audio_input_value="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' \
+        "$entitlement_dump" 2>/dev/null)" || [ "$audio_input_value" != true ]; then
+        die "missing audio-input entitlement: ${code_path#"$app"/}"
+        return 1
+      fi
+      ;;
+    host)
+      if ! actual_entitlement_count="$(entitlement_count "$entitlement_dump")" \
+        || [ "$actual_entitlement_count" -ne 2 ]; then
+        die "wrong host entitlement count"
+        return 1
+      fi
+      if ! audio_input_value="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' \
+        "$entitlement_dump" 2>/dev/null)" || [ "$audio_input_value" != true ]; then
+        die "missing host audio-input entitlement"
+        return 1
+      fi
+      if ! apple_events_value="$(/usr/libexec/PlistBuddy -c \
+        'Print :com.apple.security.automation.apple-events' "$entitlement_dump" 2>/dev/null)" \
+        || [ "$apple_events_value" != true ]; then
+        die "missing host Apple Events entitlement"
+        return 1
+      fi
+      ;;
+  esac
+  if ! rm -f "$entitlement_dump"; then
+    die "could not remove entitlement dump: $entitlement_dump"
+    return 1
+  fi
+}
+
+capture_designated_requirements() {
+  designated_app="$1"
+  designated_output="$2"
+  if ! : >"$designated_output"; then
+    die "could not initialize designated requirements evidence: $designated_output"
+    return 1
+  fi
+  for designated_relative in \
+    Loqui.app \
+    Loqui.app/Contents/Helpers/globe-listener \
+    Loqui.app/Contents/Helpers/macos-stt \
+    Loqui.app/Contents/Helpers/whisper-stt; do
+    if [ "$designated_relative" = Loqui.app ]; then
+      designated_path="$designated_app"
+    else
+      designated_path="$designated_app/${designated_relative#Loqui.app/}"
+    fi
+    if ! designated_dump="$(codesign -d -r- "$designated_path" 2>&1)"; then
+      die "could not read designated requirement: $designated_relative"
+      return 1
+    fi
+    if ! designated_line="$(printf '%s\n' "$designated_dump" | sed -n '/^designated =>/p')"; then
+      die "could not parse designated requirement: $designated_relative"
+      return 1
+    fi
+    if ! designated_count="$(printf '%s\n' "$designated_line" | \
+      awk '/^designated =>/{count++} END{print count+0}')"; then
+      die "could not count designated requirements: $designated_relative"
+      return 1
+    fi
+    if [ "$designated_count" -ne 1 ]; then
+      die "${designated_relative#Loqui.app/} lacks one designated requirement"
+      return 1
+    fi
+    if ! printf '## %s\n%s\n' "$designated_relative" "$designated_line" >>"$designated_output"; then
+      die "could not record designated requirement: $designated_relative"
+      return 1
+    fi
+  done
+}
+
+compare_designated_requirements() {
+  first_requirements="$1"
+  second_requirements="$2"
+  if [ ! -f "$first_requirements" ]; then
+    die "missing designated requirements evidence: $first_requirements"
+    return 1
+  fi
+  if [ ! -f "$second_requirements" ]; then
+    die "missing designated requirements evidence: $second_requirements"
+    return 1
+  fi
+  if ! first_requirements_sha="$(shasum -a 256 "$first_requirements" | awk '{print $1}')"; then
+    die "could not checksum designated requirements: $first_requirements"
+    return 1
+  fi
+  if ! second_requirements_sha="$(shasum -a 256 "$second_requirements" | awk '{print $1}')"; then
+    die "could not checksum designated requirements: $second_requirements"
+    return 1
+  fi
+  if [ "$first_requirements_sha" != "$second_requirements_sha" ]; then
+    die "designated requirements differ: $first_requirements and $second_requirements"
+    return 1
+  fi
+}
+
+phase_verify_app() {
+  if ! codesign --verify --deep --strict --verbose=2 "$app"; then
+    return 1
+  fi
+  signed_manifest="$stage/signed-macho-manifest.txt"
+  if ! : >"$signed_manifest"; then
+    die "could not initialize signed Mach-O manifest"
+    return 1
+  fi
+  if ! : >"$stage/evidence-work/signature-metadata.txt"; then
+    die "could not initialize signature metadata evidence"
+    return 1
+  fi
+  if ! app_files="$(find "$app" -type f -print | LC_ALL=C sort)"; then
+    die "could not enumerate signed app files"
+    return 1
+  fi
+  expected_team=""
+  while read -r code_path; do
+    [ -n "$code_path" ] || continue
+    probe_macho_file "$code_path" || return 1
+    [ "$macho_probe_is_macho" -eq 1 ] || continue
+    relative="Loqui.app/${code_path#"$app"/}"
+    if ! printf '%s\n' "$relative" >>"$signed_manifest"; then
+      die "could not record signed Mach-O: $relative"
+      return 1
+    fi
+    if ! codesign --verify --strict --verbose=2 "$code_path"; then
+      return 1
+    fi
+    if ! metadata="$(codesign -dv --verbose=4 "$code_path" 2>&1)"; then
+      die "could not read signature metadata: $relative"
+      return 1
+    fi
+    if ! printf '## %s\n%s\n' "$relative" "$metadata" \
+      >>"$stage/evidence-work/signature-metadata.txt"; then
+      die "could not record signature metadata: $relative"
+      return 1
+    fi
+    if ! printf '%s\n' "$metadata" | grep -F 'Authority=Developer ID Application:' >/dev/null; then
+      die "$relative lacks Developer ID Application authority"
+      return 1
+    fi
+    if ! team="$(printf '%s\n' "$metadata" | sed -n 's/^TeamIdentifier=//p' | head -1)"; then
+      die "$relative lacks TeamIdentifier"
+      return 1
+    fi
+    if [ -z "$team" ]; then
+      die "$relative lacks TeamIdentifier"
+      return 1
+    fi
+    if [ -z "$expected_team" ]; then
+      expected_team="$team"
+    elif [ "$team" != "$expected_team" ]; then
+      die "$relative has different TeamIdentifier: $team"
+      return 1
+    fi
+    case "$relative" in
+      Loqui.app/Contents/MacOS/*|Loqui.app/Contents/Helpers/*)
+        if ! printf '%s\n' "$metadata" | grep -E '^Timestamp=' >/dev/null; then
+          die "$relative lacks secure timestamp"
+          return 1
+        fi
+        if ! printf '%s\n' "$metadata" | grep -E '^CodeDirectory .*flags=.*runtime' >/dev/null; then
+          die "$relative lacks Hardened Runtime"
+          return 1
+        fi
+        ;;
+    esac
+    case "$relative" in
+      Loqui.app/Contents/Helpers/*)
+        helper_name="${code_path##*/}"
+        expected_identifier="com.jualopezmo.loquigo.$helper_name"
+        if ! actual_identifier="$(printf '%s\n' "$metadata" | sed -n 's/^Identifier=//p' | head -1)"; then
+          die "could not read identifier: $relative"
+          return 1
+        fi
+        if [ "$actual_identifier" != "$expected_identifier" ]; then
+          die "$relative identifier is '$actual_identifier', expected '$expected_identifier'"
+          return 1
+        fi
+        ;;
+    esac
+  done <<<"$app_files"
+  if ! LC_ALL=C sort -u "$signed_manifest" -o "$signed_manifest"; then
+    die "could not sort signed Mach-O manifest"
+    return 1
+  fi
+
+  if ! app_metadata="$(codesign -dv --verbose=4 "$app" 2>&1)"; then
+    die "could not read signed app metadata"
+    return 1
+  fi
+  if ! app_identifier="$(printf '%s\n' "$app_metadata" | sed -n 's/^Identifier=//p' | head -1)"; then
+    die "could not read signed app identifier"
+    return 1
+  fi
+  if [ "$app_identifier" != com.jualopezmo.loquigo ]; then
+    die "signed app identifier is '$app_identifier'"
+    return 1
+  fi
+  verify_entitlements "$app" host || return 1
+  verify_entitlements "$app/Contents/Helpers/globe-listener" none || return 1
+  verify_entitlements "$app/Contents/Helpers/macos-stt" audio || return 1
+  verify_entitlements "$app/Contents/Helpers/whisper-stt" audio || return 1
+  capture_designated_requirements "$app" \
+    "$stage/evidence-work/designated-requirements.txt" || return 1
+}
+
+phase_create_dmg() {
+  dmg_root="$stage/dmg-root"
+  if ! mkdir -p "$dmg_root"; then
+    die "could not create DMG staging root"
+    return 1
+  fi
+  if ! ditto "$app" "$dmg_root/Loqui.app"; then
+    return 1
+  fi
+  if ! ln -s /Applications "$dmg_root/Applications"; then
+    die "could not create DMG Applications link"
+    return 1
+  fi
+  if ! "$release_root_dir/scripts/macos-audit.sh" --channel production --version "$version" \
+    "$dmg_root/Loqui.app" >/dev/null; then
+    return 1
+  fi
+  if ! codesign --verify --deep --strict "$dmg_root/Loqui.app"; then
+    return 1
+  fi
+  dmg_designated_requirements="$stage/evidence-work/designated-requirements-dmg.txt"
+  if ! capture_designated_requirements "$dmg_root/Loqui.app" "$dmg_designated_requirements"; then
+    return 1
+  fi
+  if ! compare_designated_requirements \
+    "$stage/evidence-work/designated-requirements.txt" "$dmg_designated_requirements"; then
+    return 1
+  fi
+  dmg="$stage/Loqui.dmg"
+  if ! hdiutil create -volname Loqui -srcfolder "$dmg_root" -ov -format UDZO "$dmg"; then
+    return 1
+  fi
+}
+
+phase_sign_dmg() {
+  if ! "$release_root_dir/scripts/macos-sign.sh" dmg --dmg "$dmg" --identity "$identity"; then
+    return 1
+  fi
+}
+
+phase_verify_dmg() {
+  if ! hdiutil verify "$dmg"; then
+    return 1
+  fi
+  if ! codesign --verify --verbose=2 "$dmg"; then
+    return 1
+  fi
+}
+
+preserve_notary_failure() {
+  failure_id="${1:-missing-id}"
+  submit_path="${2:-}"
+  log_path="${3:-}"
+  initialize_tmp_roots || return 1
+  if ! failure_dir="$(mktemp -d "$tmp_root_physical/loqui-notary-failure.$failure_id.XXXXXX")"; then
+    die "could not preserve notary failure evidence"
+    return 1
+  fi
+  if [ -n "$submit_path" ] && [ -f "$submit_path" ]; then
+    if ! cp "$submit_path" "$failure_dir/notary-submit.json"; then
+      die "could not preserve notary submission response"
+      return 1
+    fi
+  fi
+  if [ -n "$log_path" ] && [ -f "$log_path" ]; then
+    if ! cp "$log_path" "$failure_dir/notary-log.json"; then
+      die "could not preserve notary log"
+      return 1
+    fi
+  fi
+  if ! printf '%s\n' "$failure_dir"; then
+    return 1
+  fi
+}
+
+phase_submit() {
+  if xcrun notarytool submit "$dmg" --keychain-profile "$profile" --wait --timeout 30m \
+    --output-format json >"$stage/notary-submit.json"; then
+    submit_rc=0
+  else
+    submit_rc=$?
+  fi
+  if ! submission_id="$(jq -er '.id | select(type == "string" and length > 0)' \
+    "$stage/notary-submit.json" 2>/dev/null)"; then
+    submission_id=""
+  fi
+  if ! submission_status="$(jq -er '.status | select(type == "string" and length > 0)' \
+    "$stage/notary-submit.json" 2>/dev/null)"; then
+    submission_status=""
+  fi
+  if [ -z "$submission_id" ]; then
+    if ! failure_dir="$(preserve_notary_failure missing-id "$stage/notary-submit.json" "")"; then
+      return 1
+    fi
+    die "missing submission id; raw response preserved at $failure_dir"
+    return 1
+  fi
+}
+
+phase_fetch_log() {
+  log_rc=1
+  log_attempt=1
+  while [ "$log_attempt" -le 3 ]; do
+    if xcrun notarytool log "$submission_id" "$stage/notary-log.json" --keychain-profile "$profile"; then
+      log_rc=0
+    else
+      log_rc=$?
+    fi
+    if [ "$log_rc" -eq 0 ]; then
+      break
+    fi
+    log_attempt=$((log_attempt + 1))
+    if [ "$log_attempt" -le 3 ]; then
+      if ! sleep "${LOQUI_NOTARY_LOG_RETRY_DELAY:-5}"; then
+        die "notary log retry delay failed"
+        return 1
+      fi
+    fi
+  done
+  if [ "$log_rc" -ne 0 ]; then
+    if ! failure_dir="$(preserve_notary_failure "$submission_id" \
+      "$stage/notary-submit.json" "$stage/notary-log.json")"; then
+      return 1
+    fi
+    die "notary log retrieval failed for $submission_id; evidence preserved at $failure_dir"
+    return 1
+  fi
+}
+
+check_ticket_log() {
+  log_path="$1"
+  manifest_path="$2"
+  if ! log_status="$(jq -er '.status | select(type == "string")' "$log_path" 2>/dev/null)"; then
+    log_status=""
+  fi
+  if [ "$log_status" != Accepted ]; then
+    die "notary log status is '$log_status', expected Accepted"
+    return 1
+  fi
+  if ! error_count="$(jq '[((.issues // [])[]) | select(.severity == "error")] | length' \
+    "$log_path" 2>/dev/null)"; then
+    die "notary log contains invalid issues data"
+    return 1
+  fi
+  if [ "$error_count" != 0 ]; then
+    die "notary log contains $error_count error issue(s)"
+    return 1
+  fi
+  if ! jq -e '.ticketContents | type == "array" and length > 0' "$log_path" >/dev/null 2>&1; then
+    die "notary log has missing/null/empty ticketContents"
+    return 1
+  fi
+  if ! ticket_paths="$(jq -r '.ticketContents[].path | select(type == "string")' "$log_path")"; then
+    die "could not parse notary ticket paths"
+    return 1
+  fi
+  while read -r expected_path; do
+    [ -n "$expected_path" ] || continue
+    covered=0
+    while read -r ticket_path; do
+      case "$ticket_path" in "$expected_path"|*/"$expected_path") covered=1; break ;; esac
+    done <<<"$ticket_paths"
+    if [ "$covered" -ne 1 ]; then
+      die "ticketContents omit $expected_path"
+      return 1
+    fi
+  done <"$manifest_path"
+}
+
+phase_check_log() {
+  if [ "$submit_rc" -ne 0 ] || [ "$submission_status" != Accepted ]; then
+    if ! failure_dir="$(preserve_notary_failure "$submission_id" \
+      "$stage/notary-submit.json" "$stage/notary-log.json")"; then
+      return 1
+    fi
+    die "notary submission $submission_id ended '$submission_status' (rc=$submit_rc); evidence preserved at $failure_dir"
+    return 1
+  fi
+  if ! check_ticket_log "$stage/notary-log.json" "$signed_manifest"; then
+    if ! failure_dir="$(preserve_notary_failure "$submission_id" \
+      "$stage/notary-submit.json" "$stage/notary-log.json")"; then
+      return 1
+    fi
+    die "ticket validation failed for $submission_id; evidence preserved at $failure_dir"
+    return 1
+  fi
+
+  evidence="$stage/evidence"
+  if ! mkdir -p "$evidence"; then
+    die "could not create release evidence"
+    return 1
+  fi
+  if ! cp "$stage/notary-submit.json" "$evidence/"; then return 1; fi
+  if ! cp "$stage/notary-log.json" "$evidence/"; then return 1; fi
+  if ! cp "$signed_manifest" "$evidence/"; then return 1; fi
+  if ! cp "$stage/evidence-work"/* "$evidence/"; then return 1; fi
+  if ! date -u '+%Y-%m-%dT%H:%M:%SZ' >"$evidence/release-date-utc.txt"; then
+    die "could not record release date"
+    return 1
+  fi
+  if ! : >"$evidence/packaged-macho-sha256.txt"; then
+    die "could not initialize packaged Mach-O checksums"
+    return 1
+  fi
+  if ! packaged_files="$(find "$app" -type f -print | LC_ALL=C sort)"; then
+    die "could not enumerate packaged app files"
+    return 1
+  fi
+  while read -r code_path; do
+    [ -n "$code_path" ] || continue
+    probe_macho_file "$code_path" || return 1
+    [ "$macho_probe_is_macho" -eq 1 ] || continue
+    if ! shasum -a 256 "$code_path" >>"$evidence/packaged-macho-sha256.txt"; then
+      die "could not checksum packaged Mach-O: $code_path"
+      return 1
+    fi
+  done <<<"$packaged_files"
+  normalize_evidence_paths "$evidence" || return 1
+  probe_evidence_match regex '/Users/|"(password|privateKey|apiKey)"[[:space:]]*:' \
+    "$evidence" "checkout paths or secrets" || return 1
+  if [ "$grep_probe_found" -eq 1 ]; then
+    die "evidence contains a checkout path or secret field"
+    return 1
+  fi
+}
+
+phase_staple() {
+  if ! xcrun stapler staple "$dmg"; then return 1; fi
+}
+
+phase_verify_staple() {
+  if ! xcrun stapler validate "$dmg"; then return 1; fi
+  if ! hdiutil verify "$dmg"; then return 1; fi
+  if ! codesign --verify --verbose=2 "$dmg"; then return 1; fi
+}
+
+phase_gatekeeper() {
+  if ! spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"; then
+    return 1
+  fi
+}
+
+atomic_publish() {
+  source_dmg="$1"
+  source_evidence="$2"
+  destination_root="$3"
+  publication_version="$4"
+  publication_id="$5"
+  if [[ ! "$publication_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    die "invalid publication version: $publication_version"
+    return 1
+  fi
+  if [[ ! "$publication_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || [ "$publication_id" = . ] || [ "$publication_id" = .. ]; then
+    die "invalid publication id: $publication_id"
+    return 1
+  fi
+  prepare_release_output_dir "$destination_root" || return 1
+  destination_root="$release_output_dir_physical"
+  if [ ! -f "$source_dmg" ]; then
+    die "missing source DMG: $source_dmg"
+    return 1
+  fi
+  if [ ! -d "$source_evidence" ]; then
+    die "missing source evidence: $source_evidence"
+    return 1
+  fi
+  final_dmg="$destination_root/Loqui-$publication_version-macos-arm64.dmg"
+  prepare_evidence_parent "$destination_root" "$publication_version" || return 1
+  published_evidence="$evidence_parent/$publication_id"
+  if [ -e "$published_evidence" ] || [ -L "$published_evidence" ]; then
+    die "evidence already exists: $published_evidence"
+    return 1
+  fi
+  hidden_dmg_candidate=""
+  hidden_evidence_candidate=""
+  hidden_dmg_candidate_owned=0
+  hidden_evidence_candidate_owned=0
+  if ! hidden_dmg_candidate="$(mktemp "$destination_root/.Loqui-$publication_version.$publication_id.candidate.XXXXXX")"; then
+    hidden_dmg_candidate=""
+    die "could not create hidden DMG candidate"
+    return 1
+  fi
+  hidden_dmg_candidate_owned=1
+  if ! cp "$source_dmg" "$hidden_dmg_candidate"; then
+    die "could not copy hidden DMG candidate"
+    return 1
+  fi
+  if ! hidden_evidence_candidate="$(mktemp -d "$destination_root/.evidence-$publication_version.$publication_id.candidate.XXXXXX")"; then
+    hidden_evidence_candidate=""
+    die "could not create hidden evidence candidate"
+    return 1
+  fi
+  hidden_evidence_candidate_owned=1
+  if ! cp -R "$source_evidence"/. "$hidden_evidence_candidate/"; then
+    die "could not copy hidden evidence candidate"
+    return 1
+  fi
+  if ! mv "$hidden_evidence_candidate" "$published_evidence"; then
+    die "could not publish evidence: $published_evidence"
+    return 1
+  fi
+  hidden_evidence_candidate=""
+  hidden_evidence_candidate_owned=0
+  if ! mv -f "$hidden_dmg_candidate" "$final_dmg"; then
+    if ! rm -rf "$published_evidence"; then
+      die "could not roll back published evidence: $published_evidence"
+      return 1
+    fi
+    die "could not publish final DMG: $final_dmg"
+    return 1
+  fi
+  hidden_dmg_candidate=""
+  hidden_dmg_candidate_owned=0
+  if ! printf '%s\n' "$final_dmg"; then
+    return 1
+  fi
+}
+
+phase_publish() {
+  atomic_publish "$dmg" "$stage/evidence" "$release_output_dir" \
+    "$version" "$submission_id" || return 1
+}
+
+run_phase() {
+  phase_name="$1"
+  phase_function="$2"
+  if [ -n "${LOQUI_PHASE_LOG:-}" ]; then
+    if ! printf '%s\n' "$phase_name" >>"$LOQUI_PHASE_LOG"; then
+      die "could not record release phase: $phase_name"
+      return 1
+    fi
+  fi
+  if ! "$phase_function"; then
+    return 1
+  fi
+}
+
+run_release() {
+  run_phase preflight phase_preflight || return 1
+  run_phase build phase_build || return 1
+  run_phase build-helpers phase_build_helpers || return 1
+  run_phase bundle phase_bundle || return 1
+  run_phase audit-unsigned phase_audit_unsigned || return 1
+  run_phase sign-app phase_sign_app || return 1
+  run_phase verify-app phase_verify_app || return 1
+  run_phase create-dmg phase_create_dmg || return 1
+  run_phase sign-dmg phase_sign_dmg || return 1
+  run_phase verify-dmg phase_verify_dmg || return 1
+  run_phase submit phase_submit || return 1
+  run_phase fetch-log phase_fetch_log || return 1
+  run_phase check-log phase_check_log || return 1
+  run_phase staple phase_staple || return 1
+  run_phase verify-staple phase_verify_staple || return 1
+  run_phase gatekeeper phase_gatekeeper || return 1
+  run_phase publish phase_publish || return 1
+}
+
+main() {
+  trap cleanup_release EXIT
+  if ! cd "$release_root_dir"; then
+    die "could not enter repository root: $release_root_dir"
+    return 1
+  fi
+  run_release || return 1
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

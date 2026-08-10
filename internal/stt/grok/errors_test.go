@@ -115,13 +115,19 @@ func TestBadCredentialsAreNotRetryable(t *testing.T) {
 	}
 }
 
-// A server-reported error arrives as prose with no structured code, so it is mapped to a
-// TERMINAL code on purpose. See the plan: while controller.go resets the retry budget on every
-// successful connect, anything retryable can loop forever against a service billed per hour.
-func TestServerErrorIsTerminal(t *testing.T) {
+// A server-reported error arrives as prose with no structured discriminator. The controller owns
+// the hard retry bound, so this provider must report the honest retryable category rather than call
+// an unknown service failure a client-side bad request.
+func TestServerErrorIsBoundedRetryable(t *testing.T) {
+	if serverErrorCode != "ServiceError" {
+		t.Errorf("server error code = %q, want ServiceError", serverErrorCode)
+	}
 	class := session.ClassifyCancel(session.Cancel{ErrorCode: serverErrorCode})
-	if session.ShouldReconnect(class) {
-		t.Error("a server error event must not open a reconnect loop")
+	if class != session.ClassOther {
+		t.Errorf("a server error event classified as %q, want %q", class, session.ClassOther)
+	}
+	if !session.ShouldReconnect(class) {
+		t.Errorf("a server error event classified as %q, want bounded retry", class)
 	}
 }
 

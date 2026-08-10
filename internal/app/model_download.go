@@ -64,8 +64,11 @@ type modelDownloader struct {
 	spec store.ModelSpec
 	// path is a function, not a string: the model lives beside the helper in a dev build and in the
 	// data directory otherwise, and WhisperModelPath decides that per call.
-	path   func() string
-	client *http.Client
+	path func() string
+	// bundled classifies the resolved path without sending model data back through HelperPath.
+	// Packaged and development copies are app inputs; only the data-directory copy is managed.
+	bundled func(path string) bool
+	client  *http.Client
 	// locale words the progress line. A function for the same reason the services use one: this
 	// downloader outlives any single language.
 	locale func() string
@@ -78,14 +81,22 @@ type modelDownloader struct {
 }
 
 func newModelDownloader(dataDir string, locale func() string) *modelDownloader {
+	managedPath := filepath.Join(dataDir, "models", store.WhisperModel.File)
 	return &modelDownloader{
 		spec:   store.WhisperModel,
 		locale: locale,
 		path:   func() string { return WhisperModelPath(dataDir) },
+		bundled: func(path string) bool {
+			return filepath.Clean(path) != filepath.Clean(managedPath)
+		},
 		// No overall timeout: this is a 465 MB transfer and a deadline that fits a small file would
 		// kill a legitimate slow download halfway. Cancellation is explicit, through cancelCh.
 		client: &http.Client{},
 	}
+}
+
+func (d *modelDownloader) isBundled(path string) bool {
+	return d.bundled != nil && d.bundled(path)
 }
 
 // status reads what is on disk. It does NOT hash — see store.ModelUnverified for why that is a state
@@ -93,6 +104,7 @@ func newModelDownloader(dataDir string, locale func() string) *modelDownloader {
 func (d *modelDownloader) status() ModelStatus {
 	path := d.path()
 	st := ModelStatus{Total: d.spec.Bytes, Label: d.spec.Label}
+	st.Bundled = d.isBundled(path)
 	d.mu.Lock()
 	st.Downloading = d.running
 	d.mu.Unlock()
@@ -104,11 +116,9 @@ func (d *modelDownloader) status() ModelStatus {
 		if part, perr := os.Stat(path + partSuffix); perr == nil {
 			st.Bytes = part.Size()
 			st.Verdict = store.VerdictFor(&store.ModelOnDisk{Bytes: part.Size()})
-			st.Bundled = HelperPath(d.spec.File) != ""
 			return st
 		}
 		st.Verdict = store.VerdictFor(nil)
-		st.Bundled = HelperPath(d.spec.File) != ""
 		return st
 	}
 	st.Bytes = info.Size()
@@ -127,7 +137,6 @@ func (d *modelDownloader) status() ModelStatus {
 	}
 	// A bundled copy sits beside the helper rather than in the data directory. Offering "Delete" for
 	// it would remove something this app cannot download back into that location.
-	st.Bundled = HelperPath(d.spec.File) != ""
 	return st
 }
 

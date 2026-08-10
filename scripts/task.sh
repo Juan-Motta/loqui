@@ -21,10 +21,22 @@ set -euo pipefail
 
 GOBIN="$(go env GOPATH)/bin"
 export PATH="$PATH:$GOBIN"
+WAILS_VERSION="v3.0.0-alpha2.119"
 
-if ! command -v wails3 >/dev/null 2>&1; then
-  echo "task.sh: wails3 not found — installing it (one-off, a couple of minutes)" >&2
-  go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+installed_version=""
+if command -v wails3 >/dev/null 2>&1; then
+  installed_version="$(wails3 version 2>&1 || true)"
+  installed_version="${installed_version%$'\r'}"
+fi
+if [ "$installed_version" != "$WAILS_VERSION" ]; then
+  echo "task.sh: installing pinned wails3 $WAILS_VERSION (found: ${installed_version:-missing})" >&2
+  go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
+  installed_version="$(wails3 version 2>&1 || true)"
+  installed_version="${installed_version%$'\r'}"
+  [ "$installed_version" = "$WAILS_VERSION" ] || {
+    echo "task.sh: wails3 version check failed; raw output: $installed_version" >&2
+    exit 1
+  }
 fi
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

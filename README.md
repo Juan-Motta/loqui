@@ -71,6 +71,47 @@ SPEECH_KEY=... SPEECH_REGION=eastus ./scripts/task.sh probe -- -seconds 20
 
 With `wails3` on the PATH, `wails3 task <the-same>` is equivalent.
 
+## Developer ID release setup (one time)
+
+Releases for other Macs require two identities and notarization credentials; ordinary ad-hoc
+packages do not. Configure them without putting secrets in this repository or shell history:
+
+1. In Xcode **Settings → Accounts → Manage Certificates**, create an **Apple Development**
+   certificate for stable daily builds.
+2. Create or download a **Developer ID Application** certificate from the Apple developer account.
+   In Keychain Access, confirm its private key appears beneath the certificate.
+3. Export the Developer ID certificate plus private key once as an encrypted `.p12`, and store it
+   outside this repository in the owner's encrypted backup.
+4. Create an app-specific Apple password, then store it through `notarytool`'s interactive prompt:
+
+```bash
+printf 'Apple ID: '
+IFS= read -r APPLE_ID
+printf 'Apple Team ID: '
+IFS= read -r TEAM_ID
+xcrun notarytool store-credentials loqui-notary \
+  --apple-id "$APPLE_ID" --team-id "$TEAM_ID"
+unset APPLE_ID TEAM_ID
+```
+
+The password is intentionally omitted; `notarytool` prompts securely and validates the credentials
+before saving them. Verify setup without copying identity hashes or credentials into reports:
+
+```bash
+security find-identity -v -p codesigning
+xcrun notarytool history --keychain-profile loqui-notary --output-format json >/dev/null
+```
+
+Run the complete local gate immediately before the release entry point:
+
+```bash
+./scripts/task.sh check
+LOQUI_NOTARY_PROFILE=loqui-notary ./scripts/task.sh release:macos
+```
+
+Success publishes `bin/release/Loqui-<version>-macos-arm64.dmg` only after Developer ID signing,
+notarization, stapling, Gatekeeper assessment, and atomic publication all pass.
+
 Development affordances (documented where they are read, not only here):
 
 ```bash
@@ -96,14 +137,16 @@ SPEECH_KEY=... ./scripts/go.sh run ./cmd/stt-probe                   # Azure (th
 
 ## Setup on a fresh machine
 
+Install Go, Node/npm, CMake, and the Xcode command-line tools, then run:
+
 ```bash
 cd frontend && npm install && cd ..
-./scripts/build-globe-listener.sh    # the fn-key listener
-./scripts/task.sh package            # installs wails3 if missing
+./scripts/task.sh package
 ```
 
-The Azure framework is fetched by `scripts/vendor-speech-sdk.sh` on its own, with a pinned
-sha256.
+`package` orchestrates every repo-owned build step: it installs the pinned `wails3` when needed,
+fetches the Azure framework with its pinned sha256, and builds every native helper plus its required
+dylibs before assembling the app bundle.
 
 ## macOS permissions
 

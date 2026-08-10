@@ -39,7 +39,7 @@ func testDictation(t *testing.T, provider string) *Dictation {
 func TestBuildGrokProviderWithoutAKeyIsAConfigError(t *testing.T) {
 	d := testDictation(t, "grok")
 
-	_, err := d.buildProvider()
+	_, err := d.buildProvider(1)
 	if err == nil {
 		t.Fatal("building the Grok provider with no key succeeded")
 	}
@@ -59,7 +59,7 @@ func TestBuildGrokProviderWithTheEnvKey(t *testing.T) {
 	// After testDictation, which clears every override to isolate the no-key case.
 	t.Setenv("LOQUI_GROK_KEY", "xai-test")
 
-	p, err := d.buildProvider()
+	p, err := d.buildProvider(1)
 	if err != nil {
 		t.Fatalf("building the Grok provider: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestBuildGrokProviderWithTheEnvKey(t *testing.T) {
 func TestUnportedProviderIsReported(t *testing.T) {
 	d := testDictation(t, "un-motor-que-no-existe")
 
-	_, err := d.buildProvider()
+	_, err := d.buildProvider(1)
 	if err == nil {
 		t.Fatal("an unported provider was accepted")
 	}
