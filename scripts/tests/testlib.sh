@@ -20,3 +20,28 @@ run_expect_fail() {
     fail "command unexpectedly passed: $*"
   fi
 }
+
+run_expect_fail_msg() {
+  expected_stderr="$1"
+  shift
+  failure_dir="$(mktemp -d "${TMPDIR:-/tmp}/loqui-failure.XXXXXX")"
+  failure_stdout="$failure_dir/stdout"
+  failure_stderr="$failure_dir/stderr"
+  failure_rc=0
+  if "$@" >"$failure_stdout" 2>"$failure_stderr"; then
+    rm -rf "$failure_dir"
+    fail "command unexpectedly passed: $*"
+  else
+    failure_rc=$?
+  fi
+  if [ "$failure_rc" -eq 97 ]; then
+    rm -rf "$failure_dir"
+    fail "command hit reserved fake status 97: $*"
+  fi
+  if ! grep -F -- "$expected_stderr" "$failure_stderr" >/dev/null; then
+    failure_text="$(cat "$failure_stderr")"
+    rm -rf "$failure_dir"
+    fail "stderr does not contain '$expected_stderr': $failure_text"
+  fi
+  rm -rf "$failure_dir"
+}

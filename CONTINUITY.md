@@ -1,32 +1,30 @@
 # Continuity — session handoff
 
-- **Focus:** Developer ID macOS release pipeline is implemented and code-review clean on
-  `feat/developer-id-release`; arm64, macOS 14+ generally, with Apple Speech on macOS 26 only.
+- **Focus:** Bootstrap the protected manual GitHub Actions pipeline that builds, signs, notarizes,
+  verifies, and publishes the Loqui macOS DMG from the exact `main` version/SHA.
 
-- **NEXT STEP:** complete `finish-branch`: add the Developer ID release entry to
-  `docs/CHANGELOG.md`, rerun the deterministic gates/final verification, commit the complete feature,
-  push `feat/developer-id-release`, and open its PR into `main`.
+- **NEXT STEP:** Review and merge the bootstrap PR from `feat/github-macos-release`; then fetch the
+  merged `main` and obtain the owner's separate confirmation that version `0.1.0` at that exact SHA
+  is fit for permanent public distribution before dispatching the first `Release` workflow.
 
-- **Blockers:** none for the Developer ID branch; all required E2E journeys pass.
+- **Blockers:** Live `GMR-LIVE-01..04` cannot run until the workflow exists on default `main`. The
+  owner explicitly approved the one-time bootstrap exception on 2026-08-10; this does not authorize
+  publishing the first public release.
 
-- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). The current
-  report is `docs/e2e/reports/2026-08-07-developer-id-release.md` with `VERDICT: PASS`.
+- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). The bootstrap
+  report is `docs/e2e/reports/2026-08-10-github-macos-release.md` with an honest `VERDICT: FAIL`
+  solely because the live workflow is not yet on `main`.
 
 - **Handoff notes:**
-  - Full feature review plus focused correction reviews have no open P0/P1/P2. Fresh
-    `./scripts/task.sh check` passes Go, vet, frontend typecheck, and all nine macOS release scripts.
-  - The regenerated final release was accepted as submission
-    `4c9f131e-8378-4d3a-838f-8f6147b0e2c3`. It is 11,302,960 bytes with SHA-256
-    `c9a4ab42a18158533cc8a7ca82f4e240ac34e6fb5ab0354bab41b556db99a864`; native `hdiutil`,
-    `codesign`, stapler, DMG/app Gatekeeper, read-only mount, and production audit all pass. Its
-    14-file evidence has matching pre/post-DMG requirements and no local path or secret field.
-  - Candidate 1 remains unchanged at 11,212,173 bytes/SHA-256
-    `4b481abe2c5154d109a8d31b1e05410de80fc42f2612e050f8f709fa0cbde06d`. The contained test incident
-    and dummy evidence ID `11111111-1111-1111-1111-111111111111` are recorded in workflow state;
-    dummy evidence remains deliberately preserved. Security/LaunchServices checks must run outside
-    the filesystem sandbox to avoid false signature/file-not-found results.
-  - DID-UI-01 through DID-UI-05 pass; the operator confirmed the clean second-Mac offline reboot,
-    Gatekeeper, dictation, and permission-continuity journey. Finish and merge this branch before
-    starting the approved GitHub Release automation implementation.
+  - GitHub Environment `release` requires reviewer `Juan-Motta`, allows exactly `main`, and contains
+    all five required secret names; no values were recorded. The App Store Connect Team Key
+    authenticated successfully through a read-only `notarytool history` call.
+  - `./scripts/task.sh check`, the macOS release suite, ShellCheck, workflow YAML parsing, and
+    `git diff --check` passed after implementation. The initial sandbox-only port-bind failures were
+    rerun outside the sandbox and passed.
+  - Code review found no P0/P1. Its four P2 findings are resolved or rebutted with current official
+    GitHub CLI behavior and RED→GREEN regression coverage; no open P0/P1/P2 remains.
+  - Publication is manual-only, Environment-protected, one-shot, and never deletes ambiguous remote
+    state. A separate post-merge evidence PR must graduate live E2E and add the changelog entry.
 
 - **Updated:** 2026-08-10

@@ -43,6 +43,9 @@ tasks:
       - ./scripts/tests/macos-bundle-test.sh
       - ./scripts/tests/macos-audit-test.sh
       - ./scripts/tests/macos-sign-test.sh
+      - ./scripts/tests/release-version-test.sh
+      - ./scripts/tests/github-release-test.sh
+      - ./scripts/tests/github-release-workflow-test.sh
       - ./scripts/tests/release-macos-test.sh
 
   run:
