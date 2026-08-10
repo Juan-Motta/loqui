@@ -1,30 +1,29 @@
 # Continuity — session handoff
 
-- **Focus:** Bootstrap the protected manual GitHub Actions pipeline that builds, signs, notarizes,
-  verifies, and publishes the Loqui macOS DMG from the exact `main` version/SHA.
+- **Focus:** Close out the protected GitHub macOS release automation with live evidence from the
+  first public release.
 
-- **NEXT STEP:** Review and merge the bootstrap PR from `feat/github-macos-release`; then fetch the
-  merged `main` and obtain the owner's separate confirmation that version `0.1.0` at that exact SHA
-  is fit for permanent public distribution before dispatching the first `Release` workflow.
+- **NEXT STEP:** Review and merge branch `docs/github-release-live-evidence`; the implementation and
+  all live journeys are complete.
 
-- **Blockers:** Live `GMR-LIVE-01..04` cannot run until the workflow exists on default `main`. The
-  owner explicitly approved the one-time bootstrap exception on 2026-08-10; this does not authorize
-  publishing the first public release.
+- **Blockers:** none.
 
-- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). The bootstrap
-  report is `docs/e2e/reports/2026-08-10-github-macos-release.md` with an honest `VERDICT: FAIL`
-  solely because the live workflow is not yet on `main`.
+- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). The report is
+  `docs/e2e/reports/2026-08-10-github-macos-release.md` with `VERDICT: PASS`.
 
 - **Handoff notes:**
-  - GitHub Environment `release` requires reviewer `Juan-Motta`, allows exactly `main`, and contains
-    all five required secret names; no values were recorded. The App Store Connect Team Key
-    authenticated successfully through a read-only `notarytool history` call.
-  - `./scripts/task.sh check`, the macOS release suite, ShellCheck, workflow YAML parsing, and
-    `git diff --check` passed after implementation. The initial sandbox-only port-bind failures were
-    rerun outside the sandbox and passed.
-  - Code review found no P0/P1. Its four P2 findings are resolved or rebutted with current official
-    GitHub CLI behavior and RED→GREEN regression coverage; no open P0/P1/P2 remains.
-  - Publication is manual-only, Environment-protected, one-shot, and never deletes ambiguous remote
-    state. A separate post-merge evidence PR must graduate live E2E and add the changelog entry.
+  - PR #2 merged as `50f53f7bcc3d35637df96cda106a6ea8e1ea97da`. Release workflow run
+    `31428242122` passed preflight, protected approval, signing, notarization, evidence upload,
+    publication, and credential cleanup.
+  - Public `v0.1.0` targets that exact SHA and contains only
+    `Loqui-0.1.0-macos-arm64.dmg` plus its checksum. A fresh download passed SHA-256, `hdiutil`,
+    stapler, DMG/app Gatekeeper, deep signature verification, and production bundle audit. The owner
+    independently installed it and confirmed that Loqui works.
+  - Duplicate run `31429953529` failed secret-free preflight because `v0.1.0` already exists; its
+    protected job was skipped. Non-main run `31430266300` failed the exact-main check; no deployment
+    approval existed, the Environment API still allows only `main`, and the temporary test branch
+    was deleted.
+  - The 14-file evidence artifact expires on 2026-08-24 and passed structural secret/path scans.
+    No secret value appears in the report, changelog, or branch.
 
 - **Updated:** 2026-08-10
