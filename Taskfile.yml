@@ -26,6 +26,25 @@ tasks:
     cmds:
       - task: "{{.GOOS}}:package"
 
+  release:macos:
+    summary: Builds, signs, notarizes, staples, and verifies an arm64 Developer ID DMG
+    cmds:
+      - task: darwin:release
+
+  test:macos-release:
+    summary: Runs macOS bundle, audit, signing, and release tests
+    platforms: [darwin]
+    cmds:
+      - ./scripts/tests/patch-plists-test.sh
+      - ./scripts/tests/build-component-helpers-test.sh
+      - ./scripts/tests/build-macos-helpers-test.sh
+      - ./scripts/tests/darwin-taskflow-test.sh
+      - ./scripts/tests/whisper-model-integrity-test.sh
+      - ./scripts/tests/macos-bundle-test.sh
+      - ./scripts/tests/macos-audit-test.sh
+      - ./scripts/tests/macos-sign-test.sh
+      - ./scripts/tests/release-macos-test.sh
+
   run:
     summary: Runs the application
     cmds:
@@ -68,6 +87,7 @@ tasks:
       - task: test
       - task: vet
       - task: typecheck
+      - task: test:macos-release
 
   probe:
     summary: 'Run one dictation from the CLI. Needs SPEECH_KEY. Extra flags after --'

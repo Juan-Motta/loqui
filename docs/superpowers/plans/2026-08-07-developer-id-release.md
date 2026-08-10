@@ -15,12 +15,17 @@
 - Developer ID is used only by `./scripts/task.sh release:macos`; daily run/dev uses Apple Development when exactly one valid identity exists and otherwise prints an explicit ad-hoc/TCC warning.
 - An explicitly configured invalid `LOQUI_DEV_SIGN_IDENTITY` or `LOQUI_SIGN_IDENTITY` is an error; ambiguity is never guessed.
 - Release is macOS `arm64` only. The already-universal Azure framework is allowed because it contains `arm64`; the app, helpers, and Whisper/ggml/SDL dylibs must be exactly `arm64`.
+- The global compatibility floor is macOS 14.0/`LSMinimumSystemVersion=14.0.0`. Main,
+  `globe-listener`, Whisper/ggml (including BLAS/CPU/Metal), and repo-built SDL target 14.0;
+  `macos-stt` alone targets exactly 26.0. Runtime Sonoma support remains an external E2E gate.
 - Executable helpers live under `Contents/Helpers`, frameworks and dylibs under `Contents/Frameworks`, and the optional model under `Contents/Resources/models`. No Mach-O code may remain under Resources.
 - Release artifacts contain no Homebrew, checkout, `/Users/`, `helpers/bin`, or `scripts/whisper-vendor` load/rpath dependency.
 - Every release rebuilds all three helpers and Whisper/ggml/SDL libraries into unique staging from
-  current repo sources and one pinned whisper.cpp commit; it never packages ambient `helpers/bin`.
-  Evidence records the repo revision with an honest clean/dirty marker, pinned upstream commit, and
-  SHA-256 of every packaged Mach-O.
+  current repo sources, pinned whisper.cpp commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`,
+  and exact official SDL commit `5d249570393f7a37e037abf22cd6012a4cc56a71`; it never packages ambient `helpers/bin`.
+  The SDL checkout rejects a non-official origin and tracked, index, or non-ignored untracked
+  changes. Evidence records the repo revision with an honest clean/dirty marker, both pinned
+  upstream commits, and SHA-256 of every packaged Mach-O.
 - Sign nested code explicitly from the inside out. Never use `codesign --deep` to sign; `codesign --verify --deep --strict` is allowed only as a read-only audit.
 - Developer ID and Apple Development signatures use Hardened Runtime on main executables. The app
   receives Audio Input plus Apple Events entitlements; `macos-stt` and `whisper-stt` receive Audio
@@ -250,7 +255,7 @@ Change `build/darwin/Info.dev.plist` to `com.jualopezmo.loquigo.dev`. In `script
 ```bash
 PRODUCTION_ID="com.jualopezmo.loquigo"
 DEVELOPMENT_ID="com.jualopezmo.loquigo.dev"
-MINIMUM_SYSTEM_VERSION="12.0.0"
+MINIMUM_SYSTEM_VERSION="14.0.0"
 
 set_string build/darwin/Info.plist CFBundleIdentifier "$PRODUCTION_ID"
 set_string build/darwin/Info.dev.plist CFBundleIdentifier "$DEVELOPMENT_ID"
@@ -277,8 +282,8 @@ test "$(plutil -extract CFBundleShortVersionString raw build/darwin/Info.plist)"
 test "$(plutil -extract CFBundleVersion raw build/darwin/Info.plist)" = "$want_version"
 test "$(plutil -extract CFBundleShortVersionString raw build/darwin/Info.dev.plist)" = "$want_version"
 test "$(plutil -extract CFBundleVersion raw build/darwin/Info.dev.plist)" = "$want_version"
-test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.plist)" = "12.0.0"
-test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.dev.plist)" = "12.0.0"
+test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.plist)" = "14.0.0"
+test "$(plutil -extract LSMinimumSystemVersion raw build/darwin/Info.dev.plist)" = "14.0.0"
 ./scripts/patch-plists.sh --check
 ```
 
@@ -412,19 +417,28 @@ Make `scripts/build-globe-listener.sh`, `scripts/build-macos-stt.sh`, and
 `scripts/build-macos-helpers.sh` to call all three and fail unless their expected outputs plus every
 required real dylib/symlink family exist. It never downloads the optional model.
 
-Pin whisper.cpp to commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`. The Whisper script honors
+Pin whisper.cpp to commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`. Pin SDL2 2.32.10 to exact
+official commit `5d249570393f7a37e037abf22cd6012a4cc56a71`. The Whisper script honors
 `LOQUI_WHISPER_VENDOR_DIR`; release passes a new staging directory, clones/fetches that exact commit,
 checks out detached at that commit, and refuses a different HEAD. It never uses ambient
-`scripts/whisper-vendor` during release and never auto-installs Homebrew packages: missing `git`,
-`cmake`, or `sdl2-config` is an actionable failure.
+`scripts/whisper-vendor` during release and never auto-installs Homebrew packages: missing `git` or
+`cmake` is an actionable failure. SDL is initialized with the official GitHub origin, fetched by
+the exact SHA (not a mutable tag), checked out detached, and rejected if its origin, HEAD, tracked
+working tree, index, or non-ignored untracked files differ. SDL build/install output uses
+deterministic siblings of the absolute source checkout path and never writes inside that checkout.
 
 In `scripts/build-whisper-stt.sh`:
 
-1. Derive `SDL_PREFIX="$(sdl2-config --prefix)"` and
-   `SDL_DYLIB="$SDL_PREFIX/lib/libSDL2-2.0.0.dylib"`; fail if the file is absent.
+1. Build the pinned SDL source as arm64 with `CMAKE_OSX_DEPLOYMENT_TARGET=14.0`, shared-library
+   output enabled, and tests/static output disabled. Use its private install prefix for
+   `SDL2_DIR`/`CMAKE_PREFIX_PATH`; fail if `lib/libSDL2-2.0.0.dylib` is absent. Configure Whisper in
+   a dedicated `build-loqui` directory and normalize vendor overrides to absolute paths so neither
+   a pre-existing upstream `build/CMakeCache.txt` nor a relative CMake lookup can reselect an
+   ambient Homebrew SDL. Keep SDL's build and install directories in deterministic siblings of its
+   source checkout so generated files cannot mask a dirty source audit.
 2. Copy Whisper/ggml dylibs with `cp -a` so upstream symlinks remain symlinks. Enumerate real files
    with `find ... -type f -name '*.dylib' -print | LC_ALL=C sort`; never mutate through each symlink.
-3. Copy SDL to the selected output directory and change its ID from the Homebrew path to
+3. Copy that repo-built SDL to the selected output directory and change its ID to
    `@rpath/libSDL2-2.0.0.dylib`.
 4. Replace the helper's absolute SDL load command with `@rpath/libSDL2-2.0.0.dylib`.
 5. For `whisper-stt` and every real Whisper/ggml dylib, delete every existing `LC_RPATH`. Give the
@@ -442,10 +456,21 @@ In `scripts/build-whisper-stt.sh`:
 The mutation block is:
 
 ```bash
-SDL_PREFIX="$(sdl2-config --prefix)"
-SDL_DYLIB="$SDL_PREFIX/lib/libSDL2-2.0.0.dylib"
-[ -f "$SDL_DYLIB" ] || { echo "build-whisper-stt: missing $SDL_DYLIB" >&2; exit 1; }
-cp -a "$VENDOR"/build/bin/*.dylib "$output_dir/"
+SDL_COMMIT="5d249570393f7a37e037abf22cd6012a4cc56a71"
+SDL_BUILD="${SDL_VENDOR}-build-loqui"
+SDL_INSTALL_PREFIX="${SDL_VENDOR}-install-loqui"
+SDL_DYLIB="$SDL_INSTALL_PREFIX/lib/libSDL2-2.0.0.dylib"
+git -C "$SDL_VENDOR" fetch --depth 1 origin "$SDL_COMMIT"
+git -C "$SDL_VENDOR" checkout --detach "$SDL_COMMIT"
+test -z "$(git -C "$SDL_VENDOR" status --porcelain --untracked-files=all)"
+cmake -S "$SDL_VENDOR" -B "$SDL_BUILD" -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DCMAKE_INSTALL_PREFIX="$SDL_INSTALL_PREFIX"
+cmake -S "$VENDOR" -B "$VENDOR/build-loqui" -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 -DGGML_BLAS=ON \
+  -DCMAKE_PREFIX_PATH="$SDL_INSTALL_PREFIX" \
+  -DSDL2_DIR="$SDL_INSTALL_PREFIX/lib/cmake/SDL2"
+cp "$VENDOR/build-loqui/bin/whisper-stt" "$output_dir/whisper-stt"
+cp -a "$VENDOR"/build-loqui/bin/*.dylib "$output_dir/"
 cp -L "$SDL_DYLIB" "$output_dir/libSDL2-2.0.0.dylib"
 install_name_tool -change "$SDL_DYLIB" '@rpath/libSDL2-2.0.0.dylib' "$output_dir/whisper-stt"
 install_name_tool -id '@rpath/libSDL2-2.0.0.dylib' "$output_dir/libSDL2-2.0.0.dylib"
@@ -478,7 +503,10 @@ Create `scripts/macos-bundle.sh` with `set -euo pipefail`, explicit option parsi
 6. Copy the complete, explicitly required `libwhisper`, `libggml`, `libggml-base`, `libggml-cpu`,
    `libggml-blas`, and `libggml-metal` real-file/symlink families plus SDL with `cp -a` into
    Frameworks. Enumerate with `LC_ALL=C sort` and reject missing or broken chains.
-7. Copy the model with `cp -L` only when `LOQUI_BUNDLE_MODEL=1`.
+7. Copy the model with `cp -L` only when `LOQUI_BUNDLE_MODEL=1`. Before copying, require the source
+   to match the fixed production byte count and SHA-256 from `internal/store/model.go`; repeat both
+   checks against the staged destination after copying. Keep those production values non-
+   configurable and bind the shell copy to the Go source with a drift-detecting contract test.
 8. Enumerate every real packaged Mach-O (main executable, three helpers, every real dylib, and the
    Azure framework executable) with stable ordering. For the main executable, packaged
    `whisper-stt`, and every real dylib, replace inherited rpaths with their exact bundle forms:
@@ -620,17 +648,20 @@ Create `scripts/macos-audit.sh` and enforce these checks in order:
 
 1. Resolve channel to the exact expected bundle ID and require `CFBundleIdentifier` to match. Require
    non-empty `NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription`, and
-   `NSAppleEventsUsageDescription`; require `LSMinimumSystemVersion == 12.0.0` and both version keys
+   `NSAppleEventsUsageDescription`; require `LSMinimumSystemVersion == 14.0.0` and both version keys
    to equal the required explicit `--version` value. Require `CFBundleExecutable` to name the sole
    real file under `Contents/MacOS`.
 2. App, plist, main executable, all three helpers, required `icons.icns`, Azure framework
    executable, SDL, and exactly one
    valid real-file/symlink chain for each required family (`libwhisper`, `libggml`, `libggml-base`,
    `libggml-cpu`, `libggml-blas`, `libggml-metal`) exist; `Assets.car` is absent. Enumerate with
-   `LC_ALL=C sort`.
+   `LC_ALL=C sort`. The normal absence of `Resources/models/ggml-small.bin` is valid; when that
+   optional model exists, require its fixed production byte count and SHA-256.
 3. `find "$app" -type l ! -exec test -e {} \; -print` yields no broken symlink.
 4. Every file under Resources reports non-Mach-O.
 5. Every discovered Mach-O contains `arm64`; main/helper/Whisper/ggml/SDL entries reject additional `x86_64`, while the Azure framework may contain both.
+   `vtool -show-build` must report `minos <= 14.0` for every item except `macos-stt`, which must
+   report exactly 26.0; 27.0 or missing `minos` fails. The Azure framework may report an older floor.
 6. Use an allowlist as the normative load-command rule: every dependency, dylib ID, and `LC_RPATH`
    must begin with `/usr/lib/`, `/System/`, `@rpath`, `@loader_path`, or `@executable_path`.
    Everything else fails. Inspect `LC_LOAD_DYLIB`, `LC_LOAD_WEAK_DYLIB`, `LC_REEXPORT_DYLIB`, and
@@ -876,34 +907,54 @@ It also requires the signed app identifier to equal the already-audited producti
 captures verbose signature metadata showing the DER entitlements blob produced by the current
 toolchain. Fake one dylib and the Azure framework with a different Team ID and assert each fails;
 this is the direct regression for Hardened Runtime library validation.
+Capture designated requirements separately with `codesign -d -r-`, accepting exactly one
+`designated =>` line for `Loqui.app`, `globe-listener`, `macos-stt`, and `whisper-stt` in that fixed
+order. Store the deterministic result as `designated-requirements.txt`; compare two fixtures whose
+timestamps/verbose metadata differ but whose DRs match, and reject a missing or mismatched DR.
+After `ditto` creates `dmg-root/Loqui.app`, repeat the same four-item capture as
+`designated-requirements-dmg.txt`, compare it byte-for-byte with the original, preserve both in
+published evidence, and fail before `hdiutil create` when they differ.
 
 - [ ] **Step 2: Write failing notary/failure/publication tests**
 
 Cover these exact postconditions:
 
-- `status=Invalid` fetches and copies the submission/log to a unique
-  `${TMPDIR:-/tmp}/loqui-notary-failure.${SUBMISSION_ID}.*` directory, prints both the submission ID
+- `status=Invalid` fetches and copies the submission/log to a unique directory under the physical
+  `${TMPDIR:-/tmp}` root named `loqui-notary-failure.${SUBMISSION_ID}.*`, prints both the submission ID
   and preserved log path, exits nonzero, and never staples/publishes;
 - malformed submit JSON or a missing/empty `.id` preserves the raw response, prints an actionable
   diagnostic, and never invokes `notarytool log` with an empty ID;
 - accepted submission with any `.issues[] | select(.severity == "error")` fails before staple;
 - accepted submission with `issues: null`, `issues: []`, or warning-only issues proceeds and
   preserves those warnings in evidence;
-- accepted submission with missing/null `ticketContents`, or whose suffix-normalized paths omit any
+- accepted submission with missing/null/empty `ticketContents`, or whose suffix-normalized paths omit any
   expected code item from the signed manifest (main executable, all three helpers, Azure framework
   executable, SDL, and every real Whisper/ggml dylib), fails before staple;
 - the signed manifest includes the main/helper paths and every Mach-O returned by
   `find "$app" -type f`, including the explicitly identified Azure framework executable;
   dylib/framework symlinks are excluded, and a fixture symlink never creates a duplicate ticket
   requirement;
-- `notarytool log` failure is captured under suspended `set -e`, retried at most three times, and
-  still preserves the submission JSON plus any partial log before exiting nonzero;
+- `notarytool log` captures each result in an explicit `if` branch, retries at most three times, and
+  preserves the submission JSON plus any partial log before returning nonzero explicitly;
 - ticket paths such as `Loqui.dmg/Loqui.app/Contents/MacOS/loqui` match the expected anchored suffix,
   while `OtherLoqui.app/Contents/MacOS/loqui` does not;
 - staple, `hdiutil verify`, `codesign --verify`, or `spctl --assess --type open --context context:primary-signature` failure propagates nonzero;
 - a previous final DMG containing `old accepted artifact` remains byte-identical when any earlier phase fails;
 - successful publication first copies to a hidden temporary file inside `bin/release`, then renames it to `Loqui-0.1.0-macos-arm64.dmg`; no partial final name becomes visible;
-- cleanup removes only the unique staging directory and hidden candidate file, never `bin/release`, the repository root, or the prior final DMG.
+- cleanup removes only the physical unique staging directory and directly owned hidden names
+  `.Loqui-*.candidate.??????` / `.evidence-*.candidate.??????`; ownership is set only after
+  exclusive creation, so pre-existing collisions, misleading in-tree names, paths outside
+  `bin/release`, the repository root, and the prior final DMG remain untouched;
+- a physical fixture whose `bin/release` or nested `evidence` component is a symlink fails before
+  publication and preserves every sentinel in the external target. Every publication/cleanup test
+  uses a physical repository below its test temp root and an `EXIT` trap proves the real
+  `bin/release` typed snapshot did not change. The snapshot represents an absent tree, directories,
+  files with size/SHA-256, and symlinks with their target, so empty/fresh clones remain testable;
+- literal `run_release || captured=$?` with a real, failing preflight records only `preflight` and
+  never enters build. Each internal phase checks its own relevant commands and assignments, and
+  `run_release` checks each `run_phase`; no contract test uses an artificial `false; :` phase;
+- an integrated accepted flow counts exactly one `notarytool submit`, one `stapler staple` targeting
+  the outer DMG, and zero app staples.
 
 Use fixed JSON fixtures:
 
@@ -952,7 +1003,7 @@ Create `scripts/release-macos.sh` with functions matching the phase names from S
 
 - require `uname -m` equals `arm64`;
 - require `security`, `codesign`, `otool`, `lipo`, `install_name_tool`, `hdiutil`, `spctl`, `ditto`,
-  `plutil`, `jq`, `xcrun`, `wails3`, `git`, `cmake`, `swiftc`, `sdl2-config`, `shasum`, and the repo scripts;
+  `plutil`, `jq`, `xcrun`, `wails3`, `git`, `cmake`, `swiftc`, `vtool`, `shasum`, and the repo scripts;
 - capture `wails3 version 2>&1`, trim its single trailing newline/optional CR, and require the
   remaining single line to equal exactly `v3.0.0-alpha2.119` (this pinned CLI writes the version to
   stderr, not stdout);
@@ -966,7 +1017,9 @@ Create `scripts/release-macos.sh` with functions matching the phase names from S
 - read version with an anchored `awk` expression from the `info:` block and enforce `^[0-9]+\.[0-9]+\.[0-9]+$`;
 - require both `build/darwin/Info.plist` and `Info.dev.plist` to have that exact value for
   `CFBundleShortVersionString` and `CFBundleVersion` before building;
-- create staging with `mktemp -d "${TMPDIR:-/tmp}/loqui-release.XXXXXX"` and record the exact path for a guarded trap.
+- resolve `${TMPDIR:-/tmp}` lexically and physically with `pwd -L`/`pwd -P`, create staging through
+  the lexical root, then immediately resolve and use only its physical path. Record both spellings for
+  evidence normalization and the physical spelling for the guarded trap.
 
 Use this exact version extraction so an unrelated commented `version:` cannot win:
 
@@ -978,10 +1031,11 @@ version="$(awk '/^info:/{in_info=1; next} in_info && /^  version:/{gsub(/["'\'' 
 }
 ```
 
-Normalize `${TMPDIR:-/tmp}` by removing trailing slashes before constructing the template. The trap
-accepts cleanup only when the path matches that normalized prefix plus `loqui-release.` and six
-generated characters and is neither empty nor `/`; otherwise it prints a refusal and leaves the path
-untouched. Use task-specific lowercase local names; do not shadow shell/system variables.
+Resolve `${TMPDIR:-/tmp}` before constructing the template and reject a missing directory or a
+physical root of `/`. The trap accepts cleanup only when the already-physical stage equals that exact
+physical root plus `loqui-release.` and six generated characters; a lexical symlink alias is refused.
+Otherwise it prints a refusal and leaves the path untouched. Use task-specific lowercase local names;
+do not shadow shell/system variables.
 
 The release command assumes the repository's separately verified ship gate is green; it does not
 silently rerun the full test suite before each notarization upload. README/operator instructions must
@@ -996,13 +1050,15 @@ The build phase runs the portable arm64 build into staging:
 ./scripts/task.sh darwin:build ARCH=arm64 PORTABLE=true OUTPUT="$stage/loqui"
 LOQUI_HELPERS_OUTPUT_DIR="$stage/helpers" \
 LOQUI_WHISPER_VENDOR_DIR="$stage/whisper-src" \
+LOQUI_SDL_VENDOR_DIR="$stage/sdl-src" \
 LOQUI_SKIP_MODEL=1 ./scripts/build-macos-helpers.sh
 ```
 
 `build-helpers` always runs after the main build and before assembly; it compiles all three helpers
 from current repo sources and whisper.cpp commit
 `97c56f1dc1d1100a9d859c865a20c82d22f823ed` into staging. It never consumes ambient
-`helpers/bin`. Record `git rev-parse HEAD`, `git describe --always --dirty`, that upstream commit,
+`helpers/bin`. Record `git rev-parse HEAD`, `git describe --always --dirty`, the actual verified
+whisper.cpp and SDL upstream commits,
 and SHA-256 for every staged helper and real dylib before assembly. The binary hashes are the exact
 artifact provenance when the workflow-mandated pre-commit build is dirty.
 
@@ -1028,33 +1084,60 @@ The DMG root contains `Loqui.app`; create its install shortcut exactly with
 
 - [ ] **Step 6: Implement notary submission, evidence, and ticket verification**
 
-Use only the Keychain profile. Capture the submit exit code without allowing `set -e` to bypass log
-retrieval on a rejected submission:
+Use only the Keychain profile. Capture command results in explicit `if` branches and have each phase
+return nonzero explicitly on failure, so correctness never depends on Bash `errexit` context:
 
 ```bash
-set +e
-xcrun notarytool submit "$stage/Loqui.dmg" \
+if xcrun notarytool submit "$stage/Loqui.dmg" \
   --keychain-profile "$profile" --wait --timeout 30m \
-  --output-format json >"$stage/notary-submit.json"
-submit_rc=$?
-set -e
-submission_id="$(jq -er '.id | select(type == "string" and length > 0)' \
-  "$stage/notary-submit.json" 2>/dev/null || true)"
-status="$(jq -er '.status | select(type == "string" and length > 0)' \
-  "$stage/notary-submit.json" 2>/dev/null || true)"
-[ -n "$submission_id" ] || preserve_submit_and_fail "missing submission id"
+  --output-format json >"$stage/notary-submit.json"; then
+  submit_rc=0
+else
+  submit_rc=$?
+fi
+if ! submission_id="$(jq -er '.id | select(type == "string" and length > 0)' \
+  "$stage/notary-submit.json" 2>/dev/null)"; then
+  submission_id=""
+fi
+if ! submission_status="$(jq -er '.status | select(type == "string" and length > 0)' \
+  "$stage/notary-submit.json" 2>/dev/null)"; then
+  submission_status=""
+fi
+if [ -z "$submission_id" ]; then
+  if ! failure_dir="$(preserve_notary_failure missing-id \
+    "$stage/notary-submit.json" "")"; then
+    return 1
+  fi
+  printf 'missing submission id; response preserved at %s\n' "$failure_dir" >&2
+  return 1
+fi
 log_rc=1
 log_attempt=1
 while [ "$log_attempt" -le 3 ]; do
-  set +e
-  xcrun notarytool log "$submission_id" "$stage/notary-log.json" \
-    --keychain-profile "$profile"
-  log_rc=$?
-  set -e
-  [ "$log_rc" -eq 0 ] && break
+  if xcrun notarytool log "$submission_id" "$stage/notary-log.json" \
+    --keychain-profile "$profile"; then
+    log_rc=0
+  else
+    log_rc=$?
+  fi
+  if [ "$log_rc" -eq 0 ]; then
+    break
+  fi
   log_attempt=$((log_attempt + 1))
-  [ "$log_attempt" -le 3 ] && sleep "${LOQUI_NOTARY_LOG_RETRY_DELAY:-5}"
+  if [ "$log_attempt" -le 3 ]; then
+    if ! sleep "${LOQUI_NOTARY_LOG_RETRY_DELAY:-5}"; then
+      return 1
+    fi
+  fi
 done
+if [ "$log_rc" -ne 0 ]; then
+  if ! failure_dir="$(preserve_notary_failure "$submission_id" \
+    "$stage/notary-submit.json" "$stage/notary-log.json")"; then
+    return 1
+  fi
+  printf 'notary log retrieval failed; evidence preserved at %s\n' "$failure_dir" >&2
+  return 1
+fi
 ```
 
 Fetch the log whenever a submission ID exists, even when `submit_rc` is nonzero or status is not
@@ -1066,12 +1149,13 @@ cleanup. On acceptance, require `submit_rc == 0`, `status == Accepted`, a valid 
 also Accepted, zero `severity == "error"` issues (null/empty/warnings are allowed and retained), and
 anchored-suffix `ticketContents[].path` coverage for every entry in the signed Mach-O manifest. Build
 that manifest from real Mach-O files only (`find ... -type f`), explicitly classify the Azure
-framework executable, and exclude symlink aliases. Missing/null `ticketContents` is a hard evidence failure. Assemble submission JSON, notary log,
-signature metadata, DRs,
+framework executable, and exclude symlink aliases. Missing/null/empty `ticketContents` is a hard evidence failure. Assemble submission JSON, notary log,
+signature metadata, the deterministic four-item designated-requirements file,
 architecture/dependency audit, repo/upstream provenance, and checksums for every real packaged
-Mach-O under staging. Before publication, normalize every
-text evidence occurrence of the absolute staging directory to literal `$STAGE`, then confirm staged
-evidence contains no `/Users/`, checkout path, environment dump, or secret field. Generate report
+Mach-O under staging. Before publication, normalize every text evidence occurrence of both the
+physical and lexical staging directory to literal `$STAGE` (physical first), then confirm neither
+original path nor `/private$STAGE` survives and that staged evidence contains no `/Users/`, checkout
+path, environment dump, or secret field. Generate report
 dates from the actual execution date rather than a hard-coded planning date.
 
 That hard failure is deliberate: Apple's outermost-container guidance explicitly requires checking
@@ -1100,12 +1184,17 @@ untested architecture rather than fix a demonstrated defect.
 
 - [ ] **Step 7: Implement same-filesystem atomic publication**
 
-Create `bin/release` only after every verification passes. Copy the accepted DMG to a uniquely named
-hidden candidate in that directory and require `cp` to exit zero. Copy evidence to a hidden sibling,
-create `bin/release/evidence/${VERSION}` explicitly, then atomically rename it to the new, never-reused
+Create missing `bin` and `bin/release` only after every verification passes, using separate simple
+`mkdir` calls after verifying the physical repository/parent and checking each result with `pwd -P`;
+reject a file or symlink at either component. Copy the accepted DMG to a uniquely named
+hidden candidate created exclusively with `mktemp` in that directory, then set its ownership flag and
+require `cp` to exit zero. Copy evidence to an exclusively created `mktemp -d` sibling and set its
+separate ownership flag. Resolve/reject symlinks for the repository, `bin/release`, `evidence`, and
+`evidence/${VERSION}` components, create the physical evidence path explicitly, then atomically rename it to the new, never-reused
 `evidence/${VERSION}/${SUBMISSION_ID}` directory. Finally rename the hidden DMG candidate over the
 final path with `mv -f`. If that final rename fails, remove only the new submission-ID evidence
-directory. The failure trap removes only its exact hidden candidates. This keeps the old final DMG
+directory. The failure trap accepts only direct children matching the two owned hidden-name shapes
+and removes only candidates whose ownership flag this execution set after exclusive creation. This keeps the old final DMG
 and every older evidence directory intact until the same-filesystem final rename.
 
 - [ ] **Step 8: Run release tests and static checks**
@@ -1118,7 +1207,9 @@ bash -n scripts/release-macos.sh scripts/tests/release-macos-test.sh
 shellcheck -s bash scripts/release-macos.sh scripts/tests/release-macos-test.sh
 ```
 
-Expected: PASS without a real certificate or network because external phases are overridden/faked.
+Expected: PASS without a real certificate or network. The order-only case overrides phases; material
+preflight, verification, notary, evidence, Apple-tool propagation, cleanup, and publication functions
+run unchanged against narrow command-boundary fakes.
 
 - [ ] **Step 9: Record the task checkpoint without committing**
 
@@ -1191,7 +1282,7 @@ In `build:native`, parameterize only the second rpath:
 
 ```yaml
 CGO_LDFLAGS: >-
-  -mmacosx-version-min=12.0
+  -mmacosx-version-min=14.0
   -Wl,-headerpad_max_install_names
   -F{{.ROOT_DIR}}/third_party/speech-sdk
   -framework MicrosoftCognitiveServicesSpeech

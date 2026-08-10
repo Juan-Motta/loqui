@@ -72,6 +72,25 @@ func downloaderFor(t *testing.T, body []byte, url string) (*modelDownloader, str
 	}, path
 }
 
+func TestBundledModelStatusIsNotOfferedForDeletion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Loqui.app", "Contents", "Resources", "models", "ggml-small.bin")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("model"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &modelDownloader{
+		spec:    store.ModelSpec{File: "ggml-small.bin", Bytes: 5},
+		path:    func() string { return path },
+		bundled: func(got string) bool { return got == path },
+	}
+	if status := d.status(); !status.Bundled {
+		t.Fatalf("status.Bundled = false for packaged model %q", path)
+	}
+}
+
 func TestADownloadLandsTheWholeModelAndVerifiesIt(t *testing.T) {
 	body := []byte(strings.Repeat("loqui-model-", 400))
 	srv, _ := modelServer(t, body)

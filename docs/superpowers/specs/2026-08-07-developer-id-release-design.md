@@ -23,6 +23,11 @@ bundle identifier; production alone uses Developer ID.
   repository automation, one real notarization, and distribution verification.
 - Releases are generated on this Mac, not in CI.
 - The first release supports Apple Silicon (`arm64`) only.
+- The app declares macOS 14 Sonoma or newer as its compatibility floor. Main, globe, Whisper, ggml,
+  and the repo-built SDL declare 14.0; `macos-stt` is the sole intentional exception and declares
+  exactly 26.0. Runtime Sonoma support remains unclaimed until the external macOS 14 E2E gate.
+- Keep ggml BLAS, CPU, and Metal enabled. BLAS's macOS 13.3 Accelerate symbol floor is inside the
+  selected macOS 14 contract.
 - The output is a signed and notarized DMG.
 - Day-to-day Wails builds use `Apple Development`; Developer ID is restricted to the explicit release
   command.
@@ -153,7 +158,12 @@ loqui.app/
 
 `internal/app.HelperPath` resolves bundled executable helpers from `Contents/Helpers` and keeps the
 existing `helpers/bin` development fallback. `WhisperModelPath` resolves the optional bundled model
-from `Contents/Resources/models`, independently of executable lookup.
+from `Contents/Resources/models`, independently of executable lookup. When
+`LOQUI_BUNDLE_MODEL=1`, assembly validates the source by the production model's exact byte count and
+SHA-256 before copying, then validates the staged destination again. The package audit repeats the
+same fixed validation whenever the optional model is present; absence remains valid for the normal
+release. A static contract test binds the shell constants to the canonical pin in
+`internal/store/model.go` so neither copy can drift silently.
 
 ## Whisper portability
 
@@ -180,10 +190,14 @@ Development from `helpers/bin` must continue to work. The implementation may ret
 the development artifact, but the packaged artifact must contain only release-safe references.
 
 Release never consumes that ambient development directory. It rebuilds `globe-listener`,
-`macos-stt`, `whisper-stt`, and the native dylibs into unique staging from the current repo commit
-and pinned whisper.cpp commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`, then records both
-revisions, an honest clean/dirty marker, and every packaged Mach-O SHA-256 as provenance. Dirty is
-expected for the workflow's pre-commit E2E artifact and is never reported as a clean commit build.
+`macos-stt`, `whisper-stt`, and the native dylibs into unique staging from the current repo commit,
+pinned whisper.cpp commit `97c56f1dc1d1100a9d859c865a20c82d22f823ed`, and pinned official SDL
+commit `5d249570393f7a37e037abf22cd6012a4cc56a71`. The SDL checkout is fetched by exact SHA, must retain
+the official origin, and rejects tracked, index, and non-ignored untracked changes before
+compilation. Its build/install outputs are deterministic siblings outside the source checkout.
+Evidence records both upstream revisions, an honest clean/dirty marker, and every packaged Mach-O
+SHA-256 as provenance. Dirty is expected for the workflow's pre-commit E2E artifact and is never
+reported as a clean commit build.
 
 ## Signing identities and order
 
@@ -216,7 +230,7 @@ explicit signing pass because deep verification is an audit, not an instruction 
 ## Release flow
 
 1. **Preflight** — validate, without mutating the checkout, that generated plist IDs, privacy strings,
-   and versions match `build/config.yml`; then validate host arm64, Apple tools, exactly selected
+   versions, and the macOS 14 minimum match `build/config.yml`/the repo contract; then validate host arm64, Apple tools including `vtool`, exactly selected
    Developer ID identity, notarization profile, source helpers/framework, and a unique temporary
    staging target.
 2. **Build/package** — use the existing Wails/Taskfile compilation, whose `darwin:build` dependency
@@ -226,17 +240,21 @@ explicit signing pass because deep verification is an audit, not an instruction 
    by ordinary Wails packaging is staging input only: the release signer replaces its signatures,
    and the intermediate app is neither launched nor published.
 3. **Audit identity/layout/dependencies** — require the channel's exact bundle ID, non-empty
-   microphone/speech/Apple Events usage strings, matching packaged plist versions, and minimum OS;
+   microphone/speech/Apple Events usage strings, matching packaged plist versions, plist minimum
+   14.0.0, and Mach-O `minos <= 14.0`; require `macos-stt` to report exactly 26.0;
    clear extended attributes, then reject signing-blocking Finder/resource-fork/quarantine metadata,
    Mach-O code under Resources, missing nested code, non-arm64 release code, broken symlinks,
    external Metal data, and any load path/install name outside the explicit system/token allowlist.
 4. **Sign inside out** — sign every explicit nested item, the helpers, and the app; capture the
-   authority, Team ID, identifiers, DRs, hardened-runtime flags, and timestamps as evidence.
+   authority, Team ID, identifiers, hardened-runtime flags, and timestamps as evidence. Separately
+   capture one normalized `codesign -d -r-` `designated =>` line, in a fixed order, for `Loqui.app`
+   and each of its three helpers. A missing or duplicate designated-requirement line fails release.
 5. **Verify app** — run strict signature validation. Do not require Gatekeeper acceptance before
    notarization; the pre-notary app is expected to lack an Apple ticket.
 6. **Create DMG** — stage `Loqui.app` with `ditto`, add an `/Applications` symlink, re-audit and
-   reverify the copied app, create a compressed UDIF image, verify it with `hdiutil`, and sign the
-   image.
+   reverify the copied app, capture the copied app/helper designated requirements and require them
+   to equal the original four-item capture, then create a compressed UDIF image, verify it with
+   `hdiutil`, and sign the image. Preserve both DR captures as release evidence.
 7. **Notarize outermost container** — submit the DMG with `notarytool --wait` and the Keychain
    profile. Save the submission ID and fetch the JSON log even when Apple reports `Accepted`.
 8. **Staple and verify** — staple the outermost DMG only, validate the ticket, re-run
@@ -248,18 +266,32 @@ explicit signing pass because deep verification is an audit, not an instruction 
 
 ## Failure behavior
 
-- Work happens in a unique temporary staging directory. Cleanup never targets `bin`, the repository
-  root, `$HOME`, or an unresolved variable.
+- Work happens in a unique temporary staging directory. Both `TMPDIR` and that directory are resolved
+  immediately with `pwd -P`; cleanup accepts only the physical temporary root plus the exact
+  `loqui-release.??????` child. Cleanup never targets `bin`, the repository root, `$HOME`, a lexical
+  symlink alias, or an unresolved variable.
+- Publication requires the physical repository's literal `bin/release` directory; `bin`, `release`,
+  `evidence`, and `evidence/<version>` must not be symlinks or resolve outside that repository.
+  When `bin` or `bin/release` is absent in a fresh clone, create each with a simple one-level `mkdir`
+  only after validating its physical parent, then require its `pwd -P` value to equal the literal
+  expected path.
+  Cleanup removes a hidden publication candidate only when this execution set its ownership flag
+  after exclusive creation. Pre-existing colliding names and unrelated sentinels survive the trap.
+- Release correctness is independent of Bash `errexit`: all internal phases and nested helpers
+  propagate relevant command/assignment failures explicitly, and orchestration checks each phase
+  result before starting the next even when callers use `run_release || rc=$?`.
 - The last successful release remains untouched until a new candidate passes every check.
 - Missing or ambiguous identity, invalid notarization profile, failed signature, unexpected
   dependency, rejected notarization, failed staple, or failed Gatekeeper assessment exits nonzero.
 - A notary rejection prints the submission ID and the path to the saved log, not a generic failure.
-- Notary-log retrieval is attempted with a bounded retry while `set -e` is suspended; every failure
-  path preserves the raw submission response and any available log before staging cleanup.
+- Notary-log retrieval uses explicit `if` branches to capture each command result, retries at most
+  three times, and returns nonzero explicitly after preserving the raw submission response and any
+  available log before staging cleanup. It does not depend on changing `set -e` state.
 - Logs may contain certificate names, Team IDs, code identifiers, and Apple diagnostic text. They
   must not contain passwords, private keys, or environment dumps.
-- Published text evidence normalizes the unique staging prefix to `$STAGE`, so machine-specific
-  `/Users/...` paths never leak into an otherwise valid evidence set.
+- Published text evidence replaces both lexical and physical staging prefixes with `$STAGE`, replacing
+  the physical path first so `/tmp -> /private/tmp` cannot produce `/private$STAGE`. It then rejects
+  either original prefix, the malformed marker, an unnormalized checkout path, or a secret field.
 - The release script never falls back to ad-hoc signing.
 
 ## Migration behavior
@@ -282,15 +314,23 @@ ad-hoc helper's existing TCC record.
   in `Contents/Resources/models`, and missing-file behavior.
 - Tests assert distinct dev/production bundle IDs and helper identifiers so a generated asset update
   cannot silently collapse the two TCC identities again.
-- Release-script tests run against fake Apple tools in a temporary directory. They prove preflight
-  rejection, inside-out command order, stable helper identifiers, exact per-executable entitlements,
-  the exact ad-hoc fallback options, no `--deep` signing, notary warning/error/log-retry handling,
-  real-file-only ticket manifests, failure propagation, and atomic publication.
+- Release-script tests run real release functions against narrow fake Apple commands in a temporary
+  directory. They prove material preflight rejection; Developer ID Team/authority/identifier,
+  runtime/timestamp, and exact entitlement enforcement; deterministic app/helper designated
+  requirements across metadata-changing rebuilds; submit response capture; a three-attempt notary-log
+  bound; real-file-only ticket manifests; staple/image/signature/Gatekeeper failure propagation;
+  physical-path cleanup; symlink-contained publication; evidence normalization; and atomic
+  publication rollback. The publication fixtures live under a temporary physical repository, while
+  a typed `EXIT`-trap snapshot records absent trees, directories, file size/hash, and symlink targets
+  to prove the real release tree is identical even after early test failures. A real preflight
+  failure called through a literal OR-list proves orchestration stops at the first phase; only the
+  dedicated phase-order test replaces complete phases.
 - Tests prove release assembly accepts only the freshly built staging helper directory and that
   signature verification rejects any nested Mach-O with a different Developer ID Team ID.
 - A package audit test examines a real assembled app and fails for Mach-O code in Resources,
   non-arm64 code, missing `icons.icns`, unexpected `Assets.car`, missing required helpers, broken
-  symlinks, signing-blocking xattrs, or forbidden load/rpath prefixes.
+  symlinks, signing-blocking xattrs, forbidden load/rpath prefixes, a native minimum above 14.0,
+  or a `macos-stt` minimum other than exactly 26.0 (including absent metadata).
 
 ### Real local release
 
@@ -310,6 +350,10 @@ ad-hoc helper's existing TCC record.
   `LOQUI_BUNDLE_MODEL` unset.
 
 ### Second-Mac evidence
+
+The compatibility declaration is not runtime evidence. A macOS 14 Apple Silicon machine must run
+the main/globe/Whisper/provider journey before Sonoma support is claimed; current-machine tests can
+only prove the load-command contract. The Apple Speech helper remains macOS 26+.
 
 Install the DMG on another Apple Silicon Mac that does not rely on this checkout. Verify launch,
 permissions UI (including which process each prompt names), fn listener, Whisper, and at least one

@@ -4,6 +4,23 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Signed and notarized macOS distribution — 2026-08-10
+
+- **Loqui can now be distributed outside the App Store as an Apple Silicon DMG.** The release task
+  builds every native helper from pinned sources, assembles the portable bundle, signs its nested
+  code inside-out with Developer ID, notarizes the outer DMG, staples the ticket, verifies
+  Gatekeeper, and publishes the artifact plus scrubbed evidence only after every phase succeeds.
+- **The supported floor is macOS 14.** Main, Whisper, SDL and ggml target Sonoma or newer; Apple
+  Speech remains an explicit macOS 26-only capability instead of raising the whole application to
+  26. Packaging is self-contained and no longer depends on ambient helper or Homebrew output.
+- **Release identity and payload integrity are audited.** The pipeline verifies the optional Whisper
+  model, Mach-O architectures/load paths/minimum OS, entitlements, Team ID, timestamps and designated
+  requirements before and after DMG assembly. Publication and cleanup are physically contained and
+  failure evidence is preserved without checkout paths or credentials.
+- **The real journey passed.** Two separately built releases installed on a clean second Apple
+  Silicon Mac, launched and passed Gatekeeper after an offline reboot, dictated through local/cloud
+  engines, and preserved established macOS permissions across the upgrade.
+
 ## API keys move out of the Keychain and into a file — 2026-08-06
 
 - **The app can read its own credential again.** On an ad-hoc-signed build — every development build

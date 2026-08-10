@@ -1,6 +1,6 @@
 # Developer ID release research
 
-Checked: 2026-08-07
+Checked: 2026-08-07; compatibility update checked 2026-08-09
 
 ## Questions
 
@@ -9,6 +9,8 @@ Checked: 2026-08-07
 3. Where must Loqui's native helpers and dynamic libraries live?
 4. What must be verified before an Apple Silicon DMG can be called distributable?
 5. Which Hardened Runtime entitlements do Loqui's actual executable paths require?
+6. Which macOS floor preserves recent Apple Silicon coverage without claiming support below native
+   dependencies' real API floor?
 
 ## Verified findings
 
@@ -80,6 +82,16 @@ Checked: 2026-08-07
   mistake the intentional absence of an asset catalog for a skipped build.
 
 ### Hidden portability blocker
+
+- Apple lists the 2020 M1 MacBook Air and MacBook Pro, 2021 M1 iMac, and 2020 M1 Mac mini as
+  compatible with macOS Sonoma 14. Apple also lists those same M1 models as compatible with macOS
+  Tahoe 26. Sources: [macOS Sonoma compatibility](https://support.apple.com/en-us/105113) and
+  [macOS Tahoe 26 compatibility](https://support.apple.com/en-us/122867), checked 2026-08-09.
+- Local Xcode 26 build diagnostics and `nm -u` inspection show ggml's Accelerate BLAS backend imports
+  `_cblas_sgemm$NEWLAPACK$ILP64`, whose SDK availability floor is macOS 13.3. **Inference:** macOS
+  14 is the smallest simple major-version contract that keeps that optimized backend and still
+  covers the original M1 generation. This is a product compatibility decision, not proof of runtime
+  behavior on Sonoma; a real macOS 14 E2E remains required.
 
 - The main app, `globe-listener`, `macos-stt`, `whisper-stt`, and Whisper dylibs currently contain
   only `arm64`; the owner selected Apple Silicon-only distribution for the first release. The Azure
@@ -158,6 +170,9 @@ and staple the accepted artifact. This is the safer template for Loqui.
   identity, Keychain profile, expected architecture, or required nested binaries are missing.
 - Rebuild every helper during release rather than consuming `helpers/bin`; keep that directory only
   as the direct-development output.
+- Declare macOS 14.0 as the app/main/globe/Whisper/ggml/SDL compatibility floor. Keep the optimized
+  ggml BLAS, CPU, and Metal backends. Compile `macos-stt` explicitly for macOS 26.0 because its
+  SpeechAnalyzer implementation is the sole intentional higher-floor component.
 - Move helper executables to `Contents/Helpers`, move Whisper/ggml/SDL dylibs to
   `Contents/Frameworks`, and keep the optional model under `Contents/Resources`. Rewrite the
   Whisper helper and every real dylib's SDL/install-name/rpath metadata so no Homebrew or checkout

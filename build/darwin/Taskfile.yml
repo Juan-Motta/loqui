@@ -16,12 +16,14 @@ tasks:
           ARCH: '{{.ARCH}}'
           DEV: '{{.DEV}}'
           OUTPUT: '{{.OUTPUT}}'
+          PORTABLE: '{{.PORTABLE | default "false"}}'
           EXTRA_TAGS: '{{.EXTRA_TAGS}}'
           OBFUSCATED: '{{.OBFUSCATED}}'
           GARBLE_ARGS: '{{.GARBLE_ARGS}}'
     vars:
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
+      PORTABLE: '{{.PORTABLE | default "false"}}'
 
   build:native:
     summary: Builds the application natively on macOS
@@ -49,6 +51,7 @@ tasks:
       BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
+      PORTABLE: '{{.PORTABLE | default "false"}}'
     env:
       GOOS: darwin
       CGO_ENABLED: 1
@@ -61,15 +64,16 @@ tasks:
       # *package's* directory as cwd, so a relative -I would resolve inside the module
       # cache and never find these headers.
       #
-      # TWO rpaths on purpose. The framework's install name is
-      # @rpath/MicrosoftCognitiveServicesSpeech.framework/..., so dyld needs somewhere
-      # to look, and the answer differs by how the binary is run:
-      #   @executable_path/../Frameworks — inside the packaged .app bundle
-      #   {{.ROOT_DIR}}/third_party/speech-sdk — the bare bin/loqui during development
-      # dyld tries each in order, so shipping both makes dev and release both work.
-      CGO_CFLAGS: "-mmacosx-version-min=12.0 -I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
-      CGO_LDFLAGS: "-mmacosx-version-min=12.0 -F{{.ROOT_DIR}}/third_party/speech-sdk -framework MicrosoftCognitiveServicesSpeech -Wl,-rpath,@executable_path/../Frameworks -Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk"
-      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      # Portable builds omit the checkout rpath; ordinary bare development builds retain it.
+      CGO_CFLAGS: "-mmacosx-version-min=14.0 -I{{.ROOT_DIR}}/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Headers"
+      CGO_LDFLAGS: >-
+        -mmacosx-version-min=14.0
+        -Wl,-headerpad_max_install_names
+        -F{{.ROOT_DIR}}/third_party/speech-sdk
+        -framework MicrosoftCognitiveServicesSpeech
+        -Wl,-rpath,@executable_path/../Frameworks
+        {{if ne .PORTABLE "true"}}-Wl,-rpath,{{.ROOT_DIR}}/third_party/speech-sdk{{end}}
+      MACOSX_DEPLOYMENT_TARGET: "14.0"
 
   build:docker:
     summary: Cross-compiles for macOS using Docker (for Linux/Windows hosts)
@@ -130,10 +134,18 @@ tasks:
       - wails3 tool lipo -output "{{.BIN_DIR}}/{{.APP_NAME}}" -input "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" -input "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
       - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
 
+  build:helpers:
+    summary: Builds the native macOS helpers and bundled dylibs
+    platforms: [darwin]
+    cmds:
+      - '"${LOQUI_HELPERS_BUILD_SCRIPT:-./scripts/build-macos-helpers.sh}"'
+
   package:
     summary: Packages the application into a `.app` bundle
     deps:
       - task: build
+        vars:
+          PORTABLE: 'true'
     cmds:
       - task: create:app:bundle
 
@@ -147,103 +159,23 @@ tasks:
 
   create:app:bundle:
     summary: Creates an `.app` bundle
+    deps:
+      - task: build:helpers
     cmds:
-      # Re-apply the plist keys the asset generator doesn't know about. A missing
-      # NSMicrophoneUsageDescription makes macOS kill the app on first mic access,
-      # so this must run on every bundle, not once by hand. See the script.
-      - ./scripts/patch-plists.sh
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-      - |
-        if [ -f build/darwin/Assets.car ]; then
-          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
-        fi
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
-      - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
-      # The Speech SDK dylib has to travel INSIDE the bundle: its install name is
-      # @rpath/..., and the bundle's rpath is @executable_path/../Frameworks. Leaving it
-      # out produces an app that launches fine and then dies the first time someone
-      # selects Azure — a failure invisible until the DMG is on someone else's Mac.
-      # Notarisation also requires it to be signed, which codesign --deep below does.
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks"
-      - cp -R third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Frameworks/"
-      # The native helpers are separate executables and must live OUTSIDE any archive —
-      # macOS cannot exec a binary that isn't a real file on disk. Resources/helpers is
-      # where wiring.go looks first (see globeListenerPath).
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers"
-      - |
-        if [ -d helpers/bin ]; then
-          # THE MODEL IS EXCLUDED, and that is the whole point of the model row.
-          #
-          # ggml-small.bin is 465 MB. Copying it in takes the bundle from ~97 MB to ~590 MB, makes every
-          # update re-download all of it, and — worse for development — means WhisperModelPath always
-          # finds a bundled copy, so the downloader is never exercised by anyone. It is fetched on
-          # first use instead, which is what the row exists for.
-          #
-          # LOQUI_BUNDLE_MODEL=1 puts it back, for the one case that wants it: building a personal
-          # build for a machine that will never have the network to download it.
-          for f in helpers/bin/*; do
-            [ -e "$f" ] || continue
-            case "$(basename "$f")" in
-              ggml-*.bin)
-                if [ "${LOQUI_BUNDLE_MODEL:-0}" = "1" ]; then
-                  cp "$f" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true
-                fi
-                ;;
-              *) cp "$f" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/helpers/" 2>/dev/null || true ;;
-            esac
-          done
-        fi
-      - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
-
-  codesign:adhoc:
-    summary: Ad-hoc signs the app bundle (macOS only)
-    internal: true
-    cmds:
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.app"
-
-  codesign:skip:
-    summary: Skips codesigning when cross-compiling
-    internal: true
-    cmds:
-      - 'echo "Skipping codesign (not available on {{OS}}). Sign the .app on macOS before distribution."'
+      - '"${LOQUI_PATCH_PLISTS_SCRIPT:-./scripts/patch-plists.sh}"'
+      - '"${LOQUI_BUNDLE_SCRIPT:-./scripts/macos-bundle.sh}" --channel production --executable "{{.BIN_DIR}}/{{.APP_NAME}}" --helpers-dir "${LOQUI_HELPERS_OUTPUT_DIR:-{{.ROOT_DIR}}/helpers/bin}" --output "{{.BIN_DIR}}/{{.APP_NAME}}.app"'
+      - '"${LOQUI_SIGN_SCRIPT:-./scripts/macos-sign.sh}" app --channel adhoc --app "{{.BIN_DIR}}/{{.APP_NAME}}.app"'
 
   run:
+    deps:
+      - task: build:helpers
     cmds:
-      - ./scripts/patch-plists.sh
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-      - |
-        if [ -f build/darwin/Assets.car ]; then
-          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-        fi
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
+      - '"${LOQUI_PATCH_PLISTS_SCRIPT:-./scripts/patch-plists.sh}"'
+      - '"${LOQUI_BUNDLE_SCRIPT:-./scripts/macos-bundle.sh}" --channel development --executable "{{.BIN_DIR}}/{{.APP_NAME}}" --helpers-dir "${LOQUI_HELPERS_OUTPUT_DIR:-{{.ROOT_DIR}}/helpers/bin}" --output "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"'
+      - '"${LOQUI_SIGN_SCRIPT:-./scripts/macos-sign.sh}" app --channel development --app "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"'
       - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
 
-  sign:
-    summary: Signs the application bundle with Developer ID
-    desc: |
-      Signs the .app bundle for distribution.
-      Uses signing identity from `wails3 setup` (stored in ~/.config/wails/defaults.yaml).
-      Override with: task darwin:sign -- --identity "Developer ID Application: ..."
-    deps:
-      - task: package
+  release:
+    summary: Builds, signs, notarizes, staples, and verifies an arm64 Developer ID DMG
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" {{.CLI_ARGS}}
-
-  sign:notarize:
-    summary: Signs and notarizes the application bundle
-    desc: |
-      Signs the .app bundle and submits it for notarization.
-      Uses signing identity and keychain profile from `wails3 setup`.
-
-      First-time setup:
-        wails3 setup
-    deps:
-      - task: package
-    cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}.app" --notarize {{.CLI_ARGS}}
+      - ./scripts/release-macos.sh
