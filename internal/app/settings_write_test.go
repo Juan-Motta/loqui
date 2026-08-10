@@ -448,7 +448,7 @@ func TestAvailabilityAgreesWithWhatBuildProviderAccepts(t *testing.T) {
 	for _, provider := range store.AllProviders {
 		t.Run(provider, func(t *testing.T) {
 			d := testDictation(t, provider)
-			_, err := d.buildProvider()
+			_, err := d.buildProvider(1)
 
 			// "Not ported" is the one error that means unavailable. Every other failure (a missing
 			// key, for instance) belongs to a provider that IS available and merely unconfigured,

@@ -11,7 +11,7 @@
 	<key>CFBundleIconName</key>
 	<string>appicon</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.jualopezmo.loquigo</string>
+	<string>com.jualopezmo.loquigo.dev</string>
 	<key>CFBundleName</key>
 	<string>Loqui</string>
 	<key>CFBundlePackageType</key>
@@ -21,7 +21,7 @@
 	<key>CFBundleVersion</key>
 	<string>0.1.0</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>12.0.0</string>
+	<string>14.0.0</string>
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>

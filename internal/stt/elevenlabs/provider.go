@@ -62,10 +62,12 @@ const (
 	codeUnavailable   = "ServiceUnavailable"
 	codeReadyTimeout  = "ServiceTimeout"
 	codeNotConfigured = "NotConfigured"
-	// serverErrorCode is what an error EVENT maps to, and it is deliberately non-retryable for the
-	// same reason as Grok's: the event carries only prose, so transient and permanent are
-	// indistinguishable, and the controller resets its reconnect budget on every successful connect —
-	// a retryable classification here becomes an unbounded loop against a metered service.
+	// serverErrorCode remains terminal even though the controller now bounds retries. Unlike Grok,
+	// ElevenLabs supplies a machine-readable event name (e.g. auth_error, quota_exceeded,
+	// transcriber_error),
+	// but handle currently collapses them all here. Retrying that undifferentiated bucket would retry
+	// known-permanent auth/config failures. Map Outcome.Code to the shared session vocabulary before
+	// making transient members retryable. See docs/research/2026-08-06-where-realtime-stt-auth-fails.md.
 	serverErrorCode = codeBadRequest
 )
 

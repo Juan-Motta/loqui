@@ -44,8 +44,10 @@ type IO interface {
 	// neither if focus turned out to be a password field.
 	DeliverFinal(text, language string, trigger Mode)
 
-	// ScheduleReconnect runs fn after d. Only one is ever pending.
-	ScheduleReconnect(d time.Duration, fn func())
+	// ScheduleReconnect runs fn after d for gen. Only one is ever pending.
+	ScheduleReconnect(gen int, d time.Duration, fn func())
+	// ReconnectExhausted reports that a retryable failure consumed the session's full budget.
+	ReconnectExhausted(attempts int)
 }
 
 // Controller is the dictation controller. Safe for concurrent use: provider callbacks
@@ -190,8 +192,12 @@ func (c *Controller) HelperFailed() {
 
 // StopByGuard is the idle watchdog forcing a stop. An inactivity stop, not a cancel: the
 // text recognized before the silence is delivered, because the user did say it.
-func (c *Controller) StopByGuard() {
+func (c *Controller) StopByGuard(gen int) {
 	c.mu.Lock()
+	if !c.tracker.Desired() || c.tracker.Generation() != gen {
+		c.mu.Unlock()
+		return
+	}
 	c.applyLocked(c.machine.Interrupt())
 	c.doStopLocked()
 	c.flushLocked()
@@ -275,7 +281,9 @@ func (c *Controller) providerEventLocked(evt stt.Event) {
 			return // stale
 		}
 		c.applyLocked(c.machine.EngineStarted()) // honour a stop that arrived first
-		c.reconnectAttempt = 0
+		if !c.tracker.Desired() {
+			return // a pending or terminal stop must keep its final overlay state
+		}
 		c.setOverlayLocked(ReduceOverlay(c.overlay, evt))
 
 	case stt.Partial:
@@ -336,7 +344,12 @@ func (c *Controller) handleCancelLocked(evt stt.Event) {
 	}
 	class := ClassifyCancel(Cancel{ErrorCode: evt.ErrorCode, Error: evt.Error})
 
-	if !ShouldReconnect(class) || c.reconnectAttempt >= maxReconnects {
+	retryable := ShouldReconnect(class)
+	if !retryable || c.reconnectAttempt >= maxReconnects {
+		if retryable {
+			attempts := c.reconnectAttempt
+			c.queue(func() { c.io.ReconnectExhausted(attempts) })
+		}
 		c.doStopLocked()
 		c.machine.EngineStopped()
 		c.setOverlayLocked(ReduceOverlay(c.overlay, evt)) // show WHY it stopped
@@ -347,14 +360,19 @@ func (c *Controller) handleCancelLocked(evt stt.Event) {
 	c.reconnectAttempt++
 	// A new generation, so the failed recognizer's late events (its own stopped, a
 	// trailing final) are stale and cannot be mistaken for the retry's.
+	failedGen := c.tracker.Generation()
 	gen := c.tracker.Bump()
 	c.setOverlayLocked(OverlayState{Status: OverlayReconnecting})
 	delay := Backoff(c.reconnectAttempt-1, BackoffOptions{Base: time.Second, Max: 30 * time.Second})
+	c.queue(func() { c.io.StopEngine(failedGen) })
 	c.queue(func() {
-		c.io.ScheduleReconnect(delay, func() {
+		c.io.ScheduleReconnect(gen, delay, func() {
 			c.mu.Lock()
 			desired := c.tracker.Desired()
 			c.mu.Unlock()
+			// A stop can still land between this read and StartEngine. Holding mu across IO
+			// would deadlock on a synchronous provider callback. Dictation's generation
+			// tombstone is the final barrier: StartEngine rejects gen after a concurrent stop.
 			if desired {
 				c.io.StartEngine(gen)
 			}

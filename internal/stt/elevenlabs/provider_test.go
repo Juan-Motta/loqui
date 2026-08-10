@@ -341,9 +341,8 @@ func TestSeveralCommittedTranscriptsAreJoinedNotTruncated(t *testing.T) {
 	}
 }
 
-// An error event ends the session with a non-retryable code: the event carries only prose, so
-// transient and permanent are indistinguishable, and a retryable guess becomes an unbounded loop
-// against a metered service.
+// An error event stays terminal until the provider maps its preserved machine-readable event name
+// into the shared session vocabulary; retrying the collapsed bucket would retry known-permanent auth.
 func TestAServerErrorEndsTheSessionWithoutRetrying(t *testing.T) {
 	srv := newFakeEleven(t, func(f *fakeEleven, conn *websocket.Conn) {
 		f.ready(conn)

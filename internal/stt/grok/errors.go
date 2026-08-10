@@ -21,19 +21,17 @@ const (
 	codeUnavailable   = "ServiceUnavailable"
 	codeReadyTimeout  = "ServiceTimeout"
 	codeNotConfigured = "NotConfigured"
+	codeServiceError  = "ServiceError"
 
-	// serverErrorCode is what an `error` EVENT from xAI maps to, and it is deliberately a
-	// non-retryable one.
+	// serverErrorCode is what an `error` EVENT from xAI maps to.
 	//
 	// The event carries only prose (`message`) — the schema defines no structured code — so
-	// transient and permanent are indistinguishable. Meanwhile controller.go:278 resets the
-	// reconnect budget on every successful connect, so any retryable classification here
-	// becomes an UNBOUNDED reconnect loop against a service billed per hour. A misleading
-	// message costs less than an open-ended bill.
-	//
-	// When the controller's retry budget is fixed (see the plan's out-of-scope section), this
-	// becomes "ServiceError" with bounded retry.
-	serverErrorCode = codeBadRequest
+	// transient and permanent are indistinguishable. The session controller applies one hard
+	// reconnect budget across successful short-lived connections in handleCancelLocked, guarded by
+	// internal/session's TestReconnectBudgetSurvivesShortLivedSuccessfulConnections. Treating this as
+	// retryable therefore cannot become an unbounded billing loop. Handshake auth/config failures keep
+	// their own structured, non-retryable codes.
+	serverErrorCode = codeServiceError
 )
 
 // handshakeFailure reads a rejected upgrade and returns the structured code plus a message for

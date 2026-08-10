@@ -201,8 +201,8 @@ tasks:
   generate:icons:
     summary: Generates Windows `.ico` and Mac `.icns` from appicon.png.
     #
-    # NO ICON COMPOSER INPUT, deliberately. The template ships
-    # `-iconcomposerinput appicon.icon -macassetdir darwin`, which also produces an Assets.car — and on
+    # NO ICON COMPOSER INPUT, deliberately. The template's asset-catalog flags also produce an
+    # Assets.car — and on
     # macOS 26 that asset WINS over the .icns, so it is what the Dock and Finder actually draw. It
     # composes the icon from an SVG layer with `specular` and `translucency` effects, and the result is
     # measurably softer than the artwork: against the Electron build's icon, twice the proportion of
@@ -212,8 +212,8 @@ tasks:
     # .icns reproduces that icon exactly rather than re-rasterising an approximation of it.
     #
     # The trade: no automatic light/dark/tinted variants from Icon Composer. The Electron build has
-    # none either, and matching it is the point. build/darwin/Assets.car must NOT exist — the packaging
-    # step copies it into Resources whenever it does (build/darwin/Taskfile.yml).
+    # none either, and matching it is the point. build/darwin/Assets.car must NOT exist; assembly
+    # rejects it so generator drift cannot silently change the shipped icon.
     run: once
     dir: build
     sources:

@@ -5,7 +5,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/helpers/macos-globe-listener.swift"
-OUT="$ROOT/helpers/bin/globe-listener"
+OUTPUT_DIR="${LOQUI_HELPERS_OUTPUT_DIR:-$ROOT/helpers/bin}"
+OUT="$OUTPUT_DIR/globe-listener"
+DEPLOYMENT_TARGET="14.0"
 
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "build-globe-listener: skipped (not macOS)" >&2
@@ -17,7 +19,7 @@ if ! command -v swiftc >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "$ROOT/helpers/bin"
+mkdir -p "$OUTPUT_DIR"
 echo "build-globe-listener: compiling $SRC -> $OUT"
-swiftc -O -o "$OUT" "$SRC"
+swiftc -target "arm64-apple-macos${DEPLOYMENT_TARGET}" -O -o "$OUT" "$SRC"
 echo "build-globe-listener: done ($(file "$OUT" | sed 's/^.*: //'))"

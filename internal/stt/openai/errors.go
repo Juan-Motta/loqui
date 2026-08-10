@@ -12,11 +12,11 @@ import (
 //
 // THE HANDSHAKE IS NOT THE ONLY MACHINE-READABLE SIGNAL, and believing so was wrong: measured on
 // 2026-08-06, an invalid key gets a 101 and then error.code="invalid_api_key" plus a close 3000
-// (docs/research/2026-08-06-where-realtime-stt-auth-fails.md). What follows still holds for the
-// credential
-// travels as an HTTP header, so a bad key fails the UPGRADE with a status code. Once the socket is
-// open, failures arrive as prose in an `error` event with no structured code, which is why the runtime
-// error path is deliberately non-retryable (see serverErrorCode).
+// (docs/research/2026-08-06-where-realtime-stt-auth-fails.md). What follows still holds when the
+// credential travels as an HTTP header, so a bad key fails the UPGRADE with a status code. Once the socket is
+// open, failures carry a machine-readable code in the `error` event. Decode preserves it, but the
+// runtime provider does not yet map it into the shared session vocabulary, which is why its collapsed
+// error path remains non-retryable (see serverErrorCode).
 //
 // Same structure as grok/errors.go and elevenlabs/errors.go, and the same reason for existing. The
 // strings differ because they are shown to the user and name the service; the CODES are the shared
