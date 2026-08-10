@@ -4,6 +4,20 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Protected GitHub macOS releases — 2026-08-10
+
+- **A manual `Release` Action now publishes Loqui from the exact `main` version and commit.** A
+  secret-free hosted-runner preflight runs first; the signing/notarization job can start only after
+  approval of the branch-restricted `release` Environment. Apple credentials live only in that
+  Environment and are imported into an ephemeral Keychain that is removed on every outcome.
+- **The first automated release, `v0.1.0`, is public and immutable.** GitHub contains exactly the
+  Apple Silicon DMG and its SHA-256 file, while sanitized signing/notarization evidence is retained
+  separately for 14 days. Re-running the same version fails before protected access, and a
+  non-`main` dispatch is rejected before Environment approval.
+- **The published download passed the real journey.** A fresh copy matched its checksum, notarized
+  ticket, Gatekeeper assessments, deep app signature, read-only bundle audit, and exact tag/SHA.
+  The owner also installed the public DMG and confirmed that Loqui launches and works.
+
 ## Signed and notarized macOS distribution — 2026-08-10
 
 - **Loqui can now be distributed outside the App Store as an Apple Silicon DMG.** The release task
