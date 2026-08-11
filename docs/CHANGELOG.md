@@ -4,6 +4,11 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## MIT license — 2026-08-11
+
+- **Loqui is now distributed under the MIT License.** The repository includes the standard license
+  text with Juan Andres Lopez Motta as the copyright holder.
+
 ## User-friendly bilingual project guide — 2026-08-11
 
 - **The repository now opens with the product instead of maintainer internals.** The English README
