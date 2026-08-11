@@ -4,6 +4,16 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## User-friendly bilingual project guide — 2026-08-11
+
+- **The repository now opens with the product instead of maintainer internals.** The English README
+  explains what Loqui does, where to download the current Apple Silicon release, its engines,
+  first-use flow, permissions, privacy tradeoffs, local development, and build commands.
+- **A complete Spanish guide is one click away.** Both languages share the same section hierarchy,
+  commands, compatibility limits, credential warnings, and progressively disclosed release runbook.
+- **The owner-supplied Loqui banner now lives in the repository.** GitHub Markdown rendering, public
+  release links/assets, the full project gate, and both rendered language journeys were verified.
+
 ## Protected GitHub macOS releases — 2026-08-10
 
 - **A manual `Release` Action now publishes Loqui from the exact `main` version and commit.** A
