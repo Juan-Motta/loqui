@@ -114,6 +114,14 @@ jobs:
       - name: Vendor pinned speech SDK
         run: ./scripts/vendor-speech-sdk.sh
 
+      - name: Prepare pinned DMG builder
+        run: |
+          dmgbuild_python="$(./scripts/setup-dmgbuild.sh)"
+          echo "LOQUI_DMGBUILD_PYTHON=$dmgbuild_python" >> "$GITHUB_ENV"
+
+      - name: Verify real DMG builder integration
+        run: ./scripts/tests/dmg-integration-test.sh
+
       - name: Revalidate immutable release state
         env:
           GH_TOKEN: ${{ github.token }}

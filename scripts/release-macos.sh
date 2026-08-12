@@ -4,6 +4,9 @@ set -euo pipefail
 release_root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 release_output_dir="$release_root_dir/bin/release"
 release_output_dir_physical=""
+dmgbuild_python="${LOQUI_DMGBUILD_PYTHON:-}"
+dmg_verify_mount=""
+dmg_verify_mounted=0
 profile="${LOQUI_NOTARY_PROFILE:-loqui-notary}"
 notary_keychain="${LOQUI_NOTARY_KEYCHAIN:-}"
 notary_auth_args=(--keychain-profile "$profile")
@@ -44,6 +47,79 @@ validate_notary_keychain() {
   esac
   if [ ! -f "$notary_keychain" ]; then
     die "notary keychain does not exist: $notary_keychain"
+    return 1
+  fi
+}
+
+validate_dmgbuild() {
+  [ -n "$dmgbuild_python" ] || {
+    die "LOQUI_DMGBUILD_PYTHON is not set"
+    return 1
+  }
+  case "$dmgbuild_python" in
+    /*) ;;
+    *) die "LOQUI_DMGBUILD_PYTHON must be absolute"; return 1 ;;
+  esac
+  [ -x "$dmgbuild_python" ] || {
+    die "dmgbuild Python is not executable: $dmgbuild_python"
+    return 1
+  }
+  if ! dmgbuild_version="$("$dmgbuild_python" -c \
+    'import importlib.metadata; print(importlib.metadata.version("dmgbuild"))' 2>/dev/null)"; then
+    die "could not read installed dmgbuild version"
+    return 1
+  fi
+  [ "$dmgbuild_version" = 1.6.7 ] || {
+    die "installed dmgbuild version is '$dmgbuild_version', expected '1.6.7'"
+    return 1
+  }
+}
+
+read_sips_property() {
+  property_name="$1"
+  property_dump="$2"
+  printf '%s\n' "$property_dump" | awk -F': ' -v property="$property_name" \
+    '$1 == "  " property {value=$2; count++} END {if (count == 1) print value; else exit 1}'
+}
+
+validate_dmg_background_asset() {
+  background_name="$1"
+  expected_width="$2"
+  expected_height="$3"
+  background_path="$release_root_dir/build/darwin/dmg/$background_name"
+  if [ ! -f "$background_path" ] || [ -L "$background_path" ]; then
+    die "DMG background is not a regular non-symlink file: $background_name"
+    return 1
+  fi
+  if ! background_properties="$(sips -g format -g bitsPerSample -g samplesPerPixel \
+    -g hasAlpha -g pixelWidth -g pixelHeight "$background_path" 2>/dev/null)"; then
+    die "could not inspect DMG background: $background_name"
+    return 1
+  fi
+  if ! background_format="$(read_sips_property format "$background_properties")" \
+    || ! background_bits="$(read_sips_property bitsPerSample "$background_properties")" \
+    || ! background_samples="$(read_sips_property samplesPerPixel "$background_properties")" \
+    || ! background_alpha="$(read_sips_property hasAlpha "$background_properties")" \
+    || ! background_width="$(read_sips_property pixelWidth "$background_properties")" \
+    || ! background_height="$(read_sips_property pixelHeight "$background_properties")"; then
+    die "$background_name has unexpected image properties"
+    return 1
+  fi
+  if [ "$background_format" != png ] || [ "$background_bits" != 8 ] \
+    || [ "$background_samples" != 4 ] || [ "$background_alpha" != yes ] \
+    || [ "$background_width" != "$expected_width" ] \
+    || [ "$background_height" != "$expected_height" ]; then
+    die "$background_name has unexpected image properties"
+    return 1
+  fi
+}
+
+validate_dmg_backgrounds() {
+  validate_dmg_background_asset background.png 660 360 || return 1
+  validate_dmg_background_asset background@2x.png 1320 720 || return 1
+  if ! (cd "$release_root_dir/build/darwin/dmg" \
+    && shasum -a 256 -c background.sha256 >/dev/null); then
+    die "DMG background checksum verification failed"
     return 1
   fi
 }
@@ -336,6 +412,9 @@ normalize_evidence_paths() {
 }
 
 cleanup_release() {
+  if ! detach_dmg_verification_mount; then
+    echo "release-macos: failed DMG verification mount cleanup" >&2
+  fi
   if [ "$hidden_dmg_candidate_owned" -eq 1 ] && [ -n "$hidden_dmg_candidate" ]; then
     if safe_release_candidate_path "$hidden_dmg_candidate" dmg; then
       if rm -f "$hidden_dmg_candidate"; then
@@ -369,6 +448,7 @@ cleanup_release() {
 
 phase_preflight() {
   validate_notary_keychain || return 1
+  validate_dmgbuild || return 1
   if ! host_arch="$(uname -m)"; then
     die "could not determine release host architecture"
     return 1
@@ -378,10 +458,10 @@ phase_preflight() {
     return 1
   fi
   for tool_name in security codesign otool lipo install_name_tool hdiutil spctl ditto plutil jq \
-    xcrun wails3 git cmake swiftc vtool shasum file; do
+    xcrun wails3 git cmake swiftc vtool shasum file sips tiffutil; do
     require_command "$tool_name" || return 1
   done
-  for required_script in release-version.sh patch-plists.sh build-macos-helpers.sh macos-bundle.sh macos-audit.sh macos-sign.sh; do
+  for required_script in release-version.sh patch-plists.sh build-macos-helpers.sh macos-bundle.sh macos-audit.sh macos-sign.sh setup-dmgbuild.sh; do
     if [ ! -x "$release_root_dir/scripts/$required_script" ]; then
       die "missing executable script: scripts/$required_script"
       return 1
@@ -389,6 +469,9 @@ phase_preflight() {
   done
   for required_source in \
     build/darwin/Info.plist build/darwin/Info.dev.plist build/darwin/icons.icns \
+    build/darwin/dmg/settings.py build/darwin/dmg/verify-ds-store.py \
+    build/darwin/dmg/background.png build/darwin/dmg/background@2x.png \
+    build/darwin/dmg/background.sha256 \
     helpers/macos-globe-listener.swift helpers/macos-stt.swift helpers/whisper-stt.cpp \
     third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Versions/A/MicrosoftCognitiveServicesSpeech; do
     if [ ! -e "$release_root_dir/$required_source" ]; then
@@ -396,6 +479,7 @@ phase_preflight() {
       return 1
     fi
   done
+  validate_dmg_backgrounds || return 1
 
   if ! wails_version="$(wails3 version 2>&1)"; then
     die "could not read wails3 version"
@@ -664,6 +748,169 @@ compare_designated_requirements() {
   fi
 }
 
+verify_retina_tiff() {
+  retina_path="$1"
+  retina_evidence="$2"
+  if ! tiffutil -info "$retina_path" >"$retina_evidence"; then
+    die "could not inspect Retina background"
+    return 1
+  fi
+  if ! retina_directory_count="$(awk '/^Directory at /{count++} END{print count+0}' \
+    "$retina_evidence")"; then
+    die "could not count Retina background image directories"
+    return 1
+  fi
+  if [ "$retina_directory_count" -ne 2 ]; then
+    die "Retina background must contain exactly two image directories"
+    return 1
+  fi
+  retina_frames="$retina_evidence.frames"
+  if ! awk '$1 == "Image" && $2 == "Width:" && $4 == "Image" && $5 == "Length:" \
+      {print $3 "x" $6}' "$retina_evidence" | LC_ALL=C sort >"$retina_frames"; then
+    die "could not parse Retina background frame dimensions"
+    return 1
+  fi
+  retina_expected="$retina_evidence.expected"
+  if ! printf '%s\n' 1320x720 660x360 | LC_ALL=C sort >"$retina_expected"; then
+    die "could not record expected Retina background frames"
+    return 1
+  fi
+  if ! diff -u "$retina_expected" "$retina_frames"; then
+    die "Retina background has unexpected frame dimensions"
+    return 1
+  fi
+}
+
+detach_dmg_verification_mount() {
+  [ "$dmg_verify_mounted" -eq 1 ] || return 0
+  for detach_attempt in 1 2 3; do
+    if hdiutil detach "$dmg_verify_mount" >/dev/null; then
+      dmg_verify_mounted=0
+      dmg_verify_mount=""
+      return 0
+    fi
+    [ "$detach_attempt" -eq 3 ] || sleep "${LOQUI_DMG_DETACH_RETRY_DELAY:-1}"
+  done
+  if hdiutil detach -force "$dmg_verify_mount" >/dev/null 2>&1; then
+    dmg_verify_mounted=0
+    dmg_verify_mount=""
+  fi
+  die "could not cleanly detach DMG verification mount"
+  return 1
+}
+
+inspect_generated_dmg_contents() {
+  visible_manifest="$stage/evidence-work/dmg-visible-root.txt"
+  visible_raw="$stage/evidence-work/dmg-visible-root.raw"
+  if ! find "$dmg_verify_mount" -mindepth 1 -maxdepth 1 ! -name '.*' -print \
+      >"$visible_raw"; then
+    die "could not inspect generated DMG root"
+    return 1
+  fi
+  if ! sed "s#^$dmg_verify_mount/##" "$visible_raw" | LC_ALL=C sort >"$visible_manifest"; then
+    die "could not normalize generated DMG root"
+    return 1
+  fi
+  expected_visible="$stage/evidence-work/dmg-visible-root.expected"
+  printf '%s\n' Applications Loqui.app >"$expected_visible"
+  if ! diff -u "$expected_visible" "$visible_manifest"; then
+    die "generated DMG has unexpected visible root items"
+    return 1
+  fi
+  if [ ! -L "$dmg_verify_mount/Applications" ] \
+    || [ "$(readlink "$dmg_verify_mount/Applications")" != /Applications ]; then
+    die "generated DMG Applications link is invalid"
+    return 1
+  fi
+  if [ ! -f "$dmg_verify_mount/.DS_Store" ]; then
+    die "generated DMG is missing .DS_Store"
+    return 1
+  fi
+  ds_store_evidence="$stage/evidence-work/dmg-ds-store.txt"
+  if ! "$dmgbuild_python" "$release_root_dir/build/darwin/dmg/verify-ds-store.py" \
+      "$dmg_verify_mount/.DS_Store" >"$ds_store_evidence"; then
+    die "generated DMG Finder metadata is invalid"
+    return 1
+  fi
+  mounted_dmg_background="$dmg_verify_mount/.background.tiff"
+  if [ ! -f "$mounted_dmg_background" ]; then
+    die "generated DMG is missing Retina background"
+    return 1
+  fi
+  if [ -L "$mounted_dmg_background" ]; then
+    die "generated DMG background is not a regular non-symlink file"
+    return 1
+  fi
+  if ! mounted_dmg_background_parent="$(cd "${mounted_dmg_background%/*}" && pwd -P)"; then
+    die "could not resolve generated DMG background parent"
+    return 1
+  fi
+  if [ "$mounted_dmg_background_parent" != "$dmg_verify_mount_physical" ]; then
+    die "generated DMG background resolves outside verification mount"
+    return 1
+  fi
+  retina_info="$stage/evidence-work/dmg-background-tiff.txt"
+  verify_retina_tiff "$mounted_dmg_background" "$retina_info" || return 1
+  mounted_dmg_app="$dmg_verify_mount/Loqui.app"
+  if [ ! -d "$mounted_dmg_app" ] || [ -L "$mounted_dmg_app" ]; then
+    die "generated DMG app is not a regular non-symlink directory"
+    return 1
+  fi
+  if ! mounted_dmg_app_parent="$(cd "${mounted_dmg_app%/*}" && pwd -P)"; then
+    die "could not resolve generated DMG app parent"
+    return 1
+  fi
+  if [ "$mounted_dmg_app_parent" != "$dmg_verify_mount_physical" ]; then
+    die "generated DMG app resolves outside verification mount"
+    return 1
+  fi
+  "$release_root_dir/scripts/macos-audit.sh" --channel production --version "$version" \
+    "$mounted_dmg_app" >/dev/null || return 1
+  codesign --verify --deep --strict "$mounted_dmg_app" || return 1
+  dmg_designated_requirements="$stage/evidence-work/designated-requirements-dmg.txt"
+  capture_designated_requirements \
+    "$mounted_dmg_app" "$dmg_designated_requirements" || return 1
+  compare_designated_requirements \
+    "$stage/evidence-work/designated-requirements.txt" \
+    "$dmg_designated_requirements"
+}
+
+verify_generated_dmg_contents() {
+  dmg_verify_mount="$stage/dmg-verify"
+  if [ -e "$dmg_verify_mount" ] || [ -L "$dmg_verify_mount" ]; then
+    die "DMG verification mount path already exists"
+    return 1
+  fi
+  if ! mkdir "$dmg_verify_mount"; then
+    die "could not create DMG verification mount"
+    return 1
+  fi
+  if ! dmg_verify_mount_physical="$(cd "$dmg_verify_mount" && pwd -P)"; then
+    die "could not resolve DMG verification mount"
+    return 1
+  fi
+  if [ "$dmg_verify_mount_physical" != "$stage/dmg-verify" ]; then
+    die "DMG verification mount resolves outside release stage"
+    return 1
+  fi
+  if ! hdiutil attach -readonly -nobrowse -mountpoint "$dmg_verify_mount" "$dmg" >/dev/null; then
+    die "could not mount generated DMG"
+    return 1
+  fi
+  dmg_verify_mounted=1
+
+  inspection_status=0
+  if ! inspect_generated_dmg_contents; then
+    inspection_status=1
+  fi
+  detach_status=0
+  if ! detach_dmg_verification_mount; then
+    detach_status=1
+  fi
+  [ "$detach_status" -eq 0 ] || return 1
+  [ "$inspection_status" -eq 0 ] || return 1
+}
+
 phase_verify_app() {
   if ! codesign --verify --deep --strict --verbose=2 "$app"; then
     return 1
@@ -775,26 +1022,51 @@ phase_verify_app() {
 
 phase_create_dmg() {
   dmg_root="$stage/dmg-root"
-  if ! mkdir -p "$dmg_root"; then
+  if [ -e "$dmg_root" ] || [ -L "$dmg_root" ]; then
+    die "DMG staging root already exists"
+    return 1
+  fi
+  if ! mkdir "$dmg_root"; then
     die "could not create DMG staging root"
     return 1
   fi
-  if ! ditto "$app" "$dmg_root/Loqui.app"; then
+  if [ -L "$dmg_root" ]; then
+    die "DMG staging root must not be a symlink"
     return 1
   fi
-  if ! ln -s /Applications "$dmg_root/Applications"; then
-    die "could not create DMG Applications link"
+  if ! dmg_root_physical="$(cd "$dmg_root" && pwd -P)"; then
+    die "could not resolve DMG staging root"
+    return 1
+  fi
+  if [ "$dmg_root_physical" != "$stage/dmg-root" ]; then
+    die "DMG staging root resolves outside release stage"
+    return 1
+  fi
+  dmg_app="$dmg_root/Loqui.app"
+  if ! ditto "$app" "$dmg_app"; then
+    return 1
+  fi
+  if [ ! -d "$dmg_app" ] || [ -L "$dmg_app" ]; then
+    die "staged DMG app is not a regular directory"
+    return 1
+  fi
+  if ! dmg_app_parent="$(cd "${dmg_app%/*}" && pwd -P)"; then
+    die "could not resolve staged DMG app parent"
+    return 1
+  fi
+  if [ "$dmg_app_parent" != "$stage/dmg-root" ]; then
+    die "staged DMG app resolves outside release stage"
     return 1
   fi
   if ! "$release_root_dir/scripts/macos-audit.sh" --channel production --version "$version" \
-    "$dmg_root/Loqui.app" >/dev/null; then
+    "$dmg_app" >/dev/null; then
     return 1
   fi
-  if ! codesign --verify --deep --strict "$dmg_root/Loqui.app"; then
+  if ! codesign --verify --deep --strict "$dmg_app"; then
     return 1
   fi
   dmg_designated_requirements="$stage/evidence-work/designated-requirements-dmg.txt"
-  if ! capture_designated_requirements "$dmg_root/Loqui.app" "$dmg_designated_requirements"; then
+  if ! capture_designated_requirements "$dmg_app" "$dmg_designated_requirements"; then
     return 1
   fi
   if ! compare_designated_requirements \
@@ -802,9 +1074,24 @@ phase_create_dmg() {
     return 1
   fi
   dmg="$stage/Loqui.dmg"
-  if ! hdiutil create -volname Loqui -srcfolder "$dmg_root" -ov -format UDZO "$dmg"; then
+  settings="$release_root_dir/build/darwin/dmg/settings.py"
+  if ! "$dmgbuild_python" -m dmgbuild \
+      -s "$settings" \
+      -D "app=$dmg_app" \
+      -D "assets=$release_root_dir/build/darwin/dmg" \
+      Loqui "$dmg"; then
+    die "could not create styled DMG"
     return 1
   fi
+  if [ ! -f "$dmg" ] || [ -L "$dmg" ]; then
+    die "dmgbuild did not create a regular DMG"
+    return 1
+  fi
+  if ! hdiutil verify "$dmg"; then
+    die "generated DMG failed hdiutil verification"
+    return 1
+  fi
+  verify_generated_dmg_contents || return 1
 }
 
 phase_sign_dmg() {

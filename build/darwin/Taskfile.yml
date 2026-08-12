@@ -178,4 +178,14 @@ tasks:
   release:
     summary: Builds, signs, notarizes, staples, and verifies an arm64 Developer ID DMG
     cmds:
-      - ./scripts/release-macos.sh
+      - |
+        set -e
+        dmgbuild_python="${LOQUI_DMGBUILD_PYTHON:-$(./scripts/setup-dmgbuild.sh)}"
+        [ -n "$dmgbuild_python" ]
+        LOQUI_DMGBUILD_PYTHON="$dmgbuild_python" ./scripts/release-macos.sh
+
+  render:dmg-background:
+    summary: Regenerates both reviewed DMG background scales and their digests
+    cmds:
+      - swift build/darwin/dmg/render-background.swift build/darwin/dmg
+      - cd build/darwin/dmg && shasum -a 256 background.png background@2x.png > background.sha256

@@ -46,6 +46,9 @@ tasks:
       - ./scripts/tests/release-version-test.sh
       - ./scripts/tests/github-release-test.sh
       - ./scripts/tests/github-release-workflow-test.sh
+      - ./scripts/tests/setup-dmgbuild-test.sh
+      - ./scripts/tests/dmg-layout-test.sh
+      - ./scripts/tests/dmg-integration-test.sh
       - ./scripts/tests/release-macos-test.sh
 
   run:
