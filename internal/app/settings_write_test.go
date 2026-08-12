@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -338,6 +339,86 @@ func TestEveryNamedProviderIsNowOfferedAndAnUnknownOneIsRefused(t *testing.T) {
 	}
 }
 
+func TestHomePickerOffersAndActivatesEachAzureProductExplicitly(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, vault := testService(t, st)
+	vault.set(store.SlotAzureSpeech, "speech-key")
+	vault.set(store.SlotAzureOpenAI, "openai-key")
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Region = "eastus2"
+		cfg.AzureOpenAiResource = "my-resource"
+		cfg.AzureOpenAiDeployment = "my-deployment"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := svc.Load()
+	raw := marshalForTest(t, payload)
+	for _, want := range []string{`"id":"azure-speech"`, `"id":"azure-openai"`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("provider picker payload is missing %s: %s", want, raw)
+		}
+	}
+
+	for selection, service := range map[string]string{
+		"azure-speech": "speech",
+		"azure-openai": "openai",
+	} {
+		res := svc.SetProvider(selection)
+		if res.Error != "" {
+			t.Errorf("SetProvider(%s): %s", selection, res.Error)
+			continue
+		}
+		cfg := st.LoadSettings()
+		if cfg.Provider != "azure" || cfg.AzureService != service {
+			t.Errorf("SetProvider(%s) stored provider=%q service=%q", selection, cfg.Provider, cfg.AzureService)
+		}
+	}
+}
+
+func TestHomePickerReportsReadinessPerAzureProduct(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, vault := testService(t, st)
+	vault.set(store.SlotAzureSpeech, "speech-key")
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Provider = "azure"
+		cfg.AzureService = "speech"
+		cfg.Region = "eastus2"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := marshalForTest(t, svc.Load())
+	var payload struct {
+		Providers []struct {
+			ID       string `json:"id"`
+			State    string `json:"state"`
+			Selected bool   `json:"selected"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]struct {
+		state    string
+		selected bool
+	}{}
+	for _, option := range payload.Providers {
+		got[option.ID] = struct {
+			state    string
+			selected bool
+		}{option.State, option.Selected}
+	}
+	if option := got["azure-speech"]; option.state != string(store.ConnActive) || !option.selected {
+		t.Errorf("azure-speech = %+v, want active and selected", option)
+	}
+	if option := got["azure-openai"]; option.state != string(store.ConnUnconfigured) || option.selected {
+		t.Errorf("azure-openai = %+v, want unconfigured and not selected", option)
+	}
+}
+
 // SaveConnection must validate EVERYTHING before writing anything. A bad region with a good key
 // must leave both untouched — committing the key against a region the app rejected would leave a
 // credential for an endpoint that does not exist.
@@ -653,35 +734,136 @@ func TestAFailedCredentialWriteLeavesTheRegionAloneToo(t *testing.T) {
 	}
 }
 
-// A credential slot nothing reads must refuse a key.
-//
-// azure-openai is Azure's realtime subservice, and it is not ported. The settings page offers it in
-// the Azure card's service picker, so without this the user could enter their Azure OpenAI key,
-// click Guardar, and have it stored where nothing will ever read it — and the form, which maps the
-// Azure card to azure-speech, would write it over the credential that IS in use.
-func TestWritingAKeyIntoAnUnusableSlotIsRefused(t *testing.T) {
+// Azure OpenAI has its own runtime reader, so its independent credential must be writable.
+func TestWritingAnAzureOpenAIKeyIsAcceptedNowThatTheRuntimeReadsIt(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, vault := testService(t, st)
 
 	res := svc.SetKey("azure-openai", "una-clave")
-	if res.Error == "" {
-		t.Fatal("a key for an unported subservice was accepted")
+	if res.Error != "" {
+		t.Fatalf("Azure OpenAI key was refused: %s", res.Error)
+	}
+	if got, ok := vault.get(store.SlotAzureOpenAI); !ok || got != "una-clave" {
+		t.Errorf("stored key = %q,%v", got, ok)
+	}
+	for _, k := range res.Payload.Keys {
+		if k.Slot == "azure-openai" && !k.Available {
+			t.Error("azure-openai is still reported unavailable")
+		}
+	}
+}
+
+func TestSaveAzureOpenAIConnectionStoresTheExactSubserviceConfiguration(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.Region = "eastus2"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, vault := testService(t, st)
+	vault.set(store.SlotAzureSpeech, "speech-key")
+
+	res := svc.SaveAzureConnection("openai", "", "  mi-recurso  ", "  mi-whisper  ", "  una-clave  ")
+	if res.Error != "" {
+		t.Fatalf("SaveAzureConnection: %s", res.Error)
+	}
+	cfg := st.LoadSettings()
+	if cfg.AzureService != "openai" || cfg.AzureOpenAiResource != "mi-recurso" || cfg.AzureOpenAiDeployment != "mi-whisper" {
+		t.Errorf("stored Azure config = %+v", cfg)
+	}
+	if got, ok := vault.get(store.SlotAzureOpenAI); !ok || got != "una-clave" {
+		t.Errorf("stored key = %q,%v", got, ok)
+	}
+	if cfg.Region != "eastus2" {
+		t.Errorf("Azure Speech region was overwritten with %q", cfg.Region)
+	}
+	if got, ok := vault.get(store.SlotAzureSpeech); !ok || got != "speech-key" {
+		t.Errorf("Azure Speech key was overwritten: %q,%v", got, ok)
+	}
+}
+
+func TestSaveAzureSpeechConnectionKeepsTheOpenAIConfigurationSeparate(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureOpenAiResource = "openai-resource"
+		cfg.AzureOpenAiDeployment = "openai-deployment"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, vault := testService(t, st)
+	vault.set(store.SlotAzureOpenAI, "openai-key")
+
+	res := svc.SaveAzureConnection("speech", " eastus2 ", "", "", " speech-key ")
+	if res.Error != "" {
+		t.Fatalf("SaveAzureConnection: %s", res.Error)
+	}
+	cfg := st.LoadSettings()
+	if cfg.AzureService != "speech" || cfg.Region != "eastus2" {
+		t.Errorf("stored Azure Speech config = %+v", cfg)
+	}
+	if cfg.AzureOpenAiResource != "openai-resource" || cfg.AzureOpenAiDeployment != "openai-deployment" {
+		t.Errorf("Azure OpenAI config was overwritten: %+v", cfg)
+	}
+	if got, ok := vault.get(store.SlotAzureSpeech); !ok || got != "speech-key" {
+		t.Errorf("Azure Speech key = %q,%v", got, ok)
+	}
+	if got, ok := vault.get(store.SlotAzureOpenAI); !ok || got != "openai-key" {
+		t.Errorf("Azure OpenAI key was overwritten: %q,%v", got, ok)
+	}
+}
+
+func TestSaveAzureOpenAIConnectionRejectsUnsafeResourceBeforeWriting(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, vault := testService(t, st)
+
+	res := svc.SaveAzureConnection("openai", "", "attacker.example/path", "deployment", "una-clave")
+	if res.Error == "" || res.Field != "resource" {
+		t.Fatalf("unsafe resource result = %+v", res)
 	}
 	if _, ok := vault.get(store.SlotAzureOpenAI); ok {
-		t.Error("the key was stored for a slot nothing reads")
+		t.Error("key was written before resource validation")
 	}
-	// And the payload says so, so the UI can disable the option rather than only refusing on click.
-	for _, k := range res.Payload.Keys {
-		switch k.Slot {
-		case "azure-openai":
-			if k.Available {
-				t.Error("azure-openai is reported as available")
-			}
-		case "azure-speech", "grok":
-			if !k.Available {
-				t.Errorf("%s is reported as unavailable", k.Slot)
-			}
-		}
+	if got := st.LoadSettings().AzureService; got != "speech" {
+		t.Errorf("service changed to %q on a rejected save", got)
+	}
+}
+
+func TestSavePublicOpenAIModelDoesNotOverwriteAzureDeployment(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	if err := st.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureOpenAiDeployment = "azure-deployment"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc, vault := testService(t, st)
+	res := svc.SaveOpenAIConnection("gpt-4o-transcribe", "openai-key")
+	if res.Error != "" {
+		t.Fatalf("SaveOpenAIConnection: %s", res.Error)
+	}
+	cfg := st.LoadSettings()
+	if cfg.OpenAiModel != "gpt-4o-transcribe" {
+		t.Errorf("OpenAiModel = %q", cfg.OpenAiModel)
+	}
+	if cfg.AzureOpenAiDeployment != "azure-deployment" {
+		t.Errorf("Azure deployment was overwritten with %q", cfg.AzureOpenAiDeployment)
+	}
+	if got, ok := vault.get(store.SlotOpenAI); !ok || got != "openai-key" {
+		t.Errorf("stored key = %q,%v", got, ok)
+	}
+}
+
+func TestSavePublicOpenAIRejectsAnUnknownModelBeforeWriting(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, vault := testService(t, st)
+	res := svc.SaveOpenAIConnection("not-a-real-model", "openai-key")
+	if res.Error == "" || res.Field != "model" {
+		t.Fatalf("unknown model result = %+v", res)
+	}
+	if _, ok := vault.get(store.SlotOpenAI); ok {
+		t.Error("key was written before model validation")
 	}
 }
 
@@ -730,7 +912,7 @@ func TestAKeyOnlySaveWorksForASlotWithNoRegion(t *testing.T) {
 // past it: no secret, no check, and the region — a single global Azure setting — was written through
 // the form of a subservice the app cannot even use. The credential was guarded while the setting
 // beside it was not.
-func TestARegionOnlySaveThroughAnUnusableSlotIsRefused(t *testing.T) {
+func TestAzureOpenAICannotBeSavedThroughTheSpeechRegionAPI(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	if err := st.UpdateSettings(func(cfg *store.Settings) error {
 		cfg.Region = "eastus"
@@ -742,20 +924,13 @@ func TestARegionOnlySaveThroughAnUnusableSlotIsRefused(t *testing.T) {
 
 	res := svc.SaveConnection("azure-openai", "westeurope", "")
 	if res.Error == "" {
-		t.Fatal("a region-only save through an unported slot was accepted")
+		t.Fatal("Azure OpenAI accepted the Azure Speech save shape")
 	}
-	// The message must be the AVAILABILITY one, not the region-pairing one.
-	//
-	// Both checks would reject this call, and asserting merely "some error" is what let a missing fix
-	// hide: the availability gate was still behind `if writeKey`, this path fell through to the region
-	// check instead, and the test passed anyway. Naming the expected reason is what makes it isolate
-	// the gate rather than the overlap.
-	if !strings.Contains(res.Error, "no está disponible") {
-		t.Errorf("error = %q, want the availability rejection — a test that accepts any error cannot "+
-			"tell this gate from the region check that also happens to catch it", res.Error)
+	if !strings.Contains(res.Error, "no usa una región") {
+		t.Errorf("error = %q, want the wrong-API rejection", res.Error)
 	}
 	if got := st.LoadSettings().Region; got != "eastus" {
-		t.Errorf("Region = %q — an unported subservice moved the live Azure endpoint", got)
+		t.Errorf("Region = %q — Azure OpenAI moved the Speech endpoint", got)
 	}
 }
 

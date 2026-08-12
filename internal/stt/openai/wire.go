@@ -54,10 +54,16 @@ func BuildSubprotocols(apiKey string) []string {
 
 // SessionUpdate is the message that makes a connected socket into a transcribing one.
 //
-// The schema is the NESTED v1 form (session.audio.input.*), which is deliberately not the flat form
-// Azure OpenAI uses. Sending the flat one here is accepted and then ignored: the session stays at its
-// defaults and the language hint and model silently do nothing.
+// The schema is the GA nested v1 form (session.audio.input.*) shared by public OpenAI and Azure
+// OpenAI realtime transcription.
 func BuildSessionUpdate(model, language string) ([]byte, error) {
+	return BuildSessionUpdateWithManualCommit(model, language, false)
+}
+
+// BuildSessionUpdateWithManualCommit builds the GA transcription session payload while making the
+// turn policy explicit. Public OpenAI uses server VAD; Azure's gpt-realtime-whisper deployment
+// rejects VAD and requires the client to commit its audio buffer.
+func BuildSessionUpdateWithManualCommit(model, language string, manualCommit bool) ([]byte, error) {
 	m := strings.TrimSpace(model)
 	if m == "" {
 		m = DefaultModel
@@ -65,6 +71,10 @@ func BuildSessionUpdate(model, language string) ([]byte, error) {
 	transcription := map[string]any{"model": m}
 	if language != "" {
 		transcription["language"] = language
+	}
+	var turnDetection any = map[string]any{"type": "server_vad"}
+	if manualCommit {
+		turnDetection = nil
 	}
 	return json.Marshal(map[string]any{
 		"type": "session.update",
@@ -74,7 +84,7 @@ func BuildSessionUpdate(model, language string) ([]byte, error) {
 				"input": map[string]any{
 					"format":         map[string]any{"type": "audio/pcm", "rate": SampleRate},
 					"transcription":  transcription,
-					"turn_detection": map[string]any{"type": "server_vad"},
+					"turn_detection": turnDetection,
 				},
 			},
 		},
@@ -93,6 +103,10 @@ const (
 	// this service an invalid key still gets an HTTP 101 (measured 2026-08-06), so the upgrade proves
 	// nothing and only a named session confirmation does.
 	Ready
+	// Configured is session.updated: the service accepted the session.update payload. Azure OpenAI
+	// needs this stronger acknowledgement because a valid key with a wrong deployment can still open
+	// the socket and then reject the configuration.
+	Configured
 	// PartialDelta is a FRAGMENT to append, not a whole partial. Getting this wrong shows the user
 	// one word at a time instead of a growing phrase.
 	PartialDelta
@@ -106,6 +120,8 @@ func (k OutcomeKind) String() string {
 	switch k {
 	case Ready:
 		return "ready"
+	case Configured:
+		return "configured"
 	case PartialDelta:
 		return "partial-delta"
 	case Final:
@@ -142,6 +158,7 @@ type wireEvent struct {
 	Type       string    `json:"type"`
 	Delta      string    `json:"delta"`
 	Transcript string    `json:"transcript"`
+	Text       string    `json:"text"`
 	Message    string    `json:"message"`
 	Error      wireError `json:"error"`
 }
@@ -160,7 +177,9 @@ func Decode(raw []byte) Outcome {
 	switch {
 	case ev.Type == "session.created":
 		return Outcome{Kind: Ready}
-	case ev.Type == "error":
+	case ev.Type == "session.updated":
+		return Outcome{Kind: Configured}
+	case ev.Type == "error" || strings.HasSuffix(ev.Type, "transcription.failed"):
 		msg := ev.Error.Message
 		if msg == "" {
 			msg = ev.Message
@@ -178,7 +197,11 @@ func Decode(raw []byte) Outcome {
 	case strings.HasSuffix(ev.Type, "transcription.delta"):
 		return Outcome{Kind: PartialDelta, Delta: ev.Delta}
 	case strings.HasSuffix(ev.Type, "transcription.completed"):
-		return Outcome{Kind: Final, Text: ev.Transcript}
+		text := ev.Text
+		if text == "" {
+			text = ev.Transcript
+		}
+		return Outcome{Kind: Final, Text: text}
 	default:
 		return Outcome{Kind: Ignore}
 	}

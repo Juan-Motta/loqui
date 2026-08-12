@@ -184,6 +184,35 @@ func (f *fakeOpenAI) waitForAudio(n int, d time.Duration) bool {
 	return false
 }
 
+func (f *fakeOpenAI) countType(want string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, raw := range f.texts {
+		var msg struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(raw), &msg) == nil && msg.Type == want {
+			count++
+		}
+	}
+	return count
+}
+
+func (f *fakeOpenAI) waitForType(want string, n int, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if f.countType(want) >= n {
+			return true
+		}
+		select {
+		case <-f.updates:
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	return false
+}
+
 // requestedSubprotocols is what the client offered in the handshake — where this API's credential goes.
 func (f *fakeOpenAI) requestedSubprotocols() string {
 	f.mu.Lock()

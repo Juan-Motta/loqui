@@ -24,6 +24,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/azureopenai"
 	"github.com/Juan-Motta/loqui-go/internal/stt/elevenlabs"
 	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
 	"github.com/Juan-Motta/loqui-go/internal/stt/openai"
@@ -200,6 +201,55 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 	// look up the wrapper and leave the sentence inside it Spanish.
 	locale := s.bootstrap.Payload().Locale
 	message := s.phrase(locale, conn.Message)
+	if shownCode != "" {
+		return s.probeFailed("", "%s (%s)", message, shownCode)
+	}
+	return s.probeFailed("", "%s", message)
+}
+
+// TestAzureOpenAIConnection tests the values currently visible in the Azure OpenAI form; they need
+// not be saved yet. A successful result proves Azure accepted both the credential and session.update.
+func (s *SettingsService) TestAzureOpenAIConnection(resource, deployment, secret string) ProbeResult {
+	resource = strings.TrimSpace(resource)
+	deployment = strings.TrimSpace(deployment)
+	if resource == "" {
+		return s.probeFailed("resource", "el recurso de Azure OpenAI es obligatorio")
+	}
+	if _, err := azureopenai.BuildEndpoint(resource); err != nil {
+		return s.probeFailed("resource", "%v", err)
+	}
+	if deployment == "" {
+		return s.probeFailed("deployment", "el deployment de Azure OpenAI es obligatorio")
+	}
+	key, source, res, ok := s.resolveKey(store.SlotAzureOpenAI, secret)
+	if !ok {
+		return res
+	}
+	s.logLine("PROBE", fmt.Sprintf("slot=%s resource=%s deployment=%s source=%s", store.SlotAzureOpenAI, resource, deployment, source))
+	ctx, cancel := context.WithTimeout(context.Background(), s.httpTimeout())
+	defer cancel()
+	var conn stt.ProbeResult
+	if s.azureOpenAIProbe != nil {
+		conn = s.azureOpenAIProbe(ctx, key, resource, deployment)
+	} else {
+		conn = azureopenai.TestConnection(ctx, key, azureopenai.ProbeOptions{Resource: resource, Deployment: deployment})
+	}
+	shownCode := safeProviderCode(conn.Code, key)
+	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", store.SlotAzureOpenAI, conn.OK, shownCode))
+	if conn.OK {
+		p := s.bootstrap.Payload()
+		return ProbeResult{OK: true, Message: s.phrase(p.Locale, conn.Message), Payload: p}
+	}
+	if ctx.Err() != nil {
+		return s.probeFailed("", "Azure OpenAI no respondió a tiempo (%s) — comprueba tu conexión a internet", s.httpTimeout())
+	}
+	if conn.Detail != "" {
+		s.logLine("PROBE-NET", fmt.Sprintf("slot=%s resource=%s: %s", store.SlotAzureOpenAI, resource, conn.Detail))
+	}
+	if conn.Code == "network" {
+		return s.probeFailed("", "No se pudo contactar con Azure OpenAI — comprueba tu conexión a internet. El detalle técnico está en el registro")
+	}
+	message := s.phrase(s.bootstrap.Payload().Locale, conn.Message)
 	if shownCode != "" {
 		return s.probeFailed("", "%s (%s)", message, shownCode)
 	}

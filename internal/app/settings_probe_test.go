@@ -16,6 +16,36 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
 )
 
+func TestAzureOpenAIProbeUsesTheUnsavedResourceAndDeployment(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _, _, _ := probeService(t, st)
+	var gotResource, gotDeployment, gotKey string
+	svc.azureOpenAIProbe = func(_ context.Context, key, resource, deployment string) stt.ProbeResult {
+		gotKey, gotResource, gotDeployment = key, resource, deployment
+		return stt.ProbeResult{OK: true, Kind: stt.ProbeOK, Message: "Conexión correcta"}
+	}
+
+	res := svc.TestAzureOpenAIConnection(" recurso-nuevo ", " deployment-nuevo ", " clave-nueva ")
+	if !res.OK {
+		t.Fatalf("probe failed: %+v", res)
+	}
+	if gotResource != "recurso-nuevo" || gotDeployment != "deployment-nuevo" || gotKey != "clave-nueva" {
+		t.Errorf("probe inputs = resource=%q deployment=%q key=%q", gotResource, gotDeployment, gotKey)
+	}
+}
+
+func TestAzureOpenAIProbeValidatesBeforeReadingTheStoredKey(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _, _, spy := probeService(t, st)
+	res := svc.TestAzureOpenAIConnection("bad.example/path", "deployment", "")
+	if res.OK || res.Field != "resource" {
+		t.Fatalf("result = %+v", res)
+	}
+	if spy.count() != 0 {
+		t.Errorf("stored-key reads = %d, want zero", spy.count())
+	}
+}
+
 // fakeDoer stands in for the network. It counts calls, so a test can assert that a rejected probe
 // never left the machine — "cero HTTP" is half of what most of these cases are about.
 type fakeDoer struct {
@@ -569,10 +599,13 @@ func TestProbeDistinguishesGivingUpFromBeingRejected(t *testing.T) {
 // test leaves a button that refuses; a prober for a slot nothing reads would send a credential to a
 // service the app never uses.
 //
-// azure-openai satisfies this by being in neither: its subservice is not ported.
+// Azure OpenAI uses a dedicated binding because its probe needs resource+deployment as well as key.
 func TestEveryStorableSlotHasAProber(t *testing.T) {
 	for _, slot := range store.AllKeySlots {
 		_, hasProbe := probers[slot]
+		if slot == store.SlotAzureOpenAI {
+			hasProbe = true
+		}
 		storable := store.IsAvailableKeySlot(slot)
 		if hasProbe != storable {
 			t.Errorf("slot %q: prober=%v storable=%v — the two lists disagree", slot, hasProbe, storable)

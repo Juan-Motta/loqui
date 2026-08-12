@@ -82,10 +82,9 @@ var knownSlots = func() map[KeySlot]bool {
 
 // availableKeySlots is the credentials the app can actually USE today.
 //
-// It is not derivable from provider availability, and that is the whole point: "azure" is an
-// available provider, but only through its SPEECH subservice. azure-openai is Azure's realtime
-// service, which is not ported — so a key stored there would never be read, while the settings page
-// happily offers to store one.
+// It is not derivable from provider availability, and that is the whole point: Azure exposes two
+// independently authenticated services under one provider card, and both runtime slots must remain
+// explicit here.
 //
 // KEEP IT IN STEP WITH WHAT IS PORTED. This list was written when only Azure Speech and Grok existed
 // and was not widened when OpenAI and ElevenLabs landed, so SetKey and SaveConnection refused their
@@ -95,6 +94,7 @@ var knownSlots = func() map[KeySlot]bool {
 // is listed here, and its converse fails if a slot is listed that nothing reads.
 var availableKeySlots = map[KeySlot]bool{
 	SlotAzureSpeech: true,
+	SlotAzureOpenAI: true,
 	SlotGrok:        true,
 	SlotOpenAI:      true,
 	SlotElevenLabs:  true,
