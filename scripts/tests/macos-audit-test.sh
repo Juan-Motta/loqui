@@ -18,6 +18,10 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" \
   "$app/Contents/Frameworks" "$app/Contents/Resources" "$fake_bin"
 
 cp "$repo_root/build/darwin/Info.plist" "$app/Contents/Info.plist"
+# Keep this audit fixture independent of the repository's current release version. The test
+# exercises explicit --version matching below, while patch-plists-test covers release propagation.
+plutil -replace CFBundleShortVersionString -string 0.1.0 "$app/Contents/Info.plist"
+plutil -replace CFBundleVersion -string 0.1.0 "$app/Contents/Info.plist"
 cp "$repo_root/build/darwin/icons.icns" "$app/Contents/Resources/icons.icns"
 put_file "$app/Contents/MacOS/loqui"
 for helper in globe-listener macos-stt whisper-stt; do

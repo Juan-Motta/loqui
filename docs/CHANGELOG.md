@@ -4,6 +4,12 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Loqui v0.1.1 release — 2026-08-12
+
+- **The intuitive bilingual installer is prepared for public release as `v0.1.1`.** Stable macOS
+  bundle metadata now carries `0.1.1`; the protected release workflow will build, sign, notarize,
+  verify, and publish the immutable DMG only from the merged `main` commit.
+
 ## Intuitive bilingual DMG installer — 2026-08-12
 
 - **Installing Loqui now explains itself.** The DMG opens in a compact branded Finder window with

@@ -1,26 +1,31 @@
 # Continuity — session handoff
 
-- **Focus:** Ship the verified intuitive bilingual drag-to-Applications DMG installer through a PR
-  from `feat/intuitive-dmg-installer`, without creating a tag or GitHub Release.
+- **Focus:** Publish the merged intuitive bilingual DMG installer as immutable GitHub Release
+  `v0.1.1` through the protected manual Release Action.
 
-- **NEXT STEP:** Review and merge the open PR for `feat/intuitive-dmg-installer`; use
-  `gh pr view feat/intuitive-dmg-installer` to obtain its current URL and checks.
+- **NEXT STEP:** Merge the verified `release/v0.1.1` version-bump PR into `main`; revalidate that
+  tag/Release `v0.1.1` remain absent; dispatch `.github/workflows/release.yml` exactly once from
+  the merged `main` SHA; approve the protected `release` Environment and monitor to completion.
 
-- **Blockers:** none.
+- **Blockers:** none. The Environment approval may require the repository owner when the protected
+  job reaches its deployment gate.
 
-- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). E2E evidence:
-  `docs/e2e/reports/2026-08-11-intuitive-dmg-installer.md` with `VERDICT: PASS`.
+- **Active workflow:** `.workflow/state.md` (`new-feature`, standard profile, phase `ship`).
+  Pre-publication E2E evidence:
+  `docs/e2e/reports/2026-08-12-loqui-v0.1.1-release.md` with `VERDICT: PASS`.
 
 - **Handoff notes:**
-  - The owner authorized commit, push, and PR creation after local preparation and verification.
-    The ship commit contains the feature, durable E2E evidence, changelog, solution note, and this
-    handoff. No tag, version, or GitHub Release mutation belongs to this workflow.
-  - Fresh `CI=true ./scripts/task.sh check` exited 0 and `shared/scripts/check-gates.sh` reports all
-    six standard boxes checked. Final whole-branch review is recorded in `.workflow/state.md`.
-  - One real Developer ID DMG passed signing, notarization, staple, Gatekeeper, mounted signature/
-    DR/audit/Retina/Finder checks, and controlled Finder copy. The owner approved the final native
-    660 × 384 Finder window, clean arrow, and user-level path-strip/vertical indicator.
-  - Public `v0.1.0` remains unchanged at `50f53f7bcc3d35637df96cda106a6ea8e1ea97da`
-    with exactly the canonical DMG and checksum assets; `/Applications/Loqui.app` was untouched.
+  - Owner selected patch version `0.1.1`. Before preparation, its branch, remote tag, and GitHub
+    Release were all absent; two E2E observations reconfirmed tag/Release absence.
+  - `build/config.yml` and both Darwin plist files carry `0.1.1`; the canonical public artifact is
+    `Loqui-0.1.1-macos-arm64.dmg`.
+  - TDD captured stale-plist RED before the official generator produced GREEN. The full gate also
+    exposed two tests coupled to the old public version; their focused REDs were captured and their
+    fixtures were made release-independent.
+  - Fresh `CI=true ./scripts/task.sh check` exited 0 after both fixes, including the real DMG
+    integration and `hdiutil verify` VALID. Bash syntax and ShellCheck pass on both modified tests.
+  - No `v0.1.1` tag, GitHub Release, workflow run, or public asset has been created yet. Never
+    delete or move `v0.1.0`; ambiguous publication state must be inspected, not cleaned up.
+  - After public verification, update README.md and README.es.md download metadata in a normal PR.
 
 - **Updated:** 2026-08-12
