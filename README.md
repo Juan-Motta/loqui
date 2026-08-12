@@ -14,10 +14,10 @@ Loqui turns your voice into text in any macOS app. Hold the configured key, spea
 
 [**Download the latest Loqui release**](https://github.com/Juan-Motta/loqui/releases/latest)
 
-The current release is **v0.1.0**:
+The current release is **v0.1.1**:
 
-- App: [Loqui-0.1.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.1.0/Loqui-0.1.0-macos-arm64.dmg)
-- Checksum: [Loqui-0.1.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.1.0/Loqui-0.1.0-macos-arm64.dmg.sha256)
+- App: [Loqui-0.1.1-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg)
+- Checksum: [Loqui-0.1.1-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg.sha256)
 
 Loqui requires an Apple Silicon Mac. The app declares macOS 14 as its minimum runtime version, while public releases are currently tested on macOS 26. Apple Speech is available only on macOS 26 or newer.
 
@@ -245,10 +245,10 @@ On success, verify that the tag targets the recorded commit and that the public 
 If publication reports ambiguous residual state, inspect before changing anything:
 
 ```bash
-gh release view v0.1.0
-git ls-remote --tags origin refs/tags/v0.1.0
+gh release view vX.Y.Z
+git ls-remote --tags origin refs/tags/vX.Y.Z
 ```
 
-The Action never deletes. Only when inspection proves a partial and unannounced draft/tag may a maintainer deliberately run `gh release delete v0.1.0 --cleanup-tag --yes` and dispatch again. Never delete a public release; supersede a bad public build with a new patch version.
+The Action never deletes. Only when inspection proves a partial and unannounced draft/tag may a maintainer deliberately run `gh release delete vX.Y.Z --cleanup-tag --yes` and dispatch again. Never delete a public release; supersede a bad public build with a new patch version.
 
 </details>

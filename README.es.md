@@ -14,10 +14,10 @@ Loqui convierte tu voz en texto dentro de cualquier aplicación de macOS. Manté
 
 [**Descargar la versión más reciente de Loqui**](https://github.com/Juan-Motta/loqui/releases/latest)
 
-La versión actual es **v0.1.0**:
+La versión actual es **v0.1.1**:
 
-- Aplicación: [Loqui-0.1.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.1.0/Loqui-0.1.0-macos-arm64.dmg)
-- Suma de verificación: [Loqui-0.1.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.1.0/Loqui-0.1.0-macos-arm64.dmg.sha256)
+- Aplicación: [Loqui-0.1.1-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg)
+- Suma de verificación: [Loqui-0.1.1-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg.sha256)
 
 Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como versión mínima de ejecución, mientras que la versión pública actual se ha probado en macOS 26. Apple Speech solo está disponible en macOS 26 o posterior.
 
@@ -245,10 +245,10 @@ Si finaliza correctamente, verifica que el tag apunte al commit registrado y que
 Si la publicación informa un estado residual ambiguo, inspecciónalo antes de modificar nada:
 
 ```bash
-gh release view v0.1.0
-git ls-remote --tags origin refs/tags/v0.1.0
+gh release view vX.Y.Z
+git ls-remote --tags origin refs/tags/vX.Y.Z
 ```
 
-La Action nunca elimina contenido. Solo cuando la inspección demuestre que hay un draft/tag parcial y no anunciado, un mantenedor puede ejecutar deliberadamente `gh release delete v0.1.0 --cleanup-tag --yes` y volver a iniciar el workflow. Nunca elimines un release público; reemplaza un build público defectuoso con una nueva versión patch.
+La Action nunca elimina contenido. Solo cuando la inspección demuestre que hay un draft/tag parcial y no anunciado, un mantenedor puede ejecutar deliberadamente `gh release delete vX.Y.Z --cleanup-tag --yes` y volver a iniciar el workflow. Nunca elimines un release público; reemplaza un build público defectuoso con una nueva versión patch.
 
 </details>
