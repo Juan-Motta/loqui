@@ -60,20 +60,43 @@ func BuildSessionUpdate(model, language string) ([]byte, error) {
 	return BuildSessionUpdateWithManualCommit(model, language, false)
 }
 
+// SessionUpdateOptions holds the model-specific portion of the shared GA transcription envelope.
+// Azure supplies a deployment in Model and uses either Language or Languages depending on the base
+// model; public OpenAI continues to use the singular field through the compatibility wrappers below.
+type SessionUpdateOptions struct {
+	Model        string
+	Language     string
+	Languages    []string
+	ManualCommit bool
+}
+
 // BuildSessionUpdateWithManualCommit builds the GA transcription session payload while making the
 // turn policy explicit. Public OpenAI uses server VAD; Azure's gpt-realtime-whisper deployment
 // rejects VAD and requires the client to commit its audio buffer.
 func BuildSessionUpdateWithManualCommit(model, language string, manualCommit bool) ([]byte, error) {
-	m := strings.TrimSpace(model)
+	return BuildSessionUpdateWithOptions(SessionUpdateOptions{
+		Model:        model,
+		Language:     language,
+		ManualCommit: manualCommit,
+	})
+}
+
+// BuildSessionUpdateWithOptions builds the shared GA transcription session while allowing the
+// narrow model-specific language shape to remain explicit.
+func BuildSessionUpdateWithOptions(opts SessionUpdateOptions) ([]byte, error) {
+	m := strings.TrimSpace(opts.Model)
 	if m == "" {
 		m = DefaultModel
 	}
 	transcription := map[string]any{"model": m}
-	if language != "" {
-		transcription["language"] = language
+	if opts.Language != "" {
+		transcription["language"] = opts.Language
+	}
+	if len(opts.Languages) > 0 {
+		transcription["languages"] = opts.Languages
 	}
 	var turnDetection any = map[string]any{"type": "server_vad"}
-	if manualCommit {
+	if opts.ManualCommit {
 		turnDetection = nil
 	}
 	return json.Marshal(map[string]any{

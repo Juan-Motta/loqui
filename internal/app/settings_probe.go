@@ -209,7 +209,7 @@ func (s *SettingsService) TestConnection(slot string, region string, secret stri
 
 // TestAzureOpenAIConnection tests the values currently visible in the Azure OpenAI form; they need
 // not be saved yet. A successful result proves Azure accepted both the credential and session.update.
-func (s *SettingsService) TestAzureOpenAIConnection(resource, deployment, secret string) ProbeResult {
+func (s *SettingsService) TestAzureOpenAIConnection(resource, deployment, model, secret string) ProbeResult {
 	resource = strings.TrimSpace(resource)
 	deployment = strings.TrimSpace(deployment)
 	if resource == "" {
@@ -221,6 +221,11 @@ func (s *SettingsService) TestAzureOpenAIConnection(resource, deployment, secret
 	if deployment == "" {
 		return s.probeFailed("deployment", "el deployment de Azure OpenAI es obligatorio")
 	}
+	var err error
+	model, err = settings.NormalizeAzureOpenAIModel(model)
+	if err != nil {
+		return s.probeFailed("model", "%v", err)
+	}
 	key, source, res, ok := s.resolveKey(store.SlotAzureOpenAI, secret)
 	if !ok {
 		return res
@@ -230,9 +235,9 @@ func (s *SettingsService) TestAzureOpenAIConnection(resource, deployment, secret
 	defer cancel()
 	var conn stt.ProbeResult
 	if s.azureOpenAIProbe != nil {
-		conn = s.azureOpenAIProbe(ctx, key, resource, deployment)
+		conn = s.azureOpenAIProbe(ctx, key, resource, deployment, model)
 	} else {
-		conn = azureopenai.TestConnection(ctx, key, azureopenai.ProbeOptions{Resource: resource, Deployment: deployment})
+		conn = azureopenai.TestConnection(ctx, key, azureopenai.ProbeOptions{Resource: resource, Deployment: deployment, Model: model})
 	}
 	shownCode := safeProviderCode(conn.Code, key)
 	s.logLine("PROBE-DONE", fmt.Sprintf("slot=%s ok=%t code=%s", store.SlotAzureOpenAI, conn.OK, shownCode))

@@ -23,6 +23,7 @@ func TestAzureOpenAIControlsUseTheirDedicatedBindingsAndDynamicSlot(t *testing.T
 		"Settings.SaveOpenAIConnection(",
 		"azureOpenAiResource",
 		"azureOpenAiDeployment",
+		"azureOpenAiModel",
 		`case "set-service":`,
 		`case "set-resource":`,
 		`case "set-deployment":`,
@@ -33,6 +34,17 @@ func TestAzureOpenAIControlsUseTheirDedicatedBindingsAndDynamicSlot(t *testing.T
 	}
 	if strings.Contains(source, "const slot = KEY_SLOT_BY_PROVIDER[provider]") {
 		t.Error("connection handlers still capture Azure Speech's slot before the user changes the subservice")
+	}
+	deploymentCaseStart := strings.Index(source, `case "set-deployment":`)
+	if deploymentCaseStart < 0 {
+		t.Fatal("Azure debug driver is missing its deployment action")
+	}
+	modelCaseOffset := strings.Index(source[deploymentCaseStart:], `case "set-model":`)
+	if modelCaseOffset < 0 || !strings.Contains(
+		source[deploymentCaseStart:deploymentCaseStart+modelCaseOffset],
+		`live: "gpt-live-transcribe"`,
+	) {
+		t.Error("Azure debug driver cannot select the real gpt-live-transcribe deployment")
 	}
 }
 
@@ -45,7 +57,9 @@ func TestHomeNamesBothAzureProductsInsteadOfCallingThemBothAzureSpeech(t *testin
 	for _, required := range []string{
 		`value="azure-speech"`,
 		`value="azure-openai"`,
-		`Azure OpenAI Realtime Whisper`,
+		`id="azureOpenAiModel"`,
+		`value="gpt-realtime-whisper"`,
+		`value="gpt-live-transcribe"`,
 	} {
 		if !strings.Contains(markup, required) {
 			t.Errorf("Home engine picker is missing %q", required)
@@ -56,7 +70,14 @@ func TestHomeNamesBothAzureProductsInsteadOfCallingThemBothAzureSpeech(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"prov.state", "prov.selected"} {
+	for _, required := range []string{
+		"prov.state",
+		"prov.selected",
+		"p.azureOpenAiModel",
+		"azureOpenAiHomeLabel",
+		"Settings.SaveAzureConnection(service, regionValue, resource, deployment, model, secret)",
+		"Settings.TestAzureOpenAIConnection(resource, deployment, model, secret)",
+	} {
 		if !strings.Contains(string(source), required) {
 			t.Errorf("Home picker does not consume backend-owned selection metadata %q", required)
 		}

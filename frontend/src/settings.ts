@@ -506,6 +506,12 @@ const ENGINE_LABELS: Map<string, string> = new Map(
   ]),
 );
 
+function azureOpenAiHomeLabel(model: string): string {
+  return model === "gpt-live-transcribe"
+    ? "Azure OpenAI GPT Live Transcribe"
+    : "Azure OpenAI GPT Realtime Whisper";
+}
+
 function escapeHtml(s: string): string {
   return s.replace(
     /[&<>"]/g,
@@ -578,7 +584,10 @@ function paint(p: SettingsPayload): boolean {
       // the rebuilt options re-appended the suffix every time.
       home.innerHTML = providers
         .map((prov) => {
-          const label = escapeHtml(t(ENGINE_LABELS.get(prov.id) ?? prov.id));
+          const baseLabel = prov.id === "azure-openai"
+            ? azureOpenAiHomeLabel(p.azureOpenAiModel)
+            : (ENGINE_LABELS.get(prov.id) ?? prov.id);
+          const label = escapeHtml(t(baseLabel));
           const state = prov.state || stateById.get(prov.id)?.state;
           // Three different "cannot use this", kept distinct because the way out of each differs:
           // not ported YET (wait for a release), cannot run on THIS machine (nothing will fix it),
@@ -711,6 +720,9 @@ function paint(p: SettingsPayload): boolean {
   if (azureResource) azureResource.value = p.azureOpenAiResource;
   const azureDeployment = $<HTMLInputElement>("azureOpenAiDeployment");
   if (azureDeployment) azureDeployment.value = p.azureOpenAiDeployment;
+  const azureOpenAiModel = $<HTMLSelectElement>("azureOpenAiModel");
+  if (azureOpenAiModel)
+    azureOpenAiModel.value = p.azureOpenAiModel || "gpt-realtime-whisper";
   const openaiModel = $<HTMLSelectElement>("openaiModel");
   if (openaiModel) openaiModel.value = p.openAiModel || "gpt-realtime-whisper";
 
@@ -974,7 +986,7 @@ function markInvalid(card: HTMLElement | null, provider: string, field: string):
           : field === "service"
             ? "azureService"
             : field === "model"
-              ? "openaiModel"
+              ? provider === "azure" ? "azureOpenAiModel" : "openaiModel"
               : "";
   const input = id ? $<HTMLElement>(id) : null;
   if (!input) return;
@@ -1134,6 +1146,7 @@ async function probe(
     const azureServiceOnScreen = $<HTMLSelectElement>("azureService")?.value;
     const azureResourceOnScreen = $<HTMLInputElement>("azureOpenAiResource")?.value;
     const azureDeploymentOnScreen = $<HTMLInputElement>("azureOpenAiDeployment")?.value;
+    const azureModelOnScreen = $<HTMLSelectElement>("azureOpenAiModel")?.value;
     // Not painted from the payload — no state disables it, by design — so it releases itself.
     trigger.disabled = false;
     setBusy(trigger, false);
@@ -1163,6 +1176,9 @@ async function probe(
       const deploymentInput = $<HTMLInputElement>("azureOpenAiDeployment");
       if (deploymentInput && azureDeploymentOnScreen !== undefined)
         deploymentInput.value = azureDeploymentOnScreen;
+      const modelSelect = $<HTMLSelectElement>("azureOpenAiModel");
+      if (modelSelect && azureModelOnScreen !== undefined)
+        modelSelect.value = azureModelOnScreen;
       const openaiConfig = $<HTMLElement>("openaiConfig");
       const speechConfig = $<HTMLElement>("speechConfig");
       if (openaiConfig) openaiConfig.hidden = azureServiceOnScreen !== "openai";
@@ -1355,6 +1371,7 @@ function wire(): void {
       if (provider === "azure" && service === "openai") {
         const resource = $<HTMLInputElement>("azureOpenAiResource")?.value ?? "";
         const deployment = $<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "";
+        const model = $<HTMLSelectElement>("azureOpenAiModel")?.value || "gpt-realtime-whisper";
         void probe(
           card,
           status,
@@ -1363,11 +1380,12 @@ function wire(): void {
           slot,
           "",
           secret,
-          () => Settings.TestAzureOpenAIConnection(resource, deployment, secret),
+          () => Settings.TestAzureOpenAIConnection(resource, deployment, model, secret),
           () =>
             ($<HTMLSelectElement>("azureService")?.value ?? "") === "openai" &&
             ($<HTMLInputElement>("azureOpenAiResource")?.value ?? "") === resource &&
-            ($<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "") === deployment,
+            ($<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "") === deployment &&
+            ($<HTMLSelectElement>("azureOpenAiModel")?.value ?? "") === model,
         );
         return;
       }
@@ -1422,6 +1440,7 @@ function wire(): void {
         : "";
       const resource = $<HTMLInputElement>("azureOpenAiResource")?.value ?? "";
       const deployment = $<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "";
+      const model = $<HTMLSelectElement>("azureOpenAiModel")?.value || "gpt-realtime-whisper";
 
       // ONE backend call, not three. Doing this as SetRegion-then-SetKey from here could commit
       // half of it: the region lands, the key write fails, and the user is left with a provider
@@ -1432,7 +1451,7 @@ function wire(): void {
         status,
         save,
         () => provider === "azure"
-          ? Settings.SaveAzureConnection(service, regionValue, resource, deployment, secret)
+          ? Settings.SaveAzureConnection(service, regionValue, resource, deployment, model, secret)
           : provider === "openai"
             ? Settings.SaveOpenAIConnection(
                 $<HTMLSelectElement>("openaiModel")?.value || "gpt-realtime-whisper",
@@ -1742,12 +1761,28 @@ function debugConnStep(step: string): string {
     }
     case "set-deployment": {
       if (provider !== "azure") return "set-deployment(rechazado: solo azure)";
-      const values: Record<string, string> = { valid: "loqui-debug-whisper", empty: "" };
+      const values: Record<string, string> = {
+        valid: "loqui-debug-whisper",
+        live: "gpt-live-transcribe",
+        empty: "",
+      };
       const token = arg ?? "valid";
-      if (!(token in values)) return "set-deployment(rechazado: usa valid|empty)";
+      if (!(token in values)) return "set-deployment(rechazado: usa valid|live|empty)";
       const input = $<HTMLInputElement>("azureOpenAiDeployment");
       if (input) input.value = values[token];
       return `set-deployment(${token})`;
+    }
+    case "set-model": {
+      if (provider !== "azure") return "set-model(rechazado: solo azure)";
+      const values: Record<string, string> = {
+        whisper: "gpt-realtime-whisper",
+        live: "gpt-live-transcribe",
+      };
+      const token = arg ?? "live";
+      if (!(token in values)) return "set-model(rechazado: usa whisper|live)";
+      const select = $<HTMLSelectElement>("azureOpenAiModel");
+      if (select) select.value = values[token];
+      return `set-model(${token})`;
     }
     case "test":
       // setKeyField, NOT key.value = …, and the difference decides whether the E2E means anything.
@@ -1883,6 +1918,8 @@ function reportCard(provider: string): Record<string, unknown> {
           ? "empty"
           : "filled"
         : "",
+    azureOpenAiModel:
+      provider === "azure" ? ($<HTMLSelectElement>("azureOpenAiModel")?.value ?? "") : "",
     eye: button(".eye-btn"),
     test: button(".conn-test"),
     use: button(".conn-use"),

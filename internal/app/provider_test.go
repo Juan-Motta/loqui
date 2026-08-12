@@ -110,6 +110,31 @@ func TestBuildAzureOpenAIRequiresItsDeployment(t *testing.T) {
 	}
 }
 
+func TestBuildAzureOpenAIRejectsAnUnknownModelBeforeReadingTheKey(t *testing.T) {
+	d := testDictation(t, "azure")
+	reads := 0
+	d.getSecret = func(store.KeySlot) (string, error) {
+		reads++
+		return "azure-openai-test", nil
+	}
+	if err := d.store.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureService = "openai"
+		cfg.AzureOpenAiResource = "mi-recurso"
+		cfg.AzureOpenAiDeployment = "mi-deployment"
+		cfg.AzureOpenAiModel = "not-a-model"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.buildProvider(1); err == nil || !strings.Contains(err.Error(), "modelo") {
+		t.Fatalf("unknown model error = %v", err)
+	}
+	if reads != 0 {
+		t.Errorf("credential reads = %d, want 0", reads)
+	}
+}
+
 // An engine this build cannot construct must say so rather than silently substituting another one:
 // dictating into the wrong service is worse than not dictating.
 //

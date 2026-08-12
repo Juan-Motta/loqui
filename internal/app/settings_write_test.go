@@ -764,12 +764,12 @@ func TestSaveAzureOpenAIConnectionStoresTheExactSubserviceConfiguration(t *testi
 	svc, vault := testService(t, st)
 	vault.set(store.SlotAzureSpeech, "speech-key")
 
-	res := svc.SaveAzureConnection("openai", "", "  mi-recurso  ", "  mi-whisper  ", "  una-clave  ")
+	res := svc.SaveAzureConnection("openai", "", "  mi-recurso  ", "  mi-whisper  ", "gpt-live-transcribe", "  una-clave  ")
 	if res.Error != "" {
 		t.Fatalf("SaveAzureConnection: %s", res.Error)
 	}
 	cfg := st.LoadSettings()
-	if cfg.AzureService != "openai" || cfg.AzureOpenAiResource != "mi-recurso" || cfg.AzureOpenAiDeployment != "mi-whisper" {
+	if cfg.AzureService != "openai" || cfg.AzureOpenAiResource != "mi-recurso" || cfg.AzureOpenAiDeployment != "mi-whisper" || cfg.AzureOpenAiModel != "gpt-live-transcribe" {
 		t.Errorf("stored Azure config = %+v", cfg)
 	}
 	if got, ok := vault.get(store.SlotAzureOpenAI); !ok || got != "una-clave" {
@@ -795,7 +795,7 @@ func TestSaveAzureSpeechConnectionKeepsTheOpenAIConfigurationSeparate(t *testing
 	svc, vault := testService(t, st)
 	vault.set(store.SlotAzureOpenAI, "openai-key")
 
-	res := svc.SaveAzureConnection("speech", " eastus2 ", "", "", " speech-key ")
+	res := svc.SaveAzureConnection("speech", " eastus2 ", "", "", "", " speech-key ")
 	if res.Error != "" {
 		t.Fatalf("SaveAzureConnection: %s", res.Error)
 	}
@@ -818,7 +818,7 @@ func TestSaveAzureOpenAIConnectionRejectsUnsafeResourceBeforeWriting(t *testing.
 	st := store.NewAt(t.TempDir())
 	svc, vault := testService(t, st)
 
-	res := svc.SaveAzureConnection("openai", "", "attacker.example/path", "deployment", "una-clave")
+	res := svc.SaveAzureConnection("openai", "", "attacker.example/path", "deployment", "gpt-realtime-whisper", "una-clave")
 	if res.Error == "" || res.Field != "resource" {
 		t.Fatalf("unsafe resource result = %+v", res)
 	}
@@ -827,6 +827,23 @@ func TestSaveAzureOpenAIConnectionRejectsUnsafeResourceBeforeWriting(t *testing.
 	}
 	if got := st.LoadSettings().AzureService; got != "speech" {
 		t.Errorf("service changed to %q on a rejected save", got)
+	}
+}
+
+func TestSaveAzureOpenAIConnectionRejectsUnknownModelBeforeWriting(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, vault := testService(t, st)
+
+	res := svc.SaveAzureConnection("openai", "", "resource", "deployment", "not-a-model", "una-clave")
+	if res.Error == "" || res.Field != "model" {
+		t.Fatalf("unknown model result = %+v", res)
+	}
+	if _, ok := vault.get(store.SlotAzureOpenAI); ok {
+		t.Error("key was written before model validation")
+	}
+	cfg := st.LoadSettings()
+	if cfg.AzureService != "speech" || cfg.AzureOpenAiModel != "gpt-realtime-whisper" {
+		t.Errorf("settings changed on rejected model: %+v", cfg)
 	}
 }
 

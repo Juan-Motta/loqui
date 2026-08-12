@@ -9,6 +9,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/stt/openai"
 )
 
@@ -45,8 +46,28 @@ func DialOptions(key string) *websocket.DialOptions {
 	return &websocket.DialOptions{HTTPHeader: header}
 }
 
-// BuildSessionUpdate names the user's Azure deployment and disables server VAD, which
-// gpt-realtime-whisper does not support.
-func BuildSessionUpdate(deployment, language string) ([]byte, error) {
-	return openai.BuildSessionUpdateWithManualCommit(deployment, language, true)
+// BuildSessionUpdate names the user's Azure deployment and selects the language field required by
+// its base model. Both supported Azure transcription models use Loqui's manual-commit lifecycle.
+func BuildSessionUpdate(model, deployment, language string) ([]byte, error) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		model = settings.AzureOpenAIRealtimeWhisper
+	}
+	model, err := settings.NormalizeAzureOpenAIModel(model)
+	if err != nil {
+		return nil, err
+	}
+	deployment = strings.TrimSpace(deployment)
+	if deployment == "" {
+		return nil, fmt.Errorf("azure openai: el deployment es obligatorio")
+	}
+	options := openai.SessionUpdateOptions{Model: deployment, ManualCommit: true}
+	if language != "" {
+		if model == settings.AzureOpenAILiveTranscribe {
+			options.Languages = []string{language}
+		} else {
+			options.Language = language
+		}
+	}
+	return openai.BuildSessionUpdateWithOptions(options)
 }

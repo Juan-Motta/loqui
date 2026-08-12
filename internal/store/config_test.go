@@ -67,6 +67,9 @@ func TestLoadSettingsMergesOntoDefaults(t *testing.T) {
 	if len(got.LanguageBySlot) == 0 {
 		t.Error("languageBySlot was blanked by a partial file")
 	}
+	if got.AzureOpenAiModel != "gpt-realtime-whisper" {
+		t.Errorf("azureOpenAiModel = %q, want the legacy realtime-whisper default", got.AzureOpenAiModel)
+	}
 }
 
 func TestSaveAndLoadRoundTrip(t *testing.T) {

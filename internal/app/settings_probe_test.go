@@ -19,30 +19,51 @@ import (
 func TestAzureOpenAIProbeUsesTheUnsavedResourceAndDeployment(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, _, _, _ := probeService(t, st)
-	var gotResource, gotDeployment, gotKey string
-	svc.azureOpenAIProbe = func(_ context.Context, key, resource, deployment string) stt.ProbeResult {
-		gotKey, gotResource, gotDeployment = key, resource, deployment
+	var gotResource, gotDeployment, gotModel, gotKey string
+	svc.azureOpenAIProbe = func(_ context.Context, key, resource, deployment, model string) stt.ProbeResult {
+		gotKey, gotResource, gotDeployment, gotModel = key, resource, deployment, model
 		return stt.ProbeResult{OK: true, Kind: stt.ProbeOK, Message: "Conexión correcta"}
 	}
 
-	res := svc.TestAzureOpenAIConnection(" recurso-nuevo ", " deployment-nuevo ", " clave-nueva ")
+	res := svc.TestAzureOpenAIConnection(" recurso-nuevo ", " deployment-nuevo ", "gpt-live-transcribe", " clave-nueva ")
 	if !res.OK {
 		t.Fatalf("probe failed: %+v", res)
 	}
-	if gotResource != "recurso-nuevo" || gotDeployment != "deployment-nuevo" || gotKey != "clave-nueva" {
-		t.Errorf("probe inputs = resource=%q deployment=%q key=%q", gotResource, gotDeployment, gotKey)
+	if gotResource != "recurso-nuevo" || gotDeployment != "deployment-nuevo" || gotModel != "gpt-live-transcribe" || gotKey != "clave-nueva" {
+		t.Errorf("probe inputs = resource=%q deployment=%q model=%q key=%q", gotResource, gotDeployment, gotModel, gotKey)
 	}
 }
 
 func TestAzureOpenAIProbeValidatesBeforeReadingTheStoredKey(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, _, _, spy := probeService(t, st)
-	res := svc.TestAzureOpenAIConnection("bad.example/path", "deployment", "")
+	res := svc.TestAzureOpenAIConnection("bad.example/path", "deployment", "gpt-realtime-whisper", "")
 	if res.OK || res.Field != "resource" {
 		t.Fatalf("result = %+v", res)
 	}
 	if spy.count() != 0 {
 		t.Errorf("stored-key reads = %d, want zero", spy.count())
+	}
+}
+
+func TestAzureOpenAIProbeRejectsUnknownModelBeforeResolvingTheKey(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _, _, spy := probeService(t, st)
+	called := false
+	svc.azureOpenAIProbe = func(context.Context, string, string, string, string) stt.ProbeResult {
+		called = true
+		return stt.ProbeResult{OK: true}
+	}
+
+	res := svc.TestAzureOpenAIConnection("resource", "deployment", "not-a-model", "")
+	if res.Error == "" || res.Field != "model" {
+		t.Fatalf("unknown model result = %+v", res)
+	}
+	if spy.count() != 0 {
+		t.Error("the credential store was read before model validation")
+	}
+	if called {
+		t.Error("the Azure probe was called for an unknown model")
 	}
 }
 

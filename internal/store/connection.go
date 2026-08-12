@@ -10,7 +10,11 @@
 // needs. That is why a key saved for one provider never makes another look ready.
 package store
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/Juan-Motta/loqui-go/internal/settings"
+)
 
 // ConnectionState is what a row can say about an engine.
 type ConnectionState string
@@ -196,7 +200,8 @@ func hasRequiredConfig(provider string, s Settings) bool {
 		return true
 	}
 	if s.AzureService == "openai" {
-		return s.AzureOpenAiResource != "" && s.AzureOpenAiDeployment != ""
+		return s.AzureOpenAiResource != "" && s.AzureOpenAiDeployment != "" &&
+			settings.IsKnownAzureOpenAIModel(s.AzureOpenAiModel)
 	}
 	return s.Region != ""
 }

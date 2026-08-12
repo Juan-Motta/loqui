@@ -11,7 +11,7 @@ import (
 	"github.com/coder/websocket"
 )
 
-func TestConnectionRequiresSessionUpdatedAndUsesAzureHandshake(t *testing.T) {
+func TestConnectionRequiresSessionUpdatedAndUsesTheSelectedModelPayload(t *testing.T) {
 	var header http.Header
 	gotUpdate := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +33,8 @@ func TestConnectionRequiresSessionUpdatedAndUsesAzureHandshake(t *testing.T) {
 	result := TestConnection(context.Background(), "secret-sentinel", ProbeOptions{
 		Endpoint:     "ws" + strings.TrimPrefix(srv.URL, "http"),
 		Deployment:   "my-whisper-deployment",
+		Model:        "gpt-live-transcribe",
+		Language:     "es",
 		ReadyTimeout: time.Second,
 	})
 
@@ -49,6 +51,9 @@ func TestConnectionRequiresSessionUpdatedAndUsesAzureHandshake(t *testing.T) {
 	case raw := <-gotUpdate:
 		if !strings.Contains(raw, `"model":"my-whisper-deployment"`) {
 			t.Errorf("session.update = %s", raw)
+		}
+		if !strings.Contains(raw, `"languages":["es"]`) || strings.Contains(raw, `"language":`) {
+			t.Errorf("gpt-live-transcribe language payload = %s", raw)
 		}
 	default:
 		t.Fatal("probe never configured the transcription session")
@@ -74,5 +79,25 @@ func TestConnectionDoesNotTreatSessionCreatedAsSuccess(t *testing.T) {
 	})
 	if result.OK {
 		t.Fatal("session.created only proves the socket opened; Azure has not accepted session.update")
+	}
+}
+
+func TestConnectionRejectsAnUnknownModelBeforeDialing(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		calls++
+	}))
+	defer srv.Close()
+
+	result := TestConnection(context.Background(), "secret", ProbeOptions{
+		Endpoint:   "ws" + strings.TrimPrefix(srv.URL, "http"),
+		Deployment: "deployment",
+		Model:      "not-a-model",
+	})
+	if result.OK || result.Code != "invalid_model" {
+		t.Fatalf("unknown model result = %+v", result)
+	}
+	if calls != 0 {
+		t.Errorf("network calls = %d, want 0", calls)
 	}
 }
