@@ -80,24 +80,15 @@ func TestRevealKeyRefusesWhatItCannotHonestlyShow(t *testing.T) {
 		}
 	})
 
-	// azure-openai is storable but not readable by any engine yet. Revealing there would show a
-	// credential nothing uses, on a card whose form is meant to be inert.
-	//
-	// THE SLOT IS SEEDED ON PURPOSE. Without a key in it the refusal comes from "nothing stored", so
-	// deleting the availability gate left this test green — it proved nothing about the gate. Caught
-	// by mutation, which is the only reason it is written this way.
-	t.Run("a slot no engine can read, WITH a key in it", func(t *testing.T) {
+	t.Run("the Azure OpenAI key can be revealed now that dictation reads it", func(t *testing.T) {
 		st := store.NewAt(t.TempDir())
 		svc, vault, _, _ := probeService(t, st)
 		vault.set(store.SlotAzureOpenAI, "una-clave-que-nada-lee")
 
 		res := svc.RevealKey("azure-openai")
 
-		if res.OK || res.Key != "" {
-			t.Errorf("an unusable slot must be refused: ok=%v key=%q", res.OK, res.Key)
-		}
-		if !strings.Contains(res.Error, "disponible") {
-			t.Errorf("error = %q — it must be the availability refusal, not 'nothing stored'", res.Error)
+		if !res.OK || res.Key != "una-clave-que-nada-lee" {
+			t.Errorf("Azure OpenAI reveal = ok=%v key=%q error=%q", res.OK, res.Key, res.Error)
 		}
 	})
 }

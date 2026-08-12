@@ -21,7 +21,9 @@ import (
 // session) or blocked PushAudio (freezing the microphone). This is now the THIRD copy, and the
 // extraction the port plan calls for is overdue — noted at the bottom of this comment.
 //
-// FOUR THINGS DIFFER, and each one is a silent failure if got wrong:
+// FOUR PUBLIC-OPENAI DEFAULTS matter, and each one is a silent failure if got wrong. Azure OpenAI
+// overrides the narrow handshake/session/readiness/commit seams in Config while sharing the bounded
+// audio and transcript lifecycle:
 //
 //  1. AUTH IS IN THE SUBPROTOCOLS, not a header. A wrong one fails the upgrade with a bare 400.
 //  2. THE SESSION MUST BE CONFIGURED BEFORE ANYTHING TRANSCRIBES. `session.update` goes out the moment
@@ -77,7 +79,7 @@ const (
 
 // Config is everything the provider needs, resolved by the caller from settings.
 type Config struct {
-	// GetKey supplies the ElevenLabs API key. Called once per session, at Start.
+	// GetKey supplies the provider API key. Called once per session, at Start.
 	GetKey func() (string, error)
 	// Language is a code the store validated for this engine, or "" to let the server detect.
 	Language string
@@ -85,6 +87,19 @@ type Config struct {
 	Model string
 	// Endpoint overrides the service URL. Only the tests set it.
 	Endpoint string
+	// ServiceName is used only in user-facing diagnostics. Empty means OpenAI.
+	ServiceName string
+	// DialOptions and SessionUpdate are the two wire seams Azure OpenAI changes. Empty preserves the
+	// public OpenAI subprotocol handshake and server-VAD session payload.
+	DialOptions   func(key string) *websocket.DialOptions
+	SessionUpdate func(model, language string) ([]byte, error)
+	// RequireSessionUpdated delays Started until the service confirms session.update.
+	RequireSessionUpdated bool
+	// CommitInterval enables client-managed audio commits. Zero leaves commits to server VAD.
+	CommitInterval time.Duration
+	// SanitizeServerErrors replaces vendor prose with fixed service-specific wording. Enable it when
+	// the remote service may echo request material in an error event.
+	SanitizeServerErrors bool
 	// Log receives diagnostics. NEVER called with transcript text or with the key.
 	Log func(tag, msg string)
 
@@ -109,6 +124,29 @@ func (c Config) audioBufferBytes() int {
 	}
 	return defaultAudioBufferBytes
 }
+
+func (c Config) serviceName() string {
+	if strings.TrimSpace(c.ServiceName) != "" {
+		return strings.TrimSpace(c.ServiceName)
+	}
+	return "OpenAI"
+}
+
+func (c Config) dialOptions(key string) *websocket.DialOptions {
+	if c.DialOptions != nil {
+		return c.DialOptions(key)
+	}
+	return &websocket.DialOptions{Subprotocols: BuildSubprotocols(key)}
+}
+
+func (c Config) sessionUpdate() ([]byte, error) {
+	if c.SessionUpdate != nil {
+		return c.SessionUpdate(c.Model, c.Language)
+	}
+	return BuildSessionUpdate(c.Model, c.Language)
+}
+
+func (c Config) manualCommit() bool { return c.CommitInterval > 0 }
 
 func orDefault(v, def time.Duration) time.Duration {
 	if v > 0 {
@@ -197,14 +235,14 @@ func (p *Provider) Start(gen int, sink stt.Sink) error {
 
 func (p *Provider) resolveKey() (string, error) {
 	if p.cfg.GetKey == nil {
-		return "", fmt.Errorf("configura la API key de OpenAI en Ajustes")
+		return "", fmt.Errorf("configura la API key de %s en Ajustes", p.cfg.serviceName())
 	}
 	key, err := p.cfg.GetKey()
 	if err != nil {
 		return "", err
 	}
 	if key == "" {
-		return "", fmt.Errorf("configura la API key de OpenAI en Ajustes")
+		return "", fmt.Errorf("configura la API key de %s en Ajustes", p.cfg.serviceName())
 	}
 	return key, nil
 }
@@ -326,6 +364,10 @@ type sessionState struct {
 	stopping bool
 	// finalized means the commit went out, so a last committed_transcript may still arrive.
 	finalized bool
+	// Manual-commit sessions need both halves. uncommittedAudio is bytes already on the remote
+	// buffer; pendingCommits is how many commit messages still owe one completed/failed outcome.
+	uncommittedAudio bool
+	pendingCommits   int
 
 	cancelCode string
 	cancelText string
@@ -354,9 +396,11 @@ func (p *Provider) run(ctx context.Context, key string) {
 	go p.read(ctx, conn)
 
 	// CONFIGURE FIRST, then everything else. Until session.update lands the service is connected and
-	// deaf: audio sent before it is discarded, and no event says so. There is no handshake event to wait
-	// for either, so a socket that is open AND configured is what "ready" means here.
+	// deaf: audio sent before it is discarded, and no event says so.
 	if !p.configure(ctx, s) {
+		return
+	}
+	if p.cfg.RequireSessionUpdated && !p.awaitConfigured(ctx, s) {
 		return
 	}
 	s.ready = true
@@ -365,15 +409,6 @@ func (p *Provider) run(ctx context.Context, key string) {
 	if !p.flushAudio(ctx, s) {
 		return
 	}
-	if s.stopping && !s.finalized {
-		p.finalizeNow(s)
-	}
-
-	// Armed even though "ready" is local here: a socket that opens and then never accepts a write, or a
-	// service that accepts the session and sends nothing at all, would otherwise hold the session open
-	// indefinitely.
-	readyTimer := time.NewTimer(p.cfg.readyTimeout())
-	defer readyTimer.Stop()
 	var finalizeTimer *time.Timer
 	defer func() {
 		if finalizeTimer != nil {
@@ -397,7 +432,27 @@ func (p *Provider) run(ctx context.Context, key string) {
 		finalizeTimer = time.NewTimer(p.cfg.finalizeTimeout())
 	}
 
+	var commitTimer *time.Timer
+	var commitC <-chan time.Time
+	if p.cfg.manualCommit() {
+		commitTimer = time.NewTimer(p.cfg.CommitInterval)
+		commitC = commitTimer.C
+		defer commitTimer.Stop()
+	}
+
 	stopCh := p.stopCh
+	if s.stopping {
+		stopCh = nil // awaitConfigured already consumed the closed stop channel
+		if commitTimer != nil {
+			commitTimer.Stop()
+			commitC = nil
+		}
+		done, ok := p.beginFinalize(ctx, s)
+		if !ok || done {
+			return
+		}
+		armFinalize()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -406,37 +461,31 @@ func (p *Provider) run(ctx context.Context, key string) {
 		case <-stopCh:
 			stopCh = nil // a closed channel is always ready; nil it to avoid a busy loop
 			s.stopping = true
-			armFinalize()
-			if s.ready {
-				// DRAIN BEFORE COMMITTING. Buffered audio may have a wake signal that has not been
-				// selected yet — select picks at random among ready cases, so the stop can win the
-				// race against its own audio. Committing first tells the service the phrase ended
-				// before it heard the end of it, and it fails intermittently rather than
-				// consistently.
-				//
-				// NOT COVERED BY A TEST, and said out loud rather than left implied: swapping these two
-				// calls passes the whole suite. Forcing the race from outside does not work — `run`
-				// observes the wake before Stop can close its channel almost every time — and a
-				// repeat-until-it-happens test passed 24 rounds with the order inverted, so it was
-				// removed for claiming coverage it did not have. Covering this needs a seam that lets a
-				// test hold audio in the buffer while the stop is processed.
-				if !p.flushAudio(ctx, s) {
-					return
-				}
-				p.finalizeNow(s)
-				armFinalize() // a fresh budget for the last completed transcript
+			if commitTimer != nil {
+				commitTimer.Stop()
+				commitC = nil
 			}
-
-		case <-readyTimer.C:
-			if !s.ready {
-				s.cancelCode = codeReadyTimeout
-				s.cancelText = "OpenAI aceptó la conexión pero no respondió a la sesión"
+			// DRAIN BEFORE COMMITTING. Buffered audio may have a wake signal that has not been
+			// selected yet — select picks at random among ready cases, so the stop can win the
+			// race against its own audio.
+			if !p.flushAudio(ctx, s) {
 				return
 			}
+			done, ok := p.beginFinalize(ctx, s)
+			if !ok || done {
+				return
+			}
+			armFinalize()
+
+		case <-commitC:
+			if s.uncommittedAudio && !p.commitAudio(ctx, s) {
+				return
+			}
+			commitTimer.Reset(p.cfg.CommitInterval)
 
 		case <-finalizeC():
 			// No final arrived. Keep what was assembled rather than holding the session open.
-			p.cfg.Log("STT", "OpenAI no envió el transcript final — cerrando con lo transcrito")
+			p.cfg.Log("STT", p.cfg.serviceName()+" no envió el transcript final — cerrando con lo transcrito")
 			return
 
 		case <-p.wake:
@@ -451,22 +500,93 @@ func (p *Provider) run(ctx context.Context, key string) {
 				// After the commit this is the expected goodbye; before it, the connection dropped.
 				if !s.finalized {
 					s.cancelCode = codeNoResponse
-					s.cancelText = "se perdió la conexión con OpenAI"
+					s.cancelText = "se perdió la conexión con " + p.cfg.serviceName()
 				}
 				return
 			}
-			if done := p.handle(ctx, s, m.out, armFinalize); done {
+			if done := p.handle(s, m.out); done {
 				return
 			}
 		}
 	}
 }
 
+// awaitConfigured waits for the acknowledgement that proves the service accepted session.update.
+// Stop participates in this wait: releasing the trigger before the acknowledgement shortens the
+// budget, but still lets a late acknowledgement flush and commit audio already captured.
+func (p *Provider) awaitConfigured(ctx context.Context, s *sessionState) bool {
+	timer := time.NewTimer(p.cfg.readyTimeout())
+	defer timer.Stop()
+	stopCh := p.stopCh
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-stopCh:
+			stopCh = nil
+			s.stopping = true
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(p.cfg.finalizeTimeout())
+		case <-timer.C:
+			s.cancelCode = codeReadyTimeout
+			s.cancelText = p.cfg.serviceName() + " no confirmó la configuración de la sesión a tiempo"
+			return false
+		case m := <-p.msgs:
+			if m.err != nil {
+				s.cancelCode = codeNoResponse
+				s.cancelText = "se perdió la conexión con " + p.cfg.serviceName() + " antes de confirmar la sesión"
+				return false
+			}
+			switch m.out.Kind {
+			case Configured:
+				return true
+			case Error:
+				if isAuthCode(m.out.Code) {
+					s.cancelCode = codeAuth
+					s.cancelText = p.cfg.serviceName() + " rechazó la API key — revísala en Ajustes"
+				} else {
+					s.cancelCode = serverErrorCode
+					s.cancelText = p.cfg.serviceName() + " rechazó la configuración de la sesión"
+				}
+				return false
+			}
+		}
+	}
+}
+
+// beginFinalize closes input. Server-VAD sessions only wait for the service's last final; a
+// manual-commit session first commits any remote bytes that have not been committed yet and then
+// waits for every outstanding commit.
+func (p *Provider) beginFinalize(ctx context.Context, s *sessionState) (done, ok bool) {
+	s.finalized = true
+	if !p.cfg.manualCommit() {
+		return false, true
+	}
+	if s.uncommittedAudio && !p.commitAudio(ctx, s) {
+		return false, false
+	}
+	return s.pendingCommits == 0, true
+}
+
+func (p *Provider) commitAudio(ctx context.Context, s *sessionState) bool {
+	if !s.uncommittedAudio {
+		return true
+	}
+	if err := p.write(ctx, s, []byte(`{"type":"input_audio_buffer.commit"}`)); err != nil {
+		return false
+	}
+	s.uncommittedAudio = false
+	s.pendingCommits++
+	return true
+}
+
 // handle folds one server message into the session. Returns true when the session is over.
-//
-// NO Ready CASE, unlike the other two providers: this service sends no handshake event this code waits
-// on, and readiness is decided locally once session.update has gone out.
-func (p *Provider) handle(ctx context.Context, s *sessionState, out Outcome, armFinalize func()) bool {
+func (p *Provider) handle(s *sessionState, out Outcome) bool {
 	switch out.Kind {
 	case PartialDelta:
 		// A FRAGMENT, not a partial. Emitting out.Delta alone would show the user one word at a time
@@ -476,19 +596,31 @@ func (p *Provider) handle(ctx context.Context, s *sessionState, out Outcome, arm
 
 	case Final:
 		s.text.commit(out.Text)
+		if p.cfg.manualCommit() && s.pendingCommits > 0 {
+			s.pendingCommits--
+		}
 		// Not terminal on its own: with server_vad the service closes every utterance, so more may
 		// follow while the key is still held. Once the stop has been processed, though, this is the last
 		// thing we were waiting for.
-		return s.finalized
+		return s.finalized && (!p.cfg.manualCommit() || s.pendingCommits == 0)
 
 	case Error:
-		s.cancelCode = serverErrorCode
-		s.cancelText = out.Error
+		s.cancelCode, s.cancelText = p.serverFailure(out)
 		return true
 
 	default:
 		return false
 	}
+}
+
+func (p *Provider) serverFailure(out Outcome) (string, string) {
+	if !p.cfg.SanitizeServerErrors {
+		return serverErrorCode, out.Error
+	}
+	if isAuthCode(out.Code) {
+		return codeAuth, p.cfg.serviceName() + " rechazó la API key — revísala en Ajustes"
+	}
+	return serverErrorCode, p.cfg.serviceName() + " rechazó la configuración o el audio de la sesión"
 }
 
 type dialFailure struct {
@@ -505,11 +637,7 @@ func (p *Provider) dial(ctx context.Context, key string) (*websocket.Conn, *dial
 	dialCtx, cancel := context.WithTimeout(ctx, p.cfg.dialTimeout())
 	defer cancel()
 
-	conn, resp, err := websocket.Dial(dialCtx, endpoint, &websocket.DialOptions{
-		// The key rides in the SUBPROTOCOLS, which is this API's client-auth scheme. Not the URL: a URL
-		// reaches logs, error messages and crash reports.
-		Subprotocols: BuildSubprotocols(key),
-	})
+	conn, resp, err := websocket.Dial(dialCtx, endpoint, p.cfg.dialOptions(key))
 	if err != nil {
 		code, message := handshakeFailure(resp, key)
 		status := 0
@@ -517,7 +645,7 @@ func (p *Provider) dial(ctx context.Context, key string) (*websocket.Conn, *dial
 			status = resp.StatusCode
 		}
 		// The status and our classification. Never the key.
-		p.cfg.Log("STT-ERR", fmt.Sprintf("el handshake con OpenAI falló (status %d) → %s", status, code))
+		p.cfg.Log("STT-ERR", fmt.Sprintf("el handshake con %s falló (status %d) → %s", p.cfg.serviceName(), status, code))
 		return nil, &dialFailure{code: code, message: message}
 	}
 	return conn, nil
@@ -558,12 +686,15 @@ func (p *Provider) flushAudio(ctx context.Context, s *sessionState) bool {
 			p.cfg.Log("STT-ERR", "no se pudo codificar el audio: "+err.Error())
 			if s.cancelCode == "" {
 				s.cancelCode = codeBadRequest
-				s.cancelText = "no se pudo codificar el audio para OpenAI"
+				s.cancelText = "no se pudo codificar el audio para " + p.cfg.serviceName()
 			}
 			return false
 		}
 		if err := p.write(ctx, s, msg); err != nil {
 			return false
+		}
+		if p.cfg.manualCommit() {
+			s.uncommittedAudio = true
 		}
 	}
 	return true
@@ -579,33 +710,23 @@ func buildAppendMessage(pcm []byte) ([]byte, error) {
 
 // configure sends session.update, which is what turns a connected socket into a transcribing one.
 func (p *Provider) configure(ctx context.Context, s *sessionState) bool {
-	msg, err := BuildSessionUpdate(p.cfg.Model, p.cfg.Language)
+	msg, err := p.cfg.sessionUpdate()
 	if err != nil {
 		p.cfg.Log("STT-ERR", "no se pudo construir session.update: "+err.Error())
-		s.cancelCode, s.cancelText = codeBadRequest, "no se pudo configurar la sesión de OpenAI"
+		s.cancelCode, s.cancelText = codeBadRequest, "no se pudo configurar la sesión de "+p.cfg.serviceName()
 		return false
 	}
 	return p.write(ctx, s, msg) == nil
-}
-
-// finalizeNow marks the stream as ended WITHOUT sending anything.
-//
-// There is no message to send: with server_vad the service decides when an utterance is over, and a
-// manual input_audio_buffer.commit while that is on is an error response — the Electron build sends
-// nothing either and simply closes. So "finalized" here means "the audio is out, we are waiting for the
-// last completed", and the finalize timer is what bounds that wait.
-func (p *Provider) finalizeNow(s *sessionState) {
-	s.finalized = true
 }
 
 func (p *Provider) write(ctx context.Context, s *sessionState, data []byte) error {
 	writeCtx, cancel := context.WithTimeout(ctx, p.cfg.writeTimeout())
 	defer cancel()
 	if err := s.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
-		p.cfg.Log("STT-ERR", "no se pudo escribir en el socket de OpenAI: "+err.Error())
+		p.cfg.Log("STT-ERR", "no se pudo escribir en el socket de "+p.cfg.serviceName()+": "+err.Error())
 		if s.cancelCode == "" {
 			s.cancelCode = codeNoResponse
-			s.cancelText = "se perdió la conexión con OpenAI"
+			s.cancelText = "se perdió la conexión con " + p.cfg.serviceName()
 		}
 		return err
 	}

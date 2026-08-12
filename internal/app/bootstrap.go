@@ -13,6 +13,7 @@
 package app
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/permissions"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
+	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
 )
 
@@ -44,9 +46,7 @@ type KeyState struct {
 	// understand why the slot reads as configured while the field is blank.
 	FromEnv bool `json:"fromEnv"`
 	// Available is whether a credential here would ever be READ. Not derivable from provider
-	// availability: "azure" is available, but only through its Speech subservice — azure-openai is
-	// the unported realtime one. Without this the settings page offers to store a key that nothing
-	// will use, and worse, its form would write it over the slot that IS in use.
+	// availability: a provider may expose multiple independently ported credential slots.
 	Available bool `json:"available"`
 	// Stored is "THIS APP holds a credential here that it can read". It is what the key field asks
 	// before showing a mask, and it is deliberately NOT `Status == KeyPresent`.
@@ -93,6 +93,7 @@ type SettingsPayload struct {
 	AzureService          string `json:"azureService"`
 	AzureOpenAiResource   string `json:"azureOpenAiResource"`
 	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
+	OpenAiModel           string `json:"openAiModel"`
 	Mode                  string `json:"mode"`
 	TriggerKey            string `json:"triggerKey"`
 	Appearance            string `json:"appearance"`
@@ -278,14 +279,47 @@ type ProviderOption struct {
 	// must show them as unavailable, because selecting one replaces a working engine with one
 	// that fails at the next dictation. SetProvider refuses them too.
 	Available bool `json:"available"`
+	// State and Selected describe this exact picker choice. Azure contributes two choices backed by
+	// one stored provider ID, so the page cannot derive either fact from ConnectionRows["azure"].
+	State    store.ConnectionState `json:"state"`
+	Selected bool                  `json:"selected"`
 }
 
-func providerOptions() []ProviderOption {
-	out := make([]ProviderOption, 0, len(store.AllProviders))
+func providerOptions(cfg store.Settings, keys map[store.KeySlot]bool, caps store.HostCapabilities) []ProviderOption {
+	out := make([]ProviderOption, 0, len(store.AllProviders)+1)
 	for _, id := range store.AllProviders {
-		out = append(out, ProviderOption{ID: id, Available: store.IsAvailableProvider(id)})
+		if id == "azure" {
+			out = append(out,
+				providerOption("azure-speech", "azure", "speech", cfg, keys, caps),
+				providerOption("azure-openai", "azure", "openai", cfg, keys, caps),
+			)
+			continue
+		}
+		out = append(out, providerOption(id, id, "", cfg, keys, caps))
 	}
 	return out
+}
+
+func providerOption(id, provider, azureService string, cfg store.Settings, keys map[store.KeySlot]bool, caps store.HostCapabilities) ProviderOption {
+	selected := cfg.Provider == provider
+	candidate := cfg
+	if provider == "azure" {
+		selected = selected && (cfg.AzureService == azureService || cfg.AzureService == "" && azureService == "speech")
+		candidate.AzureService = azureService
+	}
+	// ConnectionStateFor uses Settings.Provider to decide active vs configured. Replace it only for
+	// the inactive picker choice, leaving every readiness rule in the store as the single authority.
+	if selected {
+		candidate.Provider = provider
+	} else {
+		candidate.Provider = ""
+	}
+	return ProviderOption{
+		ID:        id,
+		Available: store.IsAvailableProvider(provider),
+		State:     store.ConnectionStateFor(provider, candidate, keys, caps),
+		Selected:  selected,
+	}
 }
 
 // livePermissions reads the three grants from the OS.
@@ -322,6 +356,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 	}
 
 	keys := b.keyStates()
+	caps := b.hostCaps()
 
 	payload := SettingsPayload{
 		Provider:              cfg.Provider,
@@ -329,6 +364,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		AzureService:          cfg.AzureService,
 		AzureOpenAiResource:   cfg.AzureOpenAiResource,
 		AzureOpenAiDeployment: cfg.AzureOpenAiDeployment,
+		OpenAiModel:           cfg.OpenAiModel,
 		Mode:                  cfg.Mode,
 		TriggerKey:            cfg.TriggerKey,
 		Appearance:            cfg.Appearance,
@@ -344,13 +380,13 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		InputDevices: devices,
 		DevicesError: devicesError,
 		DataDir:      b.store.Dir(),
-		Providers:    providerOptions(),
+		Providers:    providerOptions(cfg, presenceMap(keys), caps),
 		AzureRegions: settings.Regions,
 		// Computed from the SAME key states the payload reports, not from a second read: two reads
 		// could disagree, and a row saying "Sin configurar" beside a field saying "clave guardada" is
 		// the kind of contradiction that makes a user distrust the whole screen.
-		Connections:      store.ConnectionRows(cfg, presenceMap(keys), b.hostCaps()),
-		ProviderHint:     store.ProviderHint(cfg.Provider),
+		Connections:      store.ConnectionRows(cfg, presenceMap(keys), caps),
+		ProviderHint:     store.ProviderHint(cfg.Provider, cfg.AzureService),
 		LanguageControls: languageControls(cfg),
 		Trigger:          triggerControl(cfg),
 	}
@@ -440,6 +476,9 @@ type SettingsService struct {
 	// probers overrides the connection-test registry. Only the tests set it, and per instance rather
 	// than by mutating the package map, which two probes in flight would race on.
 	probers map[store.KeySlot]prober
+	// azureOpenAIProbe replaces the realtime socket probe in tests. The production path always uses
+	// azureopenai.TestConnection; keeping this per service avoids global test races.
+	azureOpenAIProbe func(ctx context.Context, key, resource, deployment string) stt.ProbeResult
 
 	// defaultProblem overrides the check for whether the fallback engine can run. Only the tests set
 	// it: the real one looks for a 465 MB model file on disk.

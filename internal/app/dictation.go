@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
+	"github.com/Juan-Motta/loqui-go/internal/stt/azureopenai"
 	"github.com/Juan-Motta/loqui-go/internal/stt/elevenlabs"
 	"github.com/Juan-Motta/loqui-go/internal/stt/grok"
 	"github.com/Juan-Motta/loqui-go/internal/stt/helper"
@@ -273,6 +275,9 @@ func (d *Dictation) buildProvider(gen int) (stt.Provider, error) {
 
 	switch settings.Provider {
 	case "azure":
+		if settings.AzureService == "openai" {
+			return d.buildAzureOpenAIProvider(settings)
+		}
 		if settings.Region == "" {
 			return nil, fmt.Errorf("configura la región de Azure en Ajustes")
 		}
@@ -318,6 +323,37 @@ func (d *Dictation) buildProvider(gen int) (stt.Provider, error) {
 	default:
 		return nil, fmt.Errorf("el motor %q todavía no está portado — elige otro en Ajustes", settings.Provider)
 	}
+}
+
+func (d *Dictation) buildAzureOpenAIProvider(settings store.Settings) (stt.Provider, error) {
+	if strings.TrimSpace(settings.AzureOpenAiResource) == "" {
+		return nil, fmt.Errorf("configura el recurso de Azure OpenAI en Ajustes")
+	}
+	if strings.TrimSpace(settings.AzureOpenAiDeployment) == "" {
+		return nil, fmt.Errorf("configura el deployment de Azure OpenAI en Ajustes")
+	}
+	getKey := d.keyReaderFor(store.SlotAzureOpenAI)
+	if _, err := getKey(); err != nil {
+		switch {
+		case errors.Is(err, store.ErrNoSecret):
+			return nil, fmt.Errorf("configura la API key de Azure OpenAI en Ajustes")
+		case errors.Is(err, store.ErrSecretsUnreadable):
+			return nil, fmt.Errorf("no se pudieron leer las claves guardadas — revisa %s, o pasa la clave en LOQUI_AZURE_OPENAI_KEY para probar", d.store.SecretsPath())
+		default:
+			return nil, fmt.Errorf("no se pudo leer la API key de Azure OpenAI guardada: %w", err)
+		}
+	}
+	language := d.store.LanguagesFor("azure-openai")[0]
+	if language == "auto" {
+		language = ""
+	}
+	return azureopenai.New(azureopenai.Config{
+		Resource:   settings.AzureOpenAiResource,
+		Deployment: settings.AzureOpenAiDeployment,
+		Language:   language,
+		GetKey:     getKey,
+		Log:        d.ui.Log,
+	})
 }
 
 // buildGrokProvider streams to xAI over a WebSocket. Cloud, paid by the hour, and fed by the
@@ -407,9 +443,7 @@ func (d *Dictation) buildOpenAIProvider() (stt.Provider, error) {
 	return openai.New(openai.Config{
 		GetKey:   getKey,
 		Language: language,
-		// The stored model, reused from the Azure OpenAI field the settings already carry. Empty falls
-		// back to the provider's default rather than failing.
-		Model: d.store.LoadSettings().AzureOpenAiDeployment,
+		Model: d.store.LoadSettings().OpenAiModel,
 		Log:   d.ui.Log,
 	}), nil
 }

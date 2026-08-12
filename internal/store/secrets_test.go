@@ -451,10 +451,7 @@ func TestEveryAvailableEngineThatNeedsAKeyCanStoreOne(t *testing.T) {
 // And the converse, so the list does not grow past what the app can use: a storable slot has to be one
 // some available engine actually reads. Without this half, "fix the test by adding everything" passes.
 //
-// azure-openai is the case that keeps this honest. It is a real slot with a real form in the UI, and it
-// must stay UNAVAILABLE: the realtime subservice is not ported, and app.(*Dictation).buildProvider
-// always opens Speech for "azure". A key stored there would never be read, while the page cheerfully
-// offered to store one.
+// Azure has two runtime slots, so the converse must consider both selected subservices.
 func TestNoSlotIsStorableWithoutAnEngineThatReadsIt(t *testing.T) {
 	readable := map[KeySlot]string{}
 	for _, provider := range AllProviders {
@@ -463,8 +460,10 @@ func TestNoSlotIsStorableWithoutAnEngineThatReadsIt(t *testing.T) {
 		}
 		// The RUNTIME slot, not the settings one: for Azure those differ until the realtime subservice
 		// is ported, and the runtime answer is the one that says what dictation will actually read.
-		if slot, ok := RuntimeKeySlotFor(provider); ok {
-			readable[slot] = provider
+		for _, service := range []string{"speech", "openai"} {
+			if slot, ok := RuntimeKeySlotFor(provider, service); ok {
+				readable[slot] = provider
+			}
 		}
 	}
 	for _, slot := range AllKeySlots {
@@ -473,8 +472,7 @@ func TestNoSlotIsStorableWithoutAnEngineThatReadsIt(t *testing.T) {
 				"a credential that nothing will ever use", slot)
 		}
 	}
-	if IsAvailableKeySlot(SlotAzureOpenAI) {
-		t.Error("azure-openai is storable, but the realtime subservice is not ported: buildProvider " +
-			"always opens Speech for azure, so a key stored there is dead on arrival")
+	if !IsAvailableKeySlot(SlotAzureOpenAI) {
+		t.Error("azure-openai is runnable but its credential cannot be stored")
 	}
 }

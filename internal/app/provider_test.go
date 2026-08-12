@@ -72,6 +72,44 @@ func TestBuildGrokProviderWithTheEnvKey(t *testing.T) {
 	}
 }
 
+func TestBuildAzureOpenAIProviderFromTheSelectedSubservice(t *testing.T) {
+	d := testDictation(t, "azure")
+	t.Setenv("LOQUI_AZURE_OPENAI_KEY", "azure-openai-test")
+	if err := d.store.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureService = "openai"
+		cfg.AzureOpenAiResource = "mi-recurso"
+		cfg.AzureOpenAiDeployment = "mi-whisper"
+		cfg.Region = "" // proves this path does not accidentally validate Azure Speech
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := d.buildProvider(1)
+	if err != nil {
+		t.Fatalf("building Azure OpenAI: %v", err)
+	}
+	if p == nil || !p.WantsAudio() {
+		t.Fatal("Azure OpenAI did not build a host-audio realtime provider")
+	}
+}
+
+func TestBuildAzureOpenAIRequiresItsDeployment(t *testing.T) {
+	d := testDictation(t, "azure")
+	t.Setenv("LOQUI_AZURE_OPENAI_KEY", "azure-openai-test")
+	if err := d.store.UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureService = "openai"
+		cfg.AzureOpenAiResource = "mi-recurso"
+		cfg.AzureOpenAiDeployment = ""
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.buildProvider(1); err == nil || !strings.Contains(strings.ToLower(err.Error()), "deployment") {
+		t.Fatalf("missing deployment error = %v", err)
+	}
+}
+
 // An engine this build cannot construct must say so rather than silently substituting another one:
 // dictating into the wrong service is worse than not dictating.
 //

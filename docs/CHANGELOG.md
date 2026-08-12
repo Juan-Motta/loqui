@@ -4,6 +4,18 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Azure OpenAI realtime transcription — 2026-08-12
+
+- **Azure OpenAI Realtime Whisper is now a working Azure product, not a disabled placeholder.**
+  Loqui saves and tests its independent resource, deployment and credential, uses Azure's realtime
+  transcription WebSocket protocol, and keeps Azure Speech and public OpenAI configuration intact.
+- **Home names the exact Azure engine in use.** `Azure Speech` and `Azure OpenAI Realtime Whisper`
+  are separate choices with independent readiness, while persisted settings remain backward
+  compatible through the canonical Azure provider plus its selected subservice.
+- **The wire lifecycle and native UI journey are covered end to end.** Authentication stays in the
+  header, session readiness waits for Azure acknowledgement, commits and final transcripts are
+  bounded, and no live credential value enters UI state, logs, screenshots or test evidence.
+
 ## Loqui v0.1.1 release — 2026-08-12
 
 - **The intuitive bilingual installer is prepared for public release as `v0.1.1`.** Stable macOS

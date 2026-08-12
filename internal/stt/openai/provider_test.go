@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/binary"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -17,6 +18,17 @@ type collector struct {
 	events []stt.Event
 	done   chan struct{}
 	once   sync.Once
+}
+
+func (c *collector) waitFor(kind stt.EventType, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if _, ok := c.first(kind); ok {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return false
 }
 
 func newCollector() *collector { return &collector{done: make(chan struct{})} }
@@ -84,6 +96,139 @@ func testConfig(url string) Config {
 		ReadyTimeout:    2 * time.Second,
 		WriteTimeout:    2 * time.Second,
 		FinalizeTimeout: 2 * time.Second,
+	}
+}
+
+func manualCommitConfig(url string) Config {
+	cfg := testConfig(url)
+	cfg.ServiceName = "Azure OpenAI"
+	cfg.DialOptions = func(key string) *websocket.DialOptions {
+		header := make(http.Header)
+		header.Set("api-key", key)
+		return &websocket.DialOptions{HTTPHeader: header}
+	}
+	cfg.SessionUpdate = func(model, language string) ([]byte, error) {
+		return BuildSessionUpdateWithManualCommit(model, language, true)
+	}
+	cfg.RequireSessionUpdated = true
+	cfg.CommitInterval = 40 * time.Millisecond
+	cfg.FinalizeTimeout = 500 * time.Millisecond
+	return cfg
+}
+
+func TestAConfiguredSessionIsRequiredBeforeAzureStarts(t *testing.T) {
+	allowConfigured := make(chan struct{})
+	srv := newFakeOpenAI(t, func(f *fakeOpenAI, conn *websocket.Conn) {
+		if !f.waitForSessionUpdate(2 * time.Second) {
+			return
+		}
+		<-allowConfigured
+		f.send(conn, `{"type":"session.updated"}`)
+	})
+	p := New(manualCommitConfig(srv.url))
+	c := newCollector()
+	if err := p.Start(1, c.sink); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !srv.waitForSessionUpdate(2 * time.Second) {
+		t.Fatal("session.update did not arrive")
+	}
+	if c.waitFor(stt.Started, 100*time.Millisecond) {
+		t.Fatal("Started arrived before session.updated")
+	}
+	if got := srv.header.Get("api-key"); got != "sk-test-123" {
+		t.Errorf("api-key header = %q", got)
+	}
+	close(allowConfigured)
+	if !c.waitFor(stt.Started, time.Second) {
+		t.Fatal("Started did not arrive after session.updated")
+	}
+	p.Stop()
+	c.wait(t, time.Second)
+}
+
+func TestManualCommitSendsOnlyNonEmptyBuffers(t *testing.T) {
+	committed := make(chan struct{})
+	srv := newFakeOpenAI(t, func(f *fakeOpenAI, conn *websocket.Conn) {
+		if !f.waitForSessionUpdate(2 * time.Second) {
+			return
+		}
+		f.send(conn, `{"type":"session.updated"}`)
+		if !f.waitForType("input_audio_buffer.commit", 1, 2*time.Second) {
+			return
+		}
+		f.send(conn, `{"type":"conversation.item.input_audio_transcription.completed","text":"hola"}`)
+		close(committed)
+		time.Sleep(180 * time.Millisecond)
+	})
+	p := New(manualCommitConfig(srv.url))
+	c := newCollector()
+	if err := p.Start(1, c.sink); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !c.waitFor(stt.Started, time.Second) {
+		t.Fatal("session never started")
+	}
+	p.PushAudio(pcmOf(1, 2, 3, 4))
+	select {
+	case <-committed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the non-empty remote buffer was never committed")
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := srv.countType("input_audio_buffer.commit"); got != 1 {
+		t.Errorf("commit count = %d, want exactly one; empty timer ticks must do nothing", got)
+	}
+	p.Stop()
+	c.wait(t, time.Second)
+	if final, ok := c.first(stt.Final); !ok || final.Text != "hola" {
+		t.Errorf("final = %+v, ok=%v", final, ok)
+	}
+}
+
+func TestManualCommitStopWaitsForEveryOutstandingTranscript(t *testing.T) {
+	releaseFinals := make(chan struct{})
+	oneSent := make(chan struct{})
+	srv := newFakeOpenAI(t, func(f *fakeOpenAI, conn *websocket.Conn) {
+		if !f.waitForSessionUpdate(2 * time.Second) {
+			return
+		}
+		f.send(conn, `{"type":"session.updated"}`)
+		if !f.waitForType("input_audio_buffer.commit", 2, 2*time.Second) {
+			return
+		}
+		<-releaseFinals
+		f.send(conn, `{"type":"conversation.item.input_audio_transcription.completed","text":"uno"}`)
+		close(oneSent)
+		time.Sleep(80 * time.Millisecond)
+		f.send(conn, `{"type":"conversation.item.input_audio_transcription.completed","transcript":"dos"}`)
+	})
+	p := New(manualCommitConfig(srv.url))
+	c := newCollector()
+	if err := p.Start(1, c.sink); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !c.waitFor(stt.Started, time.Second) {
+		t.Fatal("session never started")
+	}
+	p.PushAudio(pcmOf(1, 2, 3, 4))
+	if !srv.waitForType("input_audio_buffer.commit", 1, time.Second) {
+		t.Fatal("first commit missing")
+	}
+	p.PushAudio(pcmOf(5, 6, 7, 8))
+	if !srv.waitForType("input_audio_buffer.commit", 2, time.Second) {
+		t.Fatal("second commit missing")
+	}
+	p.Stop()
+	close(releaseFinals)
+	<-oneSent
+	if c.waitFor(stt.Stopped, 30*time.Millisecond) {
+		t.Fatal("session stopped after the first of two outstanding transcripts")
+	}
+	c.wait(t, time.Second)
+	final, ok := c.first(stt.Final)
+	if !ok || final.Text != "uno dos" {
+		t.Errorf("final = %q (ok=%v), want both committed transcripts", final.Text, ok)
 	}
 }
 
@@ -383,6 +528,39 @@ func TestAServerErrorEndsTheSessionWithoutRetrying(t *testing.T) {
 	}
 	if !strings.Contains(cancel.Error, "sesión inválida") {
 		t.Errorf("el mensaje del servidor no llegó: %q", cancel.Error)
+	}
+}
+
+// Azure can return provider prose after the upgrade. It must never reach the user because a vendor
+// may echo request material in that sentence; only our fixed wording and machine-readable code are
+// safe to expose.
+func TestConfiguredProviderCanSanitizeServerErrorProse(t *testing.T) {
+	const secret = "azure-secret-sentinel"
+	srv := newFakeOpenAI(t, func(f *fakeOpenAI, conn *websocket.Conn) {
+		if !f.waitForSessionUpdate(2 * time.Second) {
+			return
+		}
+		f.send(conn, `{"type":"session.updated"}`)
+		f.send(conn, `{"type":"conversation.item.input_audio_transcription.failed","error":{"code":"audio_invalid","message":"request contained azure-secret-sentinel"}}`)
+	})
+	cfg := manualCommitConfig(srv.url)
+	cfg.GetKey = func() (string, error) { return secret, nil }
+	cfg.SanitizeServerErrors = true
+	p := New(cfg)
+	c := newCollector()
+	if err := p.Start(1, c.sink); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	c.wait(t, 2*time.Second)
+	cancel, ok := c.first(stt.Canceled)
+	if !ok {
+		t.Fatalf("no Canceled event; events: %s", c.summary())
+	}
+	if strings.Contains(cancel.Error, secret) || strings.Contains(cancel.Error, "request contained") {
+		t.Fatalf("raw provider prose reached the user: %q", cancel.Error)
+	}
+	if !strings.Contains(cancel.Error, "Azure OpenAI") {
+		t.Errorf("sanitized error does not identify the service: %q", cancel.Error)
 	}
 }
 

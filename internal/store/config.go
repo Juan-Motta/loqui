@@ -58,6 +58,9 @@ type Settings struct {
 	// which is named rather than regional — the reason "azure" has two sub-services here.
 	AzureOpenAiResource   string `json:"azureOpenAiResource"`
 	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
+	// OpenAiModel belongs to the public OpenAI provider. It must not reuse Azure's deployment name:
+	// those are independent resources and changing one must never reroute the other.
+	OpenAiModel string `json:"openAiModel"`
 	// LanguageBySlot holds the dictation languages per provider slot. Per-slot because a
 	// single global list only ever worked for Azure: every other provider silently used
 	// just the first entry.
@@ -120,10 +123,9 @@ func DefaultSettings() Settings {
 			// parameter only controls how numbers and units are written out; the model
 			// transcribes any supported language either way.
 			//
-			// All four cloud slots are listed even though two of their providers are not
-			// ported yet: the settings UI paints a language control per slot, and a slot
-			// missing here falls through LanguagesFor to the "en-US" last resort — which
-			// would silently pin a cloud engine to English instead of auto-detecting.
+			// All cloud slots are explicit because the settings UI paints a language control per slot.
+			// A missing slot falls through LanguagesFor to the "en-US" last resort, which would silently
+			// pin a cloud engine to English instead of auto-detecting.
 			"grok":         {"auto"},
 			"azure-openai": {"auto"},
 			"openai":       {"auto"},
@@ -135,6 +137,7 @@ func DefaultSettings() Settings {
 		// Matching the Electron defaults so a settings.json written by either build reads the same.
 		AzureService:          "speech",
 		AzureOpenAiDeployment: "gpt-realtime-whisper",
+		OpenAiModel:            "gpt-realtime-whisper",
 	}
 }
 

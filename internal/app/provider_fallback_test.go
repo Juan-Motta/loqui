@@ -631,10 +631,8 @@ func TestChoosingTheDefaultEngineWithoutItsModelSaysSo(t *testing.T) {
 	}
 }
 
-// An Azure configured for the sub-service this build cannot run is not "active", whatever the
-// settings model says: the row follows azureService, and the engine that gets built always opens
-// Speech. Reachable from a settings file written by another version or edited by hand.
-func TestAnEngineConfiguredForAnUnrunnableSubserviceFallsBack(t *testing.T) {
+// A fully configured Azure OpenAI selection is runnable and must survive launch readiness checks.
+func TestAConfiguredAzureOpenAISubserviceDoesNotFallBack(t *testing.T) {
 	st := store.NewAt(t.TempDir())
 	svc, vault := testService(t, st)
 	// Everything the realtime sub-service would need, and nothing Speech needs.
@@ -643,6 +641,7 @@ func TestAnEngineConfiguredForAnUnrunnableSubserviceFallsBack(t *testing.T) {
 		cfg.Provider = "azure"
 		cfg.AzureService = "openai"
 		cfg.AzureOpenAiResource = "mi-recurso"
+		cfg.AzureOpenAiDeployment = "mi-whisper"
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -650,11 +649,11 @@ func TestAnEngineConfiguredForAnUnrunnableSubserviceFallsBack(t *testing.T) {
 
 	res := svc.EnsureUsableEngine()
 
-	if got := st.LoadSettings().Provider; got != "whisper" {
-		t.Errorf("provider = %q — the row said active for a service nothing will start", got)
+	if got := st.LoadSettings().Provider; got != "azure" {
+		t.Errorf("provider = %q, want azure", got)
 	}
-	if !res.Changed {
-		t.Error("Changed = false, but the engine moved")
+	if res.Changed {
+		t.Error("the runnable Azure OpenAI selection was replaced")
 	}
 }
 

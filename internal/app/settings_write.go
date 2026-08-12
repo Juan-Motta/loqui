@@ -25,6 +25,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/i18n"
 	"github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
+	"github.com/Juan-Motta/loqui-go/internal/stt/azureopenai"
 )
 
 // WriteResult is what every setter returns: the state to repaint from, plus what went wrong.
@@ -98,6 +99,13 @@ func (s *SettingsService) invalid(field string, format string, args ...any) Writ
 // SetProvider switches the active engine. Bound as Settings.SetProvider().
 func (s *SettingsService) SetProvider(provider string) WriteResult {
 	defer s.beginReadinessChange()()
+	azureService := ""
+	switch provider {
+	case "azure-speech":
+		provider, azureService = "azure", "speech"
+	case "azure-openai":
+		provider, azureService = "azure", "openai"
+	}
 	if !store.IsKnownProvider(provider) {
 		return s.failed("motor desconocido: %q", provider)
 	}
@@ -110,6 +118,9 @@ func (s *SettingsService) SetProvider(provider string) WriteResult {
 	}
 	err := s.store().UpdateSettings(func(cfg *store.Settings) error {
 		cfg.Provider = provider
+		if azureService != "" {
+			cfg.AzureService = azureService
+		}
 		return nil
 	})
 	if err != nil {
@@ -587,6 +598,123 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 		s.readinessChanged()
 	}
 	return s.ok(saveNotice(writeKey, regionID != ""))
+}
+
+// SaveAzureConnection persists the selected Azure product and the fields that address that product.
+// Speech and OpenAI use separate credentials; selecting one can never overwrite the other's key.
+func (s *SettingsService) SaveAzureConnection(service, region, resource, deployment, secret string) WriteResult {
+	defer s.beginReadinessChange()()
+	service = strings.ToLower(strings.TrimSpace(service))
+	if service != "speech" && service != "openai" {
+		return s.invalid("service", "servicio de Azure desconocido: %q", service)
+	}
+	keySlot, _ := store.KeySlotFor("azure", service)
+	if !store.IsAvailableKeySlot(keySlot) {
+		return s.failed("este servicio todavía no está disponible en esta versión")
+	}
+
+	regionID := ""
+	resource = strings.TrimSpace(resource)
+	deployment = strings.TrimSpace(deployment)
+	if service == "speech" {
+		candidate := strings.TrimSpace(region)
+		if candidate == "" {
+			candidate = s.store().LoadSettings().Region
+		}
+		if candidate == "" {
+			return s.invalid("region", "elige una región antes de guardar")
+		}
+		var err error
+		regionID, err = settings.NormalizeRegion(candidate)
+		if err != nil {
+			return s.invalid("region", "%v", err)
+		}
+	} else {
+		if resource == "" {
+			return s.invalid("resource", "el recurso de Azure OpenAI es obligatorio")
+		}
+		if _, err := azureopenai.BuildEndpoint(resource); err != nil {
+			return s.invalid("resource", "%v", err)
+		}
+		if deployment == "" {
+			return s.invalid("deployment", "el deployment de Azure OpenAI es obligatorio")
+		}
+	}
+
+	secret = strings.TrimSpace(secret)
+	writeKey := secret != ""
+	if !writeKey {
+		if res, ok := s.requireStoredKey(keySlot); !ok {
+			return res
+		}
+	} else if name := envOverrideFor(keySlot); name != "" {
+		return s.failed("esta ranura la controla la variable de entorno %s — mientras esté definida, guardar la clave aquí no cambiaría la que se usa", name)
+	}
+
+	if writeKey {
+		if err := s.secretWriter()(keySlot, secret); err != nil {
+			return s.failed("%s", secretsMessage(err))
+		}
+		s.readinessChanged()
+	}
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AzureService = service
+		if service == "speech" {
+			cfg.Region = regionID
+		} else {
+			cfg.AzureOpenAiResource = resource
+			cfg.AzureOpenAiDeployment = deployment
+		}
+		return nil
+	}); err != nil {
+		if writeKey {
+			return s.failed("la clave se guardó, pero no se pudo guardar la configuración de Azure: %v", err)
+		}
+		return s.failed("no se pudo guardar la configuración de Azure: %v", err)
+	}
+	s.readinessChanged()
+	return s.ok("Configuración de Azure guardada")
+}
+
+var openAIModels = map[string]bool{
+	"gpt-realtime-whisper":   true,
+	"gpt-4o-transcribe":      true,
+	"gpt-4o-mini-transcribe": true,
+}
+
+// SaveOpenAIConnection keeps the public OpenAI model independent from Azure's deployment name.
+func (s *SettingsService) SaveOpenAIConnection(model, secret string) WriteResult {
+	defer s.beginReadinessChange()()
+	model = strings.TrimSpace(model)
+	if !openAIModels[model] {
+		return s.invalid("model", "modelo de OpenAI desconocido: %q", model)
+	}
+	secret = strings.TrimSpace(secret)
+	writeKey := secret != ""
+	if !writeKey {
+		if res, ok := s.requireStoredKey(store.SlotOpenAI); !ok {
+			return res
+		}
+	} else if name := envOverrideFor(store.SlotOpenAI); name != "" {
+		return s.failed("esta ranura la controla la variable de entorno %s — mientras esté definida, guardar la clave aquí no cambiaría la que se usa", name)
+	}
+	if writeKey {
+		if err := s.secretWriter()(store.SlotOpenAI, secret); err != nil {
+			return s.failed("%s", secretsMessage(err))
+		}
+		s.readinessChanged()
+	}
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.OpenAiModel = model
+		return nil
+	}); err != nil {
+		if writeKey {
+			return s.failed("la clave se guardó, pero no se pudo guardar el modelo de OpenAI: %v", err)
+		}
+		return s.failed("no se pudo guardar el modelo de OpenAI: %v", err)
+	}
+	s.readinessChanged()
+	return s.ok("Configuración de OpenAI guardada")
 }
 
 // requireStoredKey answers "is there a credential for this slot already", with the same precedence

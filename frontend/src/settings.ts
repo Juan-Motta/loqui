@@ -19,9 +19,8 @@
 // repaints from whatever Go returns. No local state and no optimistic updates — the payload IS
 // the state.
 //
-// Still inert: the Azure subservice switch (speech vs openai), the language pickers, the trigger
-// key, appearance, the input device, the permission rows, About and the onboarding wizard. See
-// docs/plans/loqui-go-port.md, phase 4.
+// The Azure subservice switch and the settings listed below are wired through Go-owned rules; this
+// renderer only captures form values, invokes bindings and repaints their authoritative payload.
 import { Events } from "@wailsio/runtime";
 import { applyTranslations, currentLocale, loadTranslations, setText, t } from "./i18n.js";
 import { refreshModelRow } from "./model.js";
@@ -29,6 +28,7 @@ import * as Settings from "../bindings/github.com/Juan-Motta/loqui-go/internal/a
 import * as Dictation from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/dictationservice.js";
 import * as Links from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/linksservice.js";
 import type {
+  ProbeResult,
   SettingsPayload,
   WriteResult,
 } from "../bindings/github.com/Juan-Motta/loqui-go/internal/app/models.js";
@@ -281,11 +281,9 @@ function wireTabs(): void {
 // A card's data-provider is a PROVIDER; the credential is a key SLOT, and the two are not the same
 // list (see store.AllProviders vs store.AllKeySlots). The local engines have no credential at all.
 //
-// AZURE HAS TWO SLOTS, and only one of them is ported. The card maps to azure-speech; azure-openai
-// is the realtime subservice the #azureService select still offers. Leaving that option live while
-// this mapping ignores it meant entering an Azure OpenAI key and clicking Guardar OVERWROTE the
-// Azure Speech credential — so the option is disabled from the payload until it is wired, and the
-// backend refuses writes to unusable slots regardless of what the page does.
+// Azure has two independent credentials. Its slot is resolved from the LIVE service selector rather
+// than captured when the page loads, so changing Speech → OpenAI cannot keep reading or overwriting
+// the Speech key.
 const KEY_SLOT_BY_PROVIDER: Record<string, string> = {
   azure: "azure-speech",
   openai: "openai",
@@ -298,6 +296,45 @@ const AZURE_SERVICE_SLOT: Record<string, string> = {
   speech: "azure-speech",
   openai: "azure-openai",
 };
+
+function keySlotForProvider(provider: string): string {
+  if (provider === "azure") {
+    const service = $<HTMLSelectElement>("azureService")?.value || "speech";
+    return AZURE_SERVICE_SLOT[service] ?? "azure-speech";
+  }
+  return KEY_SLOT_BY_PROVIDER[provider] ?? "";
+}
+
+function syncAzureServiceUI(resetCredential: boolean): void {
+  const service = $<HTMLSelectElement>("azureService")?.value || "speech";
+  const openaiConfig = $<HTMLElement>("openaiConfig");
+  const speechConfig = $<HTMLElement>("speechConfig");
+  if (openaiConfig) openaiConfig.hidden = service !== "openai";
+  if (speechConfig) speechConfig.hidden = service !== "speech";
+
+  const input = $<HTMLInputElement>("key");
+  if (!input) return;
+  if (resetCredential) {
+    cancelAutoHide(input);
+    maskedFields.delete(input);
+    revealedFields.delete(input);
+    input.type = "password";
+    input.value = "";
+    input.closest(".key-field")?.classList.remove("revealed");
+  }
+  const key = (latestPayload?.keys ?? []).find((k) => k.slot === keySlotForProvider("azure"));
+  if (key?.stored && keyFieldKind(input) === "empty") {
+    input.value = KEY_MASK;
+    maskedFields.add(input);
+  }
+  const card = input.closest<HTMLElement>(".conn");
+  const label = card?.querySelector<HTMLElement>(".key-state");
+  if (label) label.textContent = keyStateLabel(key?.status, key?.fromEnv);
+  const eye = card?.querySelector<HTMLButtonElement>(".eye-btn");
+  if (eye) eye.disabled = !(key?.stored ?? false) && keyFieldKind(input) === "empty";
+  const del = card?.querySelector<HTMLButtonElement>(".conn-delete");
+  if (del) del.disabled = key?.status !== "present" || (key?.fromEnv ?? false);
+}
 
 // The key input is a different element per card, inherited from the Electron markup.
 const KEY_INPUT_BY_PROVIDER: Record<string, string> = {
@@ -488,6 +525,7 @@ function escapeHtml(s: string): string {
 // — putting a superseded state back on screen. Go stamps each payload as it STARTS being built
 // (SettingsPayload.Revision), which makes "this one is older" a fact rather than a guess.
 let paintedRevision = 0;
+let latestPayload: SettingsPayload | null = null;
 
 // Returns whether the snapshot was applied. Callers use it to keep their hands off anything this
 // function owns when it declines: if a newer payload is already on screen, that one is right.
@@ -498,6 +536,7 @@ function paint(p: SettingsPayload): boolean {
     return false;
   }
   if (p.revision > paintedRevision) paintedRevision = p.revision;
+  latestPayload = p;
 
   // The engine-check sentence is cleared by whatever paints next, and nothing else would clear it.
   // Every other status line belongs to an action that rewrites it; this one is written from an event,
@@ -540,7 +579,7 @@ function paint(p: SettingsPayload): boolean {
       home.innerHTML = providers
         .map((prov) => {
           const label = escapeHtml(t(ENGINE_LABELS.get(prov.id) ?? prov.id));
-          const state = stateById.get(prov.id)?.state;
+          const state = prov.state || stateById.get(prov.id)?.state;
           // Three different "cannot use this", kept distinct because the way out of each differs:
           // not ported YET (wait for a release), cannot run on THIS machine (nothing will fix it),
           // and not configured (add a key in Ajustes). All three are UNSELECTABLE — picking one
@@ -550,7 +589,7 @@ function paint(p: SettingsPayload): boolean {
           // usable. A <select> cannot display a value it has no option for, so removing or blanking
           // it would make the picker show a DIFFERENT engine than the one in effect — the original
           // keeps it for the same reason (pruneEngineOptions), e.g. settings copied from another Mac.
-          const isStored = prov.id === p.provider;
+          const isStored = prov.selected;
           let suffix = "";
           let disabled = "";
           if (!prov.available) {
@@ -567,7 +606,7 @@ function paint(p: SettingsPayload): boolean {
         })
         .join("");
     }
-    home.value = p.provider;
+    home.value = providers.find((prov) => prov.selected)?.id ?? p.provider;
 
     // The line under the picker, PORTED from renderEngineHint. Without it, choosing an engine that
     // needs a key looked like it worked: the picker changed, nothing complained, and the failure
@@ -637,11 +676,12 @@ function paint(p: SettingsPayload): boolean {
   const hint = $<HTMLElement>("providerHint");
   if (hint) hint.textContent = p.providerHint;
 
-  // The Azure card's subservice picker. An option whose slot the app cannot read must not be
-  // selectable: this form writes to KEY_SLOT_BY_PROVIDER["azure"], so choosing the unported
-  // subservice and saving would put its key over the one actually in use.
+  // The Azure card's subservice picker. Each product has its own credential slot and form; an
+  // option whose slot this build cannot read must remain disabled so it cannot replace a working
+  // configuration with one the runtime cannot use.
   const azureService = $<HTMLSelectElement>("azureService");
   if (azureService) {
+    azureService.value = p.azureService || "speech";
     for (const option of Array.from(azureService.options)) {
       const slot = AZURE_SERVICE_SLOT[option.value];
       const usable = slot ? (statusBySlot.get(slot)?.available ?? false) : true;
@@ -662,13 +702,17 @@ function paint(p: SettingsPayload): boolean {
       if (!usable && azureService.value === option.value)
         azureService.value = "speech";
     }
-    // The Azure OpenAI fields belong to the unported subservice; hide them while it is selected
-    // nowhere, so the form cannot collect values nothing will read.
     const openaiConfig = $<HTMLElement>("openaiConfig");
     if (openaiConfig) openaiConfig.hidden = azureService.value !== "openai";
     const speechConfig = $<HTMLElement>("speechConfig");
     if (speechConfig) speechConfig.hidden = azureService.value !== "speech";
   }
+  const azureResource = $<HTMLInputElement>("azureOpenAiResource");
+  if (azureResource) azureResource.value = p.azureOpenAiResource;
+  const azureDeployment = $<HTMLInputElement>("azureOpenAiDeployment");
+  if (azureDeployment) azureDeployment.value = p.azureOpenAiDeployment;
+  const openaiModel = $<HTMLSelectElement>("openaiModel");
+  if (openaiModel) openaiModel.value = p.openAiModel || "gpt-realtime-whisper";
 
   for (const card of document.querySelectorAll<HTMLElement>(
     ".conn[data-provider]",
@@ -697,7 +741,7 @@ function paint(p: SettingsPayload): boolean {
       badge.innerHTML = `<span class="dot"></span>${escapeHtml(row?.label ?? "")}`;
     }
 
-    const slot = KEY_SLOT_BY_PROVIDER[provider];
+    const slot = keySlotForProvider(provider);
     const key = slot ? statusBySlot.get(slot) : undefined;
 
     // "Usar este motor", by state, and the three outcomes are deliberately different:
@@ -919,8 +963,19 @@ function setBusy(control: HTMLElement | null, busy: boolean): void {
 // work it out from the message — that would be the same validation rule written twice.
 function markInvalid(card: HTMLElement | null, provider: string, field: string): void {
   if (!card || field === "") return;
-  const id =
-    field === "key" ? KEY_INPUT_BY_PROVIDER[provider] : field === "region" ? "region" : "";
+  const id = field === "key"
+    ? KEY_INPUT_BY_PROVIDER[provider]
+    : field === "region"
+      ? "region"
+      : field === "resource"
+        ? "azureOpenAiResource"
+        : field === "deployment"
+          ? "azureOpenAiDeployment"
+          : field === "service"
+            ? "azureService"
+            : field === "model"
+              ? "openaiModel"
+              : "";
   const input = id ? $<HTMLElement>(id) : null;
   if (!input) return;
   input.classList.add("invalid");
@@ -1060,6 +1115,8 @@ async function probe(
   slot: string,
   region: string,
   secret: string,
+  action?: () => Promise<ProbeResult>,
+  formStillMatches?: () => boolean,
 ): Promise<void> {
   const epoch = beginAction(card);
   say(status, "busy", t("Probando la conexión…"));
@@ -1071,7 +1128,12 @@ async function probe(
     // Read-after-write: anything already queued has to land first, or an empty key field would be
     // tested against the credential the user has just replaced.
     await writes;
-    const res = await Settings.TestConnection(slot, region, secret);
+    const res = action
+      ? await action()
+      : await Settings.TestConnection(slot, region, secret);
+    const azureServiceOnScreen = $<HTMLSelectElement>("azureService")?.value;
+    const azureResourceOnScreen = $<HTMLInputElement>("azureOpenAiResource")?.value;
+    const azureDeploymentOnScreen = $<HTMLInputElement>("azureOpenAiDeployment")?.value;
     // Not painted from the payload — no state disables it, by design — so it releases itself.
     trigger.disabled = false;
     setBusy(trigger, false);
@@ -1092,6 +1154,21 @@ async function probe(
     if (applied && select && onScreen !== undefined && select.value !== onScreen) {
       select.value = onScreen;
     }
+    if (applied && provider === "azure" && azureServiceOnScreen !== undefined) {
+      const serviceSelect = $<HTMLSelectElement>("azureService");
+      if (serviceSelect) serviceSelect.value = azureServiceOnScreen;
+      const resourceInput = $<HTMLInputElement>("azureOpenAiResource");
+      if (resourceInput && azureResourceOnScreen !== undefined)
+        resourceInput.value = azureResourceOnScreen;
+      const deploymentInput = $<HTMLInputElement>("azureOpenAiDeployment");
+      if (deploymentInput && azureDeploymentOnScreen !== undefined)
+        deploymentInput.value = azureDeploymentOnScreen;
+      const openaiConfig = $<HTMLElement>("openaiConfig");
+      const speechConfig = $<HTMLElement>("speechConfig");
+      if (openaiConfig) openaiConfig.hidden = azureServiceOnScreen !== "openai";
+      if (speechConfig) speechConfig.hidden = azureServiceOnScreen !== "speech";
+      syncAzureServiceUI(false);
+    }
     if (isCurrent(card, epoch)) {
       // A VERDICT IS ABOUT THE INPUTS IT WAS GIVEN, and the form can move while the network is busy.
       //
@@ -1104,9 +1181,11 @@ async function probe(
       // The REGION is compared too. Without it: probe Azure against eastus, switch the picker to
       // westus while it flies, and "✓ Conexión correcta" appears next to a region nobody tested.
       const keyNow = secretToSend($<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? ""));
-      const regionNow =
-        provider === "azure" ? ($<HTMLSelectElement>("region")?.value ?? "") : "";
-      if (keyNow !== secret || regionNow !== region) {
+      const azureServiceNow = $<HTMLSelectElement>("azureService")?.value || "speech";
+      const regionNow = provider === "azure" && azureServiceNow === "speech"
+        ? ($<HTMLSelectElement>("region")?.value ?? "")
+        : "";
+      if (keyNow !== secret || regionNow !== region || (formStillMatches && !formStillMatches())) {
         // Said, not swallowed: an empty status line is indistinguishable from a click that never
         // arrived. "busy" is the kind that carries no ✓ and no ✗, which is right — nothing was
         // proved or disproved about what is on screen now.
@@ -1145,11 +1224,18 @@ function wire(): void {
     );
   });
 
+  $<HTMLSelectElement>("azureService")?.addEventListener("change", () => {
+    const service = $<HTMLSelectElement>("azureService")?.value || "speech";
+    // The single Azure input is reused visually, but the secrets are not. Throw away any mask or
+    // revealed value from the previous service and repaint presence for the newly selected slot.
+    syncAzureServiceUI(true);
+    Events.Emit("ui:azure-service", { service, slot: keySlotForProvider("azure") });
+  });
+
   for (const card of document.querySelectorAll<HTMLElement>(
     ".conn[data-provider]",
   )) {
     const provider = card.dataset.provider ?? "";
-    const slot = KEY_SLOT_BY_PROVIDER[provider];
     const status = card.querySelector<HTMLElement>(".status");
 
     // "Configurar" only folds the form open; no backend call.
@@ -1204,6 +1290,7 @@ function wire(): void {
         showKeyText(keyInput);
         return;
       }
+      const slot = keySlotForProvider(provider);
       if (!slot) return;
       // A read, so it stays out of the write queue — but it WAITS for it, or the eye would show the
       // credential that a save still in flight is about to replace.
@@ -1248,6 +1335,7 @@ function wire(): void {
     // stored credential and report that the new one fails.
     const test = card.querySelector<HTMLButtonElement>(".conn-test");
     test?.addEventListener("click", () => {
+      const slot = keySlotForProvider(provider);
       if (!slot) return;
       // Captured at the click, before the wait. Read afterwards, they would be whatever the form
       // happens to hold when the queue drains rather than what the user pressed with.
@@ -1260,8 +1348,29 @@ function wire(): void {
         action: "test",
         kind: keyFieldKind(input) === "masked" ? "masked-blocked" : keyFieldKind(input),
       });
-      const regionValue =
-        provider === "azure" ? ($<HTMLSelectElement>("region")?.value ?? "") : "";
+      const service = $<HTMLSelectElement>("azureService")?.value || "speech";
+      const regionValue = provider === "azure" && service === "speech"
+        ? ($<HTMLSelectElement>("region")?.value ?? "")
+        : "";
+      if (provider === "azure" && service === "openai") {
+        const resource = $<HTMLInputElement>("azureOpenAiResource")?.value ?? "";
+        const deployment = $<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "";
+        void probe(
+          card,
+          status,
+          test,
+          provider,
+          slot,
+          "",
+          secret,
+          () => Settings.TestAzureOpenAIConnection(resource, deployment, secret),
+          () =>
+            ($<HTMLSelectElement>("azureService")?.value ?? "") === "openai" &&
+            ($<HTMLInputElement>("azureOpenAiResource")?.value ?? "") === resource &&
+            ($<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "") === deployment,
+        );
+        return;
+      }
       void probe(card, status, test, provider, slot, regionValue, secret);
     });
 
@@ -1278,6 +1387,7 @@ function wire(): void {
 
     const save = card.querySelector<HTMLButtonElement>(".conn-save");
     save?.addEventListener("click", () => {
+      const slot = keySlotForProvider(provider);
       if (!slot) return;
       const input = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
       // THE GUARD. An untouched mask is not a credential — sending it would overwrite the stored key
@@ -1306,10 +1416,12 @@ function wire(): void {
         input.type = "password";
         input.closest(".key-field")?.classList.remove("revealed");
       }
-      const regionValue =
-        provider === "azure"
-          ? ($<HTMLSelectElement>("region")?.value ?? "")
-          : "";
+      const service = $<HTMLSelectElement>("azureService")?.value || "speech";
+      const regionValue = provider === "azure" && service === "speech"
+        ? ($<HTMLSelectElement>("region")?.value ?? "")
+        : "";
+      const resource = $<HTMLInputElement>("azureOpenAiResource")?.value ?? "";
+      const deployment = $<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "";
 
       // ONE backend call, not three. Doing this as SetRegion-then-SetKey from here could commit
       // half of it: the region lands, the key write fails, and the user is left with a provider
@@ -1319,7 +1431,14 @@ function wire(): void {
         `saveConnection(${provider})`,
         status,
         save,
-        () => Settings.SaveConnection(slot, regionValue, secret),
+        () => provider === "azure"
+          ? Settings.SaveAzureConnection(service, regionValue, resource, deployment, secret)
+          : provider === "openai"
+            ? Settings.SaveOpenAIConnection(
+                $<HTMLSelectElement>("openaiModel")?.value || "gpt-realtime-whisper",
+                secret,
+              )
+            : Settings.SaveConnection(slot, regionValue, secret),
         {
           card,
           provider,
@@ -1333,6 +1452,7 @@ function wire(): void {
 
     const del = card.querySelector<HTMLButtonElement>(".conn-delete");
     del?.addEventListener("click", () => {
+      const slot = keySlotForProvider(provider);
       if (!slot) return;
       void run(
         `deleteKey(${provider})`,
@@ -1596,6 +1716,39 @@ function debugConnStep(step: string): string {
   const key = $<HTMLInputElement>(KEY_INPUT_BY_PROVIDER[provider] ?? "");
   const region = $<HTMLSelectElement>("region");
   switch (action) {
+    case "set-service": {
+      if (provider !== "azure") return "set-service(rechazado: solo azure)";
+      if (arg !== "speech" && arg !== "openai")
+        return "set-service(rechazado: usa speech|openai)";
+      const service = $<HTMLSelectElement>("azureService");
+      if (service) {
+        service.value = arg;
+        service.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      return `set-service(${arg})`;
+    }
+    case "set-resource": {
+      if (provider !== "azure") return "set-resource(rechazado: solo azure)";
+      const values: Record<string, string> = {
+        valid: "loqui-debug-resource",
+        invalid: "bad.example/path",
+        empty: "",
+      };
+      const token = arg ?? "valid";
+      if (!(token in values)) return "set-resource(rechazado: usa valid|invalid|empty)";
+      const input = $<HTMLInputElement>("azureOpenAiResource");
+      if (input) input.value = values[token];
+      return `set-resource(${token})`;
+    }
+    case "set-deployment": {
+      if (provider !== "azure") return "set-deployment(rechazado: solo azure)";
+      const values: Record<string, string> = { valid: "loqui-debug-whisper", empty: "" };
+      const token = arg ?? "valid";
+      if (!(token in values)) return "set-deployment(rechazado: usa valid|empty)";
+      const input = $<HTMLInputElement>("azureOpenAiDeployment");
+      if (input) input.value = values[token];
+      return `set-deployment(${token})`;
+    }
     case "test":
       // setKeyField, NOT key.value = …, and the difference decides whether the E2E means anything.
       //
@@ -1711,6 +1864,25 @@ function reportCard(provider: string): Record<string, unknown> {
     homeEngine: $<HTMLSelectElement>("homeEngine")?.value ?? "",
     keyState: card.querySelector<HTMLElement>(".key-state")?.textContent ?? "",
     region: $<HTMLSelectElement>("region")?.value ?? "",
+    azureService:
+      provider === "azure" ? ($<HTMLSelectElement>("azureService")?.value ?? "") : "",
+    azureKeySlot: provider === "azure" ? keySlotForProvider("azure") : "",
+    openaiFieldsShown:
+      provider === "azure" ? $<HTMLElement>("openaiConfig")?.hidden === false : false,
+    speechFieldsShown:
+      provider === "azure" ? $<HTMLElement>("speechConfig")?.hidden === false : false,
+    resourceField:
+      provider === "azure"
+        ? ($<HTMLInputElement>("azureOpenAiResource")?.value ?? "") === ""
+          ? "empty"
+          : "filled"
+        : "",
+    deploymentField:
+      provider === "azure"
+        ? ($<HTMLInputElement>("azureOpenAiDeployment")?.value ?? "") === ""
+          ? "empty"
+          : "filled"
+        : "",
     eye: button(".eye-btn"),
     test: button(".conn-test"),
     use: button(".conn-use"),

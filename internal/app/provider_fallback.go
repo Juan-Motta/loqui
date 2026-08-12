@@ -142,12 +142,10 @@ func (s *SettingsService) repairEngine(p SettingsPayload, ev repairEvidence) (en
 	if active.ID == "" {
 		return s.moveToDefault(p, ev, s.note(p.Locale, "El motor guardado (%q) no existe en esta versión", p.Provider))
 	}
-	// The row's verdict is about the credential the SETTINGS model associates with this engine, which
-	// is not always the one dictation will read: Azure's row follows the selected sub-service, while
-	// buildProvider always opens Speech. When they disagree, "active" describes a configuration that
-	// is not the one about to run — and a settings file naming the unported sub-service produces
-	// exactly that.
-	if runtime, ok := store.RuntimeKeySlotFor(active.ID); ok && string(runtime) != active.KeySlot {
+	// Keep the settings model and runtime credential lookup tied together. If a future sub-service is
+	// added to one side only, an "active" row could otherwise describe a different credential from the
+	// one dictation is about to read.
+	if runtime, ok := store.RuntimeKeySlotFor(active.ID, s.store().LoadSettings().AzureService); ok && string(runtime) != active.KeySlot {
 		return s.moveToDefault(p, ev, s.note(p.Locale, "%s está configurado para un servicio que esta versión no puede usar", active.Name))
 	}
 	if active.State == store.ConnActive {

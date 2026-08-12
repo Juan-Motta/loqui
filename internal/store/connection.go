@@ -129,18 +129,11 @@ func keySlotOrEmpty(provider, azureService string) string {
 	return ""
 }
 
-// RuntimeKeySlotFor is the slot the DICTATION path actually reads for an engine.
-//
-// It differs from KeySlotFor in exactly one place, and that difference is a fact about this build
-// rather than a design: Azure's settings row follows the selected sub-service, while the engine that
-// gets built always opens Speech (app.(*Dictation).buildProvider). Until the realtime sub-service is
-// ported, a configuration naming it describes something nothing will run — and the two functions
-// disagreeing is how that goes unnoticed. They converge again when it is ported.
-func RuntimeKeySlotFor(provider string) (KeySlot, bool) {
-	if provider == "azure" {
-		return SlotAzureSpeech, true
-	}
-	return KeySlotFor(provider, "")
+// RuntimeKeySlotFor is the credential the dictation path reads for this exact engine selection.
+// Keeping the Azure subservice explicit prevents the settings card and runtime from silently using
+// different Azure products.
+func RuntimeKeySlotFor(provider, azureService string) (KeySlot, bool) {
+	return KeySlotFor(provider, azureService)
 }
 
 // KeySlotFor is the slot a provider's key lives in, and whether it needs one at all.
@@ -203,7 +196,7 @@ func hasRequiredConfig(provider string, s Settings) bool {
 		return true
 	}
 	if s.AzureService == "openai" {
-		return s.AzureOpenAiResource != ""
+		return s.AzureOpenAiResource != "" && s.AzureOpenAiDeployment != ""
 	}
 	return s.Region != ""
 }
@@ -266,7 +259,12 @@ var providerHints = map[string]string{
 }
 
 // ProviderHint is the description of one engine, or "" for an unknown one.
-func ProviderHint(provider string) string { return providerHints[provider] }
+func ProviderHint(provider, azureService string) string {
+	if provider == "azure" && azureService == "openai" {
+		return "En la nube: requiere recurso, deployment y clave independientes de Azure OpenAI. Transcribe en tiempo real por WebSocket."
+	}
+	return providerHints[provider]
+}
 
 // ConnectionRows is every engine's row, in the order the page paints them.
 func ConnectionRows(s Settings, keys map[KeySlot]bool, caps HostCapabilities) []ConnectionRow {

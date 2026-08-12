@@ -37,6 +37,7 @@ Loqui requires an Apple Silicon Mac. The app declares macOS 14 as its minimum ru
 | Whisper | Locally | Private, offline transcription | Requires a one-time model download from **Settings → Connections**. |
 | Apple Speech | On device | Native macOS transcription | Requires macOS 26 or newer. |
 | Azure Speech | Cloud | Multilingual continuous dictation | Requires an Azure Speech key and region. |
+| Azure OpenAI Realtime | Cloud | Streaming transcription with your Azure deployment | Requires an Azure OpenAI resource, `gpt-realtime-whisper` deployment, and key. |
 | xAI / Grok | Cloud | Realtime transcription | Requires an xAI API key. |
 | OpenAI Realtime | Cloud | Realtime transcription | Requires an OpenAI API key. |
 | ElevenLabs | Cloud | Realtime transcription | Requires an ElevenLabs API key. |
@@ -62,7 +63,7 @@ Open **System Settings → Privacy & Security** to review these grants. Ad-hoc d
 
 ## Privacy and API keys
 
-Whisper and Apple Speech process audio locally. Azure Speech, xAI/Grok, OpenAI Realtime, and ElevenLabs send audio to the selected provider, subject to that provider's terms and privacy policy. Loqui uses only the engine you select.
+Whisper and Apple Speech process audio locally. Azure Speech, Azure OpenAI Realtime, xAI/Grok, OpenAI Realtime, and ElevenLabs send audio to the selected provider, subject to that provider's terms and privacy policy. Loqui uses only the engine you select.
 
 Stored provider keys live at `~/Library/Application Support/LoquiGo/secrets.json`, with file mode `0600`, in cleartext. This keeps the file readable only by your macOS user but does not encrypt its contents. Enable FileVault to protect the keys at rest if the Mac or its storage is lost.
 
@@ -74,7 +75,7 @@ For temporary development sessions, these provider-specific environment variable
 - `LOQUI_AZURE_OPENAI_KEY`
 - `LOQUI_ELEVENLABS_KEY`
 
-Each variable applies only to its matching provider. The Azure OpenAI realtime subservice is not ported, so no engine reads `LOQUI_AZURE_OPENAI_KEY` today.
+Each variable applies only to its matching provider. `LOQUI_AZURE_KEY` is for Azure Speech; `LOQUI_AZURE_OPENAI_KEY` is for the separate Azure OpenAI realtime resource and deployment.
 
 ## Development
 

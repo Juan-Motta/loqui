@@ -37,6 +37,7 @@ Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como v
 | Whisper | Local | Transcripción privada y sin conexión | Requiere descargar una vez el modelo desde **Ajustes → Conexiones**. |
 | Apple Speech | En el dispositivo | Transcripción nativa de macOS | Requiere macOS 26 o posterior. |
 | Azure Speech | Nube | Dictado multilingüe continuo | Requiere una clave y una región de Azure Speech. |
+| Azure OpenAI Realtime | Nube | Transcripción en streaming con tu deployment de Azure | Requiere un recurso de Azure OpenAI, un deployment `gpt-realtime-whisper` y una clave. |
 | xAI / Grok | Nube | Transcripción en tiempo real | Requiere una API key de xAI. |
 | OpenAI Realtime | Nube | Transcripción en tiempo real | Requiere una API key de OpenAI. |
 | ElevenLabs | Nube | Transcripción en tiempo real | Requiere una API key de ElevenLabs. |
@@ -62,7 +63,7 @@ Abre **Configuración del Sistema → Privacidad y seguridad** para revisar esto
 
 ## Privacidad y API keys
 
-Whisper y Apple Speech procesan el audio localmente. Azure Speech, xAI/Grok, OpenAI Realtime y ElevenLabs envían el audio al proveedor seleccionado, sujeto a sus términos y política de privacidad. Loqui usa únicamente el motor que elijas.
+Whisper y Apple Speech procesan el audio localmente. Azure Speech, Azure OpenAI Realtime, xAI/Grok, OpenAI Realtime y ElevenLabs envían el audio al proveedor seleccionado, sujeto a sus términos y política de privacidad. Loqui usa únicamente el motor que elijas.
 
 Las claves guardadas viven en `~/Library/Application Support/LoquiGo/secrets.json`, con modo de archivo `0600`, en texto plano. Esto limita la lectura del archivo a tu usuario de macOS, pero no cifra su contenido. Activa FileVault para proteger las claves en reposo si se pierde la Mac o su almacenamiento.
 
@@ -74,7 +75,7 @@ Para sesiones temporales de desarrollo, estas variables de entorno específicas 
 - `LOQUI_AZURE_OPENAI_KEY`
 - `LOQUI_ELEVENLABS_KEY`
 
-Cada variable corresponde únicamente a su proveedor. El subservicio Azure OpenAI Realtime no está portado, por lo que actualmente ningún motor lee `LOQUI_AZURE_OPENAI_KEY`.
+Cada variable corresponde únicamente a su proveedor. `LOQUI_AZURE_KEY` corresponde a Azure Speech; `LOQUI_AZURE_OPENAI_KEY`, al recurso y deployment independientes de Azure OpenAI Realtime.
 
 ## Desarrollo
 

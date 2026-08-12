@@ -54,8 +54,7 @@ func sessionOf(t *testing.T, model, language string) map[string]any {
 	return got
 }
 
-// The NESTED v1 schema, which is not the flat form Azure OpenAI takes. The flat one is accepted here
-// and then ignored: the session keeps its defaults and the model and language hint do nothing.
+// The NESTED v1 schema shared by public OpenAI and Azure OpenAI GA realtime transcription.
 func TestSessionUpdateUsesTheNestedSchema(t *testing.T) {
 	got := sessionOf(t, "", "")
 	if got["type"] != "session.update" {
@@ -137,12 +136,19 @@ func TestDecodeRecognisesEachEvent(t *testing.T) {
 			`{"type":"conversation.item.input_audio_transcription.completed","transcript":"hola mundo"}`,
 			Final, "", "hola mundo",
 		},
+		{
+			"completed con el campo text que usa Azure",
+			`{"type":"conversation.item.input_audio_transcription.completed","text":"hola desde azure"}`,
+			Final, "", "hola desde azure",
+		},
 		{"error", `{"type":"error","error":{"message":"clave inválida"}}`, Error, "", ""},
+		{"transcription.failed", `{"type":"conversation.item.input_audio_transcription.failed","error":{"code":"audio_invalid","message":"audio inválido"}}`, Error, "", ""},
 		// session.created was listed here as "desconocido" — the old reading, and it was wrong. It is
 		// the service's session confirmation, and for a probe it is the ONLY positive proof the
 		// credential was accepted, because an invalid key still gets an HTTP 101 from this service
 		// (measured — docs/research/2026-08-06-where-realtime-stt-auth-fails.md).
 		{"session.created es la confirmación de sesión", `{"type":"session.created"}`, Ready, "", ""},
+		{"session.updated confirma la configuración", `{"type":"session.updated"}`, Configured, "", ""},
 		{"desconocido de verdad", `{"type":"algo.que.no.existe"}`, Ignore, "", ""},
 		{"json roto", `{no`, Ignore, "", ""},
 	}
@@ -157,6 +163,13 @@ func TestDecodeRecognisesEachEvent(t *testing.T) {
 		if c.text != "" && got.Text != c.text {
 			t.Errorf("%s: text = %q, quería %q", c.name, got.Text, c.text)
 		}
+	}
+}
+
+func TestDecodePreservesTheTranscriptionFailureCode(t *testing.T) {
+	got := Decode([]byte(`{"type":"conversation.item.input_audio_transcription.failed","error":{"code":"audio_invalid","message":"audio inválido"}}`))
+	if got.Kind != Error || got.Code != "audio_invalid" || got.Error != "audio inválido" {
+		t.Errorf("outcome = %+v", got)
 	}
 }
 

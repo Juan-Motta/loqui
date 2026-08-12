@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The six rows, in the original's order. The Ajustes view paints them top to bottom, so the order
 // is part of the design rather than an implementation detail.
@@ -90,7 +93,7 @@ func TestAzureStateDependsOnTheSelectedSubservice(t *testing.T) {
 	}
 
 	// OpenAI realtime needs the RESOURCE, not a region, and its own key.
-	openaiReady := Settings{Provider: "whisper", AzureService: "openai", AzureOpenAiResource: "mi-recurso"}
+	openaiReady := Settings{Provider: "whisper", AzureService: "openai", AzureOpenAiResource: "mi-recurso", AzureOpenAiDeployment: "mi-whisper"}
 	rows = byID(ConnectionRows(openaiReady, map[KeySlot]bool{SlotAzureOpenAI: true}, HostCapabilities{}))
 	if got := rows["azure"].State; got != ConnConnected {
 		t.Errorf("azure openai with key+resource = %q, want %q", got, ConnConnected)
@@ -100,6 +103,27 @@ func TestAzureStateDependsOnTheSelectedSubservice(t *testing.T) {
 	rows = byID(ConnectionRows(openaiReady, map[KeySlot]bool{SlotAzureSpeech: true}, HostCapabilities{}))
 	if got := rows["azure"].State; got != ConnUnconfigured {
 		t.Errorf("azure openai on the speech key = %q, want %q", got, ConnUnconfigured)
+	}
+}
+
+func TestAzureOpenAIRequiresBothResourceAndDeployment(t *testing.T) {
+	key := map[KeySlot]bool{SlotAzureOpenAI: true}
+	for _, settings := range []Settings{
+		{AzureService: "openai", AzureOpenAiResource: "resource"},
+		{AzureService: "openai", AzureOpenAiDeployment: "deployment"},
+	} {
+		if got := byID(ConnectionRows(settings, key, HostCapabilities{}))["azure"].State; got != ConnUnconfigured {
+			t.Errorf("incomplete Azure OpenAI settings reported %q", got)
+		}
+	}
+}
+
+func TestRuntimeKeySlotFollowsTheAzureSubservice(t *testing.T) {
+	for service, want := range map[string]KeySlot{"speech": SlotAzureSpeech, "openai": SlotAzureOpenAI} {
+		got, ok := RuntimeKeySlotFor("azure", service)
+		if !ok || got != want {
+			t.Errorf("RuntimeKeySlotFor(azure,%s) = %q,%v; want %q", service, got, ok, want)
+		}
 	}
 }
 
@@ -115,6 +139,22 @@ func TestTheKindLineFollowsTheAzureSubservice(t *testing.T) {
 	}
 	if got := rows["whisper"].Kind; got != "Local · sin conexión ni clave" {
 		t.Errorf("whisper kind = %q", got)
+	}
+}
+
+func TestAzureHintFollowsTheSelectedSubservice(t *testing.T) {
+	speech := ProviderHint("azure", "speech")
+	if !strings.Contains(speech, "región + clave") {
+		t.Errorf("Azure Speech hint = %q", speech)
+	}
+	openai := ProviderHint("azure", "openai")
+	for _, want := range []string{"recurso", "deployment", "clave"} {
+		if !strings.Contains(openai, want) {
+			t.Errorf("Azure OpenAI hint = %q; missing %q", openai, want)
+		}
+	}
+	if strings.Contains(openai, "región") {
+		t.Errorf("Azure OpenAI hint still asks for a Speech region: %q", openai)
 	}
 }
 
