@@ -93,7 +93,7 @@ func TestAzureStateDependsOnTheSelectedSubservice(t *testing.T) {
 	}
 
 	// OpenAI realtime needs the RESOURCE, not a region, and its own key.
-	openaiReady := Settings{Provider: "whisper", AzureService: "openai", AzureOpenAiResource: "mi-recurso", AzureOpenAiDeployment: "mi-whisper"}
+	openaiReady := Settings{Provider: "whisper", AzureService: "openai", AzureOpenAiResource: "mi-recurso", AzureOpenAiDeployment: "mi-whisper", AzureOpenAiModel: "gpt-realtime-whisper"}
 	rows = byID(ConnectionRows(openaiReady, map[KeySlot]bool{SlotAzureOpenAI: true}, HostCapabilities{}))
 	if got := rows["azure"].State; got != ConnConnected {
 		t.Errorf("azure openai with key+resource = %q, want %q", got, ConnConnected)
@@ -103,6 +103,20 @@ func TestAzureStateDependsOnTheSelectedSubservice(t *testing.T) {
 	rows = byID(ConnectionRows(openaiReady, map[KeySlot]bool{SlotAzureSpeech: true}, HostCapabilities{}))
 	if got := rows["azure"].State; got != ConnUnconfigured {
 		t.Errorf("azure openai on the speech key = %q, want %q", got, ConnUnconfigured)
+	}
+}
+
+func TestAzureOpenAIWithAnUnknownModelIsUnconfigured(t *testing.T) {
+	settings := Settings{
+		Provider:              "azure",
+		AzureService:          "openai",
+		AzureOpenAiResource:   "resource",
+		AzureOpenAiDeployment: "deployment",
+		AzureOpenAiModel:      "not-a-supported-model",
+	}
+	keys := map[KeySlot]bool{SlotAzureOpenAI: true}
+	if got := byID(ConnectionRows(settings, keys, HostCapabilities{}))["azure"].State; got != ConnUnconfigured {
+		t.Errorf("Azure OpenAI with an unknown model reported %q", got)
 	}
 }
 

@@ -112,6 +112,9 @@ func TestPayloadCarriesEverythingAjustesNeedsToPaint(t *testing.T) {
 	if p.InputDeviceID != "mic-2" {
 		t.Errorf("InputDeviceID = %q, want mic-2", p.InputDeviceID)
 	}
+	if p.AzureOpenAiModel != "gpt-realtime-whisper" {
+		t.Errorf("AzureOpenAiModel = %q, want the persisted default", p.AzureOpenAiModel)
+	}
 	if len(p.InputDevices) != 2 {
 		t.Fatalf("InputDevices = %d entries, want 2", len(p.InputDevices))
 	}

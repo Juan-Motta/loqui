@@ -904,7 +904,7 @@
                      right level of detail there. -->
                 <option value="macos" data-i18n>macOS — local (offline)</option>
                 <option value="azure-speech" data-i18n>Azure Speech</option>
-                <option value="azure-openai" data-i18n>Azure OpenAI Realtime Whisper</option>
+                <option value="azure-openai" data-i18n>Azure OpenAI GPT Realtime Whisper</option>
                 <option value="openai" data-i18n>OpenAI</option>
                 <option value="grok" data-i18n>Grok (xAI)</option>
                 <option value="elevenlabs" data-i18n>ElevenLabs</option>
@@ -1032,15 +1032,20 @@
                     <label data-i18n>Servicio</label>
                     <select id="azureService">
                       <option value="speech" data-i18n>Azure Speech</option>
-                      <option value="openai" data-i18n>Azure OpenAI — realtime (gpt-realtime-whisper)</option>
+                      <option value="openai" data-i18n>Azure OpenAI — realtime</option>
                     </select>
                     <p class="sub" id="azureServiceHint" style="margin-top:6px"></p>
 
                     <div id="openaiConfig">
                       <label data-i18n>Recurso Azure OpenAI</label>
                       <input id="azureOpenAiResource" placeholder="ej. my-openai-resource" data-i18n-attr="placeholder" />
+                      <label data-i18n>Modelo Azure OpenAI</label>
+                      <select id="azureOpenAiModel">
+                        <option value="gpt-realtime-whisper">gpt-realtime-whisper</option>
+                        <option value="gpt-live-transcribe">gpt-live-transcribe</option>
+                      </select>
                       <label data-i18n>Deployment</label>
-                      <input id="azureOpenAiDeployment" placeholder="gpt-realtime-whisper" data-i18n-attr="placeholder" />
+                      <input id="azureOpenAiDeployment" placeholder="nombre del deployment" data-i18n-attr="placeholder" />
                     </div>
 
                     <div id="speechConfig">

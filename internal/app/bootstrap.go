@@ -93,6 +93,7 @@ type SettingsPayload struct {
 	AzureService          string `json:"azureService"`
 	AzureOpenAiResource   string `json:"azureOpenAiResource"`
 	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
+	AzureOpenAiModel      string `json:"azureOpenAiModel"`
 	OpenAiModel           string `json:"openAiModel"`
 	Mode                  string `json:"mode"`
 	TriggerKey            string `json:"triggerKey"`
@@ -364,6 +365,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		AzureService:          cfg.AzureService,
 		AzureOpenAiResource:   cfg.AzureOpenAiResource,
 		AzureOpenAiDeployment: cfg.AzureOpenAiDeployment,
+		AzureOpenAiModel:      cfg.AzureOpenAiModel,
 		OpenAiModel:           cfg.OpenAiModel,
 		Mode:                  cfg.Mode,
 		TriggerKey:            cfg.TriggerKey,
@@ -478,7 +480,7 @@ type SettingsService struct {
 	probers map[store.KeySlot]prober
 	// azureOpenAIProbe replaces the realtime socket probe in tests. The production path always uses
 	// azureopenai.TestConnection; keeping this per service avoids global test races.
-	azureOpenAIProbe func(ctx context.Context, key, resource, deployment string) stt.ProbeResult
+	azureOpenAIProbe func(ctx context.Context, key, resource, deployment, model string) stt.ProbeResult
 
 	// defaultProblem overrides the check for whether the fallback engine can run. Only the tests set
 	// it: the real one looks for a 465 MB model file on disk.

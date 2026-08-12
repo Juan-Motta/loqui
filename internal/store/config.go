@@ -27,6 +27,7 @@ import (
 	"sync"
 
 	"github.com/Juan-Motta/loqui-go/internal/history"
+	"github.com/Juan-Motta/loqui-go/internal/settings"
 )
 
 // appDirName is the folder under Application Support. Read the package comment before
@@ -58,6 +59,9 @@ type Settings struct {
 	// which is named rather than regional — the reason "azure" has two sub-services here.
 	AzureOpenAiResource   string `json:"azureOpenAiResource"`
 	AzureOpenAiDeployment string `json:"azureOpenAiDeployment"`
+	// AzureOpenAiModel is the base model behind the deployment. Azure lets users choose an unrelated
+	// deployment name, so the request dialect cannot be inferred from AzureOpenAiDeployment.
+	AzureOpenAiModel string `json:"azureOpenAiModel"`
 	// OpenAiModel belongs to the public OpenAI provider. It must not reuse Azure's deployment name:
 	// those are independent resources and changing one must never reroute the other.
 	OpenAiModel string `json:"openAiModel"`
@@ -137,7 +141,8 @@ func DefaultSettings() Settings {
 		// Matching the Electron defaults so a settings.json written by either build reads the same.
 		AzureService:          "speech",
 		AzureOpenAiDeployment: "gpt-realtime-whisper",
-		OpenAiModel:            "gpt-realtime-whisper",
+		AzureOpenAiModel:      settings.AzureOpenAIRealtimeWhisper,
+		OpenAiModel:           "gpt-realtime-whisper",
 	}
 }
 

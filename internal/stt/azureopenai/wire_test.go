@@ -47,7 +47,7 @@ func TestDialOptionsPutTheKeyOnlyInTheAPIKeyHeader(t *testing.T) {
 }
 
 func TestBuildSessionUpdateUsesTheDeploymentAndDisablesVAD(t *testing.T) {
-	raw, err := BuildSessionUpdate("mi-deployment-whisper", "es")
+	raw, err := BuildSessionUpdate("gpt-realtime-whisper", "mi-deployment-whisper", "es")
 	if err != nil {
 		t.Fatalf("BuildSessionUpdate: %v", err)
 	}
@@ -86,5 +86,64 @@ func TestBuildSessionUpdateUsesTheDeploymentAndDisablesVAD(t *testing.T) {
 	}
 	if string(input.TurnDetection) != "null" {
 		t.Errorf("turn_detection = %s, gpt-realtime-whisper requires null", input.TurnDetection)
+	}
+}
+
+func TestBuildSessionUpdateUsesPluralLanguagesForGPTLiveTranscribe(t *testing.T) {
+	raw, err := BuildSessionUpdate("gpt-live-transcribe", "mi-live-deployment", "es")
+	if err != nil {
+		t.Fatalf("BuildSessionUpdate: %v", err)
+	}
+
+	var message struct {
+		Session struct {
+			Audio struct {
+				Input struct {
+					Transcription map[string]any `json:"transcription"`
+				} `json:"input"`
+			} `json:"audio"`
+		} `json:"session"`
+	}
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatalf("unmarshal session.update: %v", err)
+	}
+	transcription := message.Session.Audio.Input.Transcription
+	if transcription["model"] != "mi-live-deployment" {
+		t.Errorf("model = %v, want the Azure deployment", transcription["model"])
+	}
+	if _, exists := transcription["language"]; exists {
+		t.Errorf("gpt-live-transcribe received singular language: %v", transcription)
+	}
+	languages, ok := transcription["languages"].([]any)
+	if !ok || len(languages) != 1 || languages[0] != "es" {
+		t.Errorf("languages = %#v, want [es]", transcription["languages"])
+	}
+}
+
+func TestBuildSessionUpdateOmitsLanguagesForGPTLiveAutoDetection(t *testing.T) {
+	raw, err := BuildSessionUpdate("gpt-live-transcribe", "mi-live-deployment", "")
+	if err != nil {
+		t.Fatalf("BuildSessionUpdate: %v", err)
+	}
+	var message map[string]any
+	if err := json.Unmarshal(raw, &message); err != nil {
+		t.Fatal(err)
+	}
+	input := message["session"].(map[string]any)["audio"].(map[string]any)["input"].(map[string]any)
+	transcription := input["transcription"].(map[string]any)
+	if _, exists := transcription["languages"]; exists {
+		t.Errorf("auto detection should omit languages: %v", transcription)
+	}
+}
+
+func TestBuildSessionUpdateRejectsAnUnknownBaseModel(t *testing.T) {
+	if _, err := BuildSessionUpdate("not-a-model", "deployment", "es"); err == nil {
+		t.Fatal("unknown Azure OpenAI model was accepted")
+	}
+}
+
+func TestBuildSessionUpdateRejectsAnEmptyDeployment(t *testing.T) {
+	if _, err := BuildSessionUpdate("gpt-live-transcribe", "  ", "es"); err == nil {
+		t.Fatal("empty Azure deployment was accepted")
 	}
 }

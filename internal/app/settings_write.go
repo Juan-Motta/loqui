@@ -602,7 +602,7 @@ func (s *SettingsService) SaveConnection(slot string, region string, secret stri
 
 // SaveAzureConnection persists the selected Azure product and the fields that address that product.
 // Speech and OpenAI use separate credentials; selecting one can never overwrite the other's key.
-func (s *SettingsService) SaveAzureConnection(service, region, resource, deployment, secret string) WriteResult {
+func (s *SettingsService) SaveAzureConnection(service, region, resource, deployment, model, secret string) WriteResult {
 	defer s.beginReadinessChange()()
 	service = strings.ToLower(strings.TrimSpace(service))
 	if service != "speech" && service != "openai" {
@@ -639,6 +639,11 @@ func (s *SettingsService) SaveAzureConnection(service, region, resource, deploym
 		if deployment == "" {
 			return s.invalid("deployment", "el deployment de Azure OpenAI es obligatorio")
 		}
+		var err error
+		model, err = settings.NormalizeAzureOpenAIModel(model)
+		if err != nil {
+			return s.invalid("model", "%v", err)
+		}
 	}
 
 	secret = strings.TrimSpace(secret)
@@ -664,6 +669,7 @@ func (s *SettingsService) SaveAzureConnection(service, region, resource, deploym
 		} else {
 			cfg.AzureOpenAiResource = resource
 			cfg.AzureOpenAiDeployment = deployment
+			cfg.AzureOpenAiModel = model
 		}
 		return nil
 	}); err != nil {

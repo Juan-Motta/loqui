@@ -19,6 +19,7 @@ import (
 	"github.com/Juan-Motta/loqui-go/internal/history"
 	"github.com/Juan-Motta/loqui-go/internal/inject"
 	"github.com/Juan-Motta/loqui-go/internal/session"
+	settingspkg "github.com/Juan-Motta/loqui-go/internal/settings"
 	"github.com/Juan-Motta/loqui-go/internal/store"
 	"github.com/Juan-Motta/loqui-go/internal/stt"
 	"github.com/Juan-Motta/loqui-go/internal/stt/azure"
@@ -332,6 +333,10 @@ func (d *Dictation) buildAzureOpenAIProvider(settings store.Settings) (stt.Provi
 	if strings.TrimSpace(settings.AzureOpenAiDeployment) == "" {
 		return nil, fmt.Errorf("configura el deployment de Azure OpenAI en Ajustes")
 	}
+	model, err := settingspkg.NormalizeAzureOpenAIModel(settings.AzureOpenAiModel)
+	if err != nil {
+		return nil, err
+	}
 	getKey := d.keyReaderFor(store.SlotAzureOpenAI)
 	if _, err := getKey(); err != nil {
 		switch {
@@ -350,6 +355,7 @@ func (d *Dictation) buildAzureOpenAIProvider(settings store.Settings) (stt.Provi
 	return azureopenai.New(azureopenai.Config{
 		Resource:   settings.AzureOpenAiResource,
 		Deployment: settings.AzureOpenAiDeployment,
+		Model:      model,
 		Language:   language,
 		GetKey:     getKey,
 		Log:        d.ui.Log,
@@ -443,8 +449,8 @@ func (d *Dictation) buildOpenAIProvider() (stt.Provider, error) {
 	return openai.New(openai.Config{
 		GetKey:   getKey,
 		Language: language,
-		Model: d.store.LoadSettings().OpenAiModel,
-		Log:   d.ui.Log,
+		Model:    d.store.LoadSettings().OpenAiModel,
+		Log:      d.ui.Log,
 	}), nil
 }
 

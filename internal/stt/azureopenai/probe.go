@@ -18,6 +18,7 @@ const defaultProbeReadyTimeout = 10 * time.Second
 type ProbeOptions struct {
 	Resource     string
 	Deployment   string
+	Model        string
 	Language     string
 	Endpoint     string
 	ReadyTimeout time.Duration
@@ -48,9 +49,12 @@ func TestConnection(ctx context.Context, key string, opts ProbeOptions) stt.Prob
 	if err != nil {
 		return stt.ProbeResult{Kind: stt.ProbeFailed, Message: err.Error(), Code: "invalid_resource"}
 	}
-	update, err := BuildSessionUpdate(opts.Deployment, opts.Language)
-	if err != nil || strings.TrimSpace(opts.Deployment) == "" {
+	if strings.TrimSpace(opts.Deployment) == "" {
 		return stt.ProbeResult{Kind: stt.ProbeFailed, Message: "el deployment de Azure OpenAI es obligatorio", Code: "invalid_deployment"}
+	}
+	update, err := BuildSessionUpdate(opts.Model, opts.Deployment, opts.Language)
+	if err != nil {
+		return stt.ProbeResult{Kind: stt.ProbeFailed, Message: err.Error(), Code: "invalid_model"}
 	}
 
 	probeCtx, cancel := context.WithTimeout(ctx, opts.readyTimeout())

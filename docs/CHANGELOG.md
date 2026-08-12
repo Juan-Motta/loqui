@@ -4,6 +4,17 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Azure GPT Live Transcribe — 2026-08-12
+
+- **Azure OpenAI now supports both realtime transcription models explicitly.** Settings keeps the
+  base model separate from the Azure deployment, preserves Realtime Whisper for existing users, and
+  adds `gpt-live-transcribe` with its required plural language-hint payload.
+- **The active engine is unambiguous.** Settings and Home name GPT Realtime Whisper or GPT Live
+  Transcribe exactly, while Azure Speech and public OpenAI remain independent.
+- **The new path is verified against Azure.** The owner-confirmed `gpt-live-transcribe` deployment
+  accepted the real session probe, persisted across a native app restart, and no credential entered
+  logs, screenshots or frontend state.
+
 ## Azure OpenAI realtime transcription — 2026-08-12
 
 - **Azure OpenAI Realtime Whisper is now a working Azure product, not a disabled placeholder.**

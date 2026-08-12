@@ -37,7 +37,7 @@ Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como v
 | Whisper | Local | Transcripción privada y sin conexión | Requiere descargar una vez el modelo desde **Ajustes → Conexiones**. |
 | Apple Speech | En el dispositivo | Transcripción nativa de macOS | Requiere macOS 26 o posterior. |
 | Azure Speech | Nube | Dictado multilingüe continuo | Requiere una clave y una región de Azure Speech. |
-| Azure OpenAI Realtime | Nube | Transcripción en streaming con tu deployment de Azure | Requiere un recurso de Azure OpenAI, un deployment `gpt-realtime-whisper` y una clave. |
+| Azure OpenAI Realtime | Nube | Transcripción en streaming con tu deployment de Azure | Admite deployments basados en `gpt-realtime-whisper` o `gpt-live-transcribe`; requiere un recurso de Azure OpenAI y una clave. |
 | xAI / Grok | Nube | Transcripción en tiempo real | Requiere una API key de xAI. |
 | OpenAI Realtime | Nube | Transcripción en tiempo real | Requiere una API key de OpenAI. |
 | ElevenLabs | Nube | Transcripción en tiempo real | Requiere una API key de ElevenLabs. |
@@ -76,6 +76,10 @@ Para sesiones temporales de desarrollo, estas variables de entorno específicas 
 - `LOQUI_ELEVENLABS_KEY`
 
 Cada variable corresponde únicamente a su proveedor. `LOQUI_AZURE_KEY` corresponde a Azure Speech; `LOQUI_AZURE_OPENAI_KEY`, al recurso y deployment independientes de Azure OpenAI Realtime.
+
+Para Azure OpenAI, selecciona el modelo base por separado del nombre del deployment. Azure permite
+nombres de deployment personalizados que no tienen que coincidir con `gpt-realtime-whisper` ni
+`gpt-live-transcribe`.
 
 ## Desarrollo
 
