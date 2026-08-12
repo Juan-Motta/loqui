@@ -1680,13 +1680,15 @@ dmg="$tmp/phase-publish.dmg"
 stage="$tmp/phase-publish-stage"
 release_output_dir="$tmp/phase-publish-output"
 release_root_dir="$repo_root"
-version=0.1.0
+phase_publish_version="$("$repo_root/scripts/release-version.sh" --root "$repo_root")"
+phase_publish_dmg_name="$("$repo_root/scripts/release-version.sh" --root "$repo_root" --dmg-name)"
+version="$phase_publish_version"
 submission_id=phase-publish-id
 phase_publish
 phase_publish_expected="$tmp/phase-publish-expected"
 printf '<%s>\n' \
-  "$dmg" "$stage/evidence" "$release_output_dir" 0.1.0 phase-publish-id \
-  Loqui-0.1.0-macos-arm64.dmg >"$phase_publish_expected"
+  "$dmg" "$stage/evidence" "$release_output_dir" "$phase_publish_version" phase-publish-id \
+  "$phase_publish_dmg_name" >"$phase_publish_expected"
 diff -u "$phase_publish_expected" "$phase_publish_args"
 eval "$original_atomic_publish"
 
