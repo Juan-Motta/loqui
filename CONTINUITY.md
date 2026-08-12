@@ -1,29 +1,26 @@
 # Continuity — session handoff
 
-- **Focus:** Close out the protected GitHub macOS release automation with live evidence from the
-  first public release.
+- **Focus:** Ship the verified intuitive bilingual drag-to-Applications DMG installer through a PR
+  from `feat/intuitive-dmg-installer`, without creating a tag or GitHub Release.
 
-- **NEXT STEP:** Review and merge branch `docs/github-release-live-evidence`; the implementation and
-  all live journeys are complete.
+- **NEXT STEP:** Review and merge the open PR for `feat/intuitive-dmg-installer`; use
+  `gh pr view feat/intuitive-dmg-installer` to obtain its current URL and checks.
 
 - **Blockers:** none.
 
-- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). The report is
-  `docs/e2e/reports/2026-08-10-github-macos-release.md` with `VERDICT: PASS`.
+- **Active workflow:** `.workflow/state.md` (`new-feature`, phase `finish-branch`). E2E evidence:
+  `docs/e2e/reports/2026-08-11-intuitive-dmg-installer.md` with `VERDICT: PASS`.
 
 - **Handoff notes:**
-  - PR #2 merged as `50f53f7bcc3d35637df96cda106a6ea8e1ea97da`. Release workflow run
-    `31428242122` passed preflight, protected approval, signing, notarization, evidence upload,
-    publication, and credential cleanup.
-  - Public `v0.1.0` targets that exact SHA and contains only
-    `Loqui-0.1.0-macos-arm64.dmg` plus its checksum. A fresh download passed SHA-256, `hdiutil`,
-    stapler, DMG/app Gatekeeper, deep signature verification, and production bundle audit. The owner
-    independently installed it and confirmed that Loqui works.
-  - Duplicate run `31429953529` failed secret-free preflight because `v0.1.0` already exists; its
-    protected job was skipped. Non-main run `31430266300` failed the exact-main check; no deployment
-    approval existed, the Environment API still allows only `main`, and the temporary test branch
-    was deleted.
-  - The 14-file evidence artifact expires on 2026-08-24 and passed structural secret/path scans.
-    No secret value appears in the report, changelog, or branch.
+  - The owner authorized commit, push, and PR creation after local preparation and verification.
+    The ship commit contains the feature, durable E2E evidence, changelog, solution note, and this
+    handoff. No tag, version, or GitHub Release mutation belongs to this workflow.
+  - Fresh `CI=true ./scripts/task.sh check` exited 0 and `shared/scripts/check-gates.sh` reports all
+    six standard boxes checked. Final whole-branch review is recorded in `.workflow/state.md`.
+  - One real Developer ID DMG passed signing, notarization, staple, Gatekeeper, mounted signature/
+    DR/audit/Retina/Finder checks, and controlled Finder copy. The owner approved the final native
+    660 × 384 Finder window, clean arrow, and user-level path-strip/vertical indicator.
+  - Public `v0.1.0` remains unchanged at `50f53f7bcc3d35637df96cda106a6ea8e1ea97da`
+    with exactly the canonical DMG and checksum assets; `/Applications/Loqui.app` was untouched.
 
-- **Updated:** 2026-08-10
+- **Updated:** 2026-08-12

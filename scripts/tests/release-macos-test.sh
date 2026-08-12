@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fixture scripts and literal evidence intentionally defer expansion to child shells.
-# shellcheck disable=SC2016
+# shellcheck disable=SC2016,SC2329
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -240,12 +240,21 @@ assert_contains "$developer_id_plan" "cp -a \"\$VENDOR\"/build-loqui/bin/*.dylib
 assert_not_contains "$developer_id_plan" "cmake -S \"\$VENDOR\" -B \"\$VENDOR/build\""
 
 preflight_tools="$tmp/preflight-tools"
+preflight_probe_python="$tmp/preflight-probe-python"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  '[ "$1" = -c ] || exit 91' \
+  'printf "%s\n" 1.6.7' \
+  >"$preflight_probe_python"
+chmod +x "$preflight_probe_python"
+dmgbuild_python="$preflight_probe_python"
 set +e
 (
   # shellcheck disable=SC2329
   require_command() {
     printf '%s\n' "$1" >>"$preflight_tools"
-    [ "$1" != file ] || exit 73
+    [ "$1" != tiffutil ] || exit 73
   }
   phase_preflight
 )
@@ -254,6 +263,8 @@ set -e
 assert_eq "$preflight_probe_rc" 73
 assert_not_contains "$preflight_tools" sdl2-config
 assert_contains "$preflight_tools" vtool
+assert_contains "$preflight_tools" sips
+assert_contains "$preflight_tools" tiffutil
 
 expect_failure() {
   failure_name="$1"
@@ -270,18 +281,25 @@ expect_failure() {
 
 preflight_root="$tmp/preflight-root"
 preflight_bin="$tmp/preflight-bin"
-mkdir -p "$preflight_root/scripts" "$preflight_root/build/darwin" \
+mkdir -p "$preflight_root/scripts" "$preflight_root/build/darwin/dmg" \
   "$preflight_root/helpers" \
   "$preflight_root/third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Versions/A" \
   "$preflight_bin"
 printf '%s\n' 'info:' '  version: "0.1.0"' >"$preflight_root/build/config.yml"
 for preflight_source in \
   build/darwin/Info.plist build/darwin/Info.dev.plist build/darwin/icons.icns \
+  build/darwin/dmg/settings.py build/darwin/dmg/verify-ds-store.py \
   helpers/macos-globe-listener.swift helpers/macos-stt.swift helpers/whisper-stt.cpp \
   third_party/speech-sdk/MicrosoftCognitiveServicesSpeech.framework/Versions/A/MicrosoftCognitiveServicesSpeech; do
   put_file "$preflight_root/$preflight_source" source
 done
-for preflight_script in build-macos-helpers.sh macos-bundle.sh macos-audit.sh; do
+put_file "$preflight_root/build/darwin/dmg/background.png" background-1x
+put_file "$preflight_root/build/darwin/dmg/background@2x.png" background-2x
+(
+  cd "$preflight_root/build/darwin/dmg"
+  /usr/bin/shasum -a 256 background.png background@2x.png >background.sha256
+)
+for preflight_script in build-macos-helpers.sh macos-bundle.sh macos-audit.sh setup-dmgbuild.sh; do
   put_file "$preflight_root/scripts/$preflight_script" '#!/bin/bash'
 done
 printf '%s\n' \
@@ -304,11 +322,34 @@ printf '%s\n' \
   >"$preflight_root/scripts/macos-sign.sh"
 chmod +x "$preflight_root/scripts/"*.sh
 
+preflight_python="$tmp/preflight-python"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  '[ "$1" = -c ] || exit 91' \
+  '[ "${PREFLIGHT_DMGBUILD_PROBE_RC:-0}" -eq 0 ] || exit "$PREFLIGHT_DMGBUILD_PROBE_RC"' \
+  'printf "%s\n" "${PREFLIGHT_DMGBUILD_VERSION:-1.6.7}"' \
+  >"$preflight_python"
+chmod +x "$preflight_python"
+
 for preflight_tool in security codesign otool lipo install_name_tool hdiutil spctl ditto jq \
-  cmake swiftc vtool shasum file; do
+  cmake swiftc vtool file tiffutil; do
   printf '%s\n' '#!/bin/bash' 'exit 0' >"$preflight_bin/$preflight_tool"
   chmod +x "$preflight_bin/$preflight_tool"
 done
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  'image=""' \
+  'for argument in "$@"; do image="$argument"; done' \
+  'case "$image" in' \
+  '  */background.png) width=660; height=360 ;;' \
+  '  */background@2x.png) width=1320; height=720 ;;' \
+  '  *) exit 88 ;;' \
+  'esac' \
+  'if [ "${PREFLIGHT_BACKGROUND_SIZE:-valid}" = wrong ] && [[ "$image" = */background.png ]]; then width=659; fi' \
+  'printf "%s\n" "$image" "  format: png" "  bitsPerSample: 8" "  samplesPerPixel: 4" "  hasAlpha: yes" "  pixelWidth: $width" "  pixelHeight: $height"' \
+  >"$preflight_bin/sips"
 printf '%s\n' \
   '#!/bin/bash' \
   'if [ "$1" = -m ]; then printf "%s\n" "${PREFLIGHT_ARCH:-arm64}"; exit 0; fi' \
@@ -345,10 +386,22 @@ run_preflight_fixture() {
   fixture_root="${PREFLIGHT_FIXTURE_ROOT:-$preflight_root}"
   release_root_dir="$fixture_root"
   release_output_dir="$fixture_root/bin/release"
+  if [ "${PREFLIGHT_DMGBUILD_PATH+x}" = x ]; then
+    dmgbuild_python="$PREFLIGHT_DMGBUILD_PATH"
+  else
+    dmgbuild_python="$preflight_python"
+  fi
   PATH="$preflight_bin:/usr/bin:/bin" phase_preflight
   release_root_dir="$saved_preflight_root"
   release_output_dir="$saved_preflight_output"
 }
+
+preflight_non_executable="$tmp/preflight-non-executable-python"
+put_file "$preflight_non_executable" '#!/bin/bash' 644
+
+wrong_digest_root="$tmp/preflight-wrong-digest-root"
+cp -R "$preflight_root" "$wrong_digest_root"
+put_file "$wrong_digest_root/build/darwin/dmg/background.png" wrong-background
 
 run_preflight_missing_tool() {
   missing_tool_bin="$tmp/preflight-missing-tool-bin"
@@ -381,6 +434,26 @@ cp -R "$preflight_root" "$malformed_version_root"
 printf '%s\n' 'info:' '  version: not-a-version' >"$malformed_version_root/build/config.yml"
 PREFLIGHT_FIXTURE_ROOT="$malformed_version_root" expect_failure preflight-malformed-version \
   'info.version must appear once as quoted MAJOR.MINOR.PATCH' run_preflight_fixture
+
+missing_dmg_source_root="$tmp/preflight-missing-dmg-source-root"
+cp -R "$preflight_root" "$missing_dmg_source_root"
+rm "$missing_dmg_source_root/build/darwin/dmg/settings.py"
+PREFLIGHT_FIXTURE_ROOT="$missing_dmg_source_root" expect_failure preflight-missing-dmg-source \
+  'missing required source: build/darwin/dmg/settings.py' run_preflight_fixture
+
+missing_setup_root="$tmp/preflight-missing-setup-root"
+cp -R "$preflight_root" "$missing_setup_root"
+rm "$missing_setup_root/scripts/setup-dmgbuild.sh"
+PREFLIGHT_FIXTURE_ROOT="$missing_setup_root" expect_failure preflight-missing-setup \
+  'missing executable script: scripts/setup-dmgbuild.sh' run_preflight_fixture
+
+symlink_background_root="$tmp/preflight-symlink-background-root"
+cp -R "$preflight_root" "$symlink_background_root"
+rm "$symlink_background_root/build/darwin/dmg/background.png"
+ln -s "$preflight_root/build/darwin/dmg/background.png" \
+  "$symlink_background_root/build/darwin/dmg/background.png"
+PREFLIGHT_FIXTURE_ROOT="$symlink_background_root" expect_failure preflight-symlink-background \
+  'DMG background is not a regular non-symlink file: background.png' run_preflight_fixture
 
 or_list_phase_log="$tmp/or-list-phases.txt"
 or_list_expected_phases="$tmp/or-list-expected-phases.txt"
@@ -544,8 +617,9 @@ ln -s libfixture.dylib "$app/Contents/Frameworks/libfixture-alias.dylib"
 printf '%s\n' \
   '#!/bin/bash' \
   'set -euo pipefail' \
-  'mutation="${VERIFY_MUTATION:-none}"' \
+  'mutation="${VERIFY_MUTATION:-${DMG_MUTATION:-none}}"' \
   'eval "target=\${$#}"' \
+  '[ -z "${VERIFY_CODESIGN_LOG:-}" ] || printf "%s\n" "$*" >>"$VERIFY_CODESIGN_LOG"' \
   'identifier_for() {' \
   '  case "$1" in' \
   '    *.app|*/Contents/MacOS/loqui) printf "%s" com.jualopezmo.loquigo ;;' \
@@ -553,7 +627,10 @@ printf '%s\n' \
   '    *) printf "%s" com.jualopezmo.loquigo.unknown ;;' \
   '  esac' \
   '}' \
-  'if [ "$1" = --verify ]; then exit "${VERIFY_CODESIGN_RC:-0}"; fi' \
+  'if [ "$1" = --verify ]; then' \
+  '  if [[ "$target" = */dmg-verify/Loqui.app ]]; then exit "${VERIFY_CODESIGN_MOUNTED_RC:-0}"; fi' \
+  '  exit "${VERIFY_CODESIGN_RC:-0}"' \
+  'fi' \
   'if [ "$1" = -dv ]; then' \
   '  identifier="$(identifier_for "$target")"' \
   '  [ "$mutation" != identifier ] || case "$target" in */globe-listener) identifier=com.example.wrong ;; esac' \
@@ -571,7 +648,7 @@ printf '%s\n' \
   'fi' \
   'if [ "$1" = -d ] && [ "$2" = -r- ]; then' \
   '  requirement_identifier="$(identifier_for "$target")"' \
-  '  [ "$mutation" != dmg-dr ] || case "$target" in */dmg-root/Loqui.app/Contents/Helpers/whisper-stt) requirement_identifier=com.example.changed ;; esac' \
+  '  [ "$mutation" != dmg-dr ] || case "$target" in */dmg-verify/Loqui.app/Contents/Helpers/whisper-stt) requirement_identifier=com.example.changed ;; esac' \
   '  printf "designated => identifier \"%s\" and anchor apple generic\n" "$requirement_identifier" >&2' \
   '  exit 0' \
   'fi' \
@@ -645,43 +722,348 @@ expect_failure verify-codesign-failure '' run_verify_codesign_failure
 
 dmg_fixture_root="$tmp/dmg-fixture-root"
 dmg_fixture_bin="$tmp/dmg-fixture-bin"
-mkdir -p "$dmg_fixture_root/scripts" "$dmg_fixture_bin"
-printf '%s\n' '#!/bin/bash' 'exit 0' >"$dmg_fixture_root/scripts/macos-audit.sh"
+mkdir -p "$dmg_fixture_root/scripts" "$dmg_fixture_root/build/darwin/dmg" "$dmg_fixture_bin"
+put_file "$dmg_fixture_root/build/darwin/dmg/settings.py" settings
+put_file "$dmg_fixture_root/build/darwin/dmg/verify-ds-store.py" verifier
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  'eval "audit_target=\${$#}"' \
+  'printf "%s\n" "$audit_target" >>"$DMG_AUDIT_LOG"' \
+  'if [ "${DMG_MUTATION:-none}" = mounted-audit ] && [[ "$audit_target" = */dmg-verify/Loqui.app ]]; then exit 71; fi' \
+  'exit 0' \
+  >"$dmg_fixture_root/scripts/macos-audit.sh"
 printf '%s\n' \
   '#!/bin/bash' \
   'set -euo pipefail' \
   '[ "$#" -eq 2 ] || exit 96' \
+  'printf "%s\n" "$*" >>"$DMG_DITTO_LOG"' \
   'exec /bin/cp -R "$1" "$2"' \
   >"$dmg_fixture_bin/ditto"
 printf '%s\n' \
   '#!/bin/bash' \
   'set -euo pipefail' \
-  '[ "$1" = create ] || exit 97' \
-  'for output_path in "$@"; do :; done' \
-  'printf "%s\n" dmg >"$output_path"' \
+  'printf "%s\n" "$*" >>"$DMG_HDIUTIL_LOG"' \
+  'case "$1" in' \
+  '  verify) exit "${DMG_VERIFY_RC:-0}" ;;' \
+  '  attach)' \
+  '    [ "${DMG_MUTATION:-none}" != attach ] || exit 72' \
+  '    mountpoint=""' \
+  '    previous=""' \
+  '    for argument in "$@"; do' \
+  '      if [ "$previous" = -mountpoint ]; then mountpoint="$argument"; break; fi' \
+  '      previous="$argument"' \
+  '    done' \
+  '    [ -n "$mountpoint" ] || exit 73' \
+  '    /bin/cp -R "$DMG_FIXTURE_SOURCE_APP" "$mountpoint/Loqui.app"' \
+  '    if [ "${DMG_MUTATION:-none}" = mounted-app-symlink ]; then' \
+  '      /bin/rm -rf "$mountpoint/Loqui.app"' \
+  '      /bin/ln -s "$DMG_MOUNTED_APP_TARGET" "$mountpoint/Loqui.app"' \
+  '    fi' \
+  '    applications_target=/Applications' \
+  '    [ "${DMG_MUTATION:-none}" != wrong-applications ] || applications_target=/Wrong' \
+  '    /bin/ln -s "$applications_target" "$mountpoint/Applications"' \
+  '    [ "${DMG_MUTATION:-none}" = extra-visible ] && printf "%s\n" extra >"$mountpoint/Unexpected.txt"' \
+  '    if [ "${DMG_MUTATION:-none}" != missing-ds-store ]; then' \
+  '      printf "%s\n" "${DMG_MUTATION:-valid}" >"$mountpoint/.DS_Store"' \
+  '    fi' \
+  '    [ "${DMG_MUTATION:-none}" = missing-background ] || printf "%s\n" tiff >"$mountpoint/.background.tiff"' \
+  '    if [ "${DMG_MUTATION:-none}" = background-symlink ]; then' \
+  '      /bin/rm -f "$mountpoint/.background.tiff"' \
+  '      /bin/ln -s "$DMG_BACKGROUND_TARGET" "$mountpoint/.background.tiff"' \
+  '    fi' \
+  '    ;;' \
+  '  detach)' \
+  '    if [ "${2:-}" = -force ]; then exit "${DMG_FORCE_DETACH_RC:-0}"; fi' \
+  '    detach_count=0' \
+  '    [ ! -f "$DMG_DETACH_COUNTER" ] || detach_count="$(cat "$DMG_DETACH_COUNTER")"' \
+  '    detach_count=$((detach_count + 1))' \
+  '    printf "%s\n" "$detach_count" >"$DMG_DETACH_COUNTER"' \
+  '    case "${DMG_DETACH_MODE:-success}" in' \
+  '      transient) [ "$detach_count" -gt 1 ] || exit 74 ;;' \
+  '      fail) exit 75 ;;' \
+  '    esac' \
+  '    ;;' \
+  '  create) printf "%s\n" "old hdiutil create -srcfolder path rejected" >&2; exit 97 ;;' \
+  '  *) exit 98 ;;' \
+  'esac' \
   >"$dmg_fixture_bin/hdiutil"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  '[ "$1" = -info ] || exit 81' \
+  'printf "%s\n" "$*" >>"$DMG_TIFFUTIL_LOG"' \
+  'case "${DMG_MUTATION:-none}" in' \
+  '  tiff-single)' \
+  '    printf "%s\n" "Directory at 0x1" "  Image Width: 660 Image Length: 360" ;;' \
+  '  tiff-wrong)' \
+  '    printf "%s\n" "Directory at 0x1" "  Image Width: 660 Image Length: 360" "Directory at 0x2" "  Image Width: 1200 Image Length: 720" ;;' \
+  '  *)' \
+  '    printf "%s\n" "Directory at 0x1" "  Image Width: 660 Image Length: 360" "Directory at 0x2" "  Image Width: 1320 Image Length: 720" ;;' \
+  'esac' \
+  >"$dmg_fixture_bin/tiffutil"
+dmgbuild_fixture_python="$dmg_fixture_bin/python"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'set -euo pipefail' \
+  'if [ "$1" = -c ]; then printf "%s\n" 1.6.7; exit 0; fi' \
+  'case "$1" in' \
+  '  */verify-ds-store.py)' \
+  '    printf "%s\n" "$*" >>"$DMG_DS_STORE_LOG"' \
+  '    marker="$(cat "$2")"' \
+  '    case "$marker" in' \
+  '      ds-window) printf "%s\n" "verify-ds-store: bwsp.WindowBounds mismatch" >&2; exit 41 ;;' \
+  '      ds-chrome) printf "%s\n" "verify-ds-store: bwsp.ShowToolbar mismatch" >&2; exit 42 ;;' \
+  '      ds-icon-view) printf "%s\n" "verify-ds-store: icvp.iconSize mismatch" >&2; exit 43 ;;' \
+  '      ds-iloc) printf "%s\n" "verify-ds-store: Applications.Iloc mismatch" >&2; exit 44 ;;' \
+  '    esac' \
+  '    printf "%s\n" "verify-ds-store: PASS"' \
+  '    exit 0' \
+  '    ;;' \
+  'esac' \
+  '[ "$1" = -m ] && [ "$2" = dmgbuild ] || exit 82' \
+  'printf "%s\n" "$@" >"$DMGBUILD_LOG"' \
+  '[ "${DMG_MUTATION:-none}" != generator ] || exit 83' \
+  'for output_path in "$@"; do :; done' \
+  'case "${DMG_MUTATION:-none}" in' \
+  '  missing-output) ;;' \
+  '  symlink-output) /bin/ln -s "$DMG_SYMLINK_TARGET" "$output_path" ;;' \
+  '  *) printf "%s\n" dmg >"$output_path" ;;' \
+  'esac' \
+  >"$dmgbuild_fixture_python"
 chmod +x "$dmg_fixture_root/scripts/macos-audit.sh" "$dmg_fixture_bin/ditto" \
-  "$dmg_fixture_bin/hdiutil"
+  "$dmg_fixture_bin/hdiutil" "$dmg_fixture_bin/tiffutil" "$dmgbuild_fixture_python"
 saved_dmg_release_root="$release_root_dir"
 saved_dmg_version="$version"
+saved_dmg_app="$app"
+saved_dmg_stage="$stage"
+saved_dmg_python="$dmgbuild_python"
+dmg_source_app="$app"
+dmg_source_requirements="$stage/evidence-work/designated-requirements.txt"
 release_root_dir="$(cd "$dmg_fixture_root" && pwd -P)"
 version=0.1.0
-PATH="$dmg_fixture_bin:$verify_bin:$PATH" VERIFY_MUTATION=none phase_create_dmg
-assert_file "$stage/evidence-work/designated-requirements.txt"
-assert_file "$stage/evidence-work/designated-requirements-dmg.txt"
-compare_designated_requirements "$stage/evidence-work/designated-requirements.txt" \
-  "$stage/evidence-work/designated-requirements-dmg.txt"
-assert_file "$stage/Loqui.dmg"
+dmgbuild_python="$dmgbuild_fixture_python"
+dmg_case_number=0
 
-rm -rf "$stage/dmg-root"
-rm -f "$stage/Loqui.dmg" "$stage/evidence-work/designated-requirements-dmg.txt"
-run_dmg_dr_mismatch() {
-  VERIFY_MUTATION=dmg-dr PATH="$dmg_fixture_bin:$verify_bin:$PATH" phase_create_dmg
+prepare_dmg_case() {
+  dmg_case_name="$1"
+  dmg_case_number=$((dmg_case_number + 1))
+  dmg_case_stage="$tmp/dmg-case-$dmg_case_number-$dmg_case_name"
+  mkdir -p "$dmg_case_stage/evidence-work"
+  stage="$(cd "$dmg_case_stage" && pwd -P)"
+  app="$dmg_source_app"
+  cp "$dmg_source_requirements" "$stage/evidence-work/designated-requirements.txt"
+  dmg=""
+  dmg_verify_mount=""
+  dmg_verify_mounted=0
+  dmgbuild_log="$stage/dmgbuild.log"
+  dmg_hdiutil_log="$stage/hdiutil.log"
+  dmg_audit_log="$stage/audit.log"
+  dmg_ditto_log="$stage/ditto.log"
+  dmg_codesign_log="$stage/codesign.log"
+  dmg_tiffutil_log="$stage/tiffutil.log"
+  dmg_ds_store_log="$stage/ds-store.log"
+  dmg_detach_counter="$stage/detach-count"
+  dmg_phase_log="$stage/phases.log"
+  : >"$dmgbuild_log"
+  : >"$dmg_hdiutil_log"
+  : >"$dmg_audit_log"
+  : >"$dmg_ditto_log"
+  : >"$dmg_codesign_log"
+  : >"$dmg_tiffutil_log"
+  : >"$dmg_ds_store_log"
 }
-expect_failure dmg-designated-requirements-mismatch 'designated requirements differ' \
-  run_dmg_dr_mismatch
+
+run_dmg_release_fixture() (
+  phase_preflight() { :; }
+  phase_build() { :; }
+  phase_build_helpers() { :; }
+  phase_bundle() { :; }
+  phase_audit_unsigned() { :; }
+  phase_sign_app() { :; }
+  phase_verify_app() { :; }
+  phase_sign_dmg() { :; }
+  phase_verify_dmg() { :; }
+  phase_submit() { :; }
+  phase_fetch_log() { :; }
+  phase_check_log() { :; }
+  phase_staple() { :; }
+  phase_verify_staple() { :; }
+  phase_gatekeeper() { :; }
+  phase_publish() { :; }
+  LOQUI_PHASE_LOG="$dmg_phase_log" run_release || return 1
+  [ "$dmg_verify_mounted" -eq 0 ] \
+    || fail 'successful DMG inspection left mounted state set'
+)
+
+run_dmg_case() {
+  DMGBUILD_LOG="$dmgbuild_log" \
+  DMG_HDIUTIL_LOG="$dmg_hdiutil_log" \
+  DMG_AUDIT_LOG="$dmg_audit_log" \
+  DMG_DITTO_LOG="$dmg_ditto_log" \
+  DMG_DS_STORE_LOG="$dmg_ds_store_log" \
+  DMG_DETACH_COUNTER="$dmg_detach_counter" \
+  DMG_FIXTURE_SOURCE_APP="$dmg_source_app" \
+  DMG_MOUNTED_APP_TARGET="$dmg_source_app" \
+  DMG_BACKGROUND_TARGET="$tmp/dmg-background-target.tiff" \
+  DMG_SYMLINK_TARGET="$tmp/dmg-symlink-target" \
+  DMG_TIFFUTIL_LOG="$dmg_tiffutil_log" \
+  VERIFY_CODESIGN_LOG="$dmg_codesign_log" \
+  LOQUI_DMG_DETACH_RETRY_DELAY=0 \
+  PATH="$dmg_fixture_bin:$verify_bin:/usr/bin:/bin" \
+    run_dmg_release_fixture
+}
+
+assert_dmg_rejected_before_release() {
+  assert_contains "$dmg_phase_log" create-dmg
+  assert_not_contains "$dmg_phase_log" sign-dmg
+  assert_not_contains "$dmg_phase_log" submit
+  assert_not_contains "$dmg_phase_log" publish
+}
+
+run_rejected_dmg_case() {
+  rejected_name="$1"
+  rejected_message="$2"
+  mutation="$3"
+  prepare_dmg_case "$rejected_name"
+  DMG_MUTATION="$mutation" expect_failure "$rejected_name" "$rejected_message" run_dmg_case
+  assert_dmg_rejected_before_release
+}
+
+prepare_dmg_case success
+DMG_MUTATION=none run_dmg_case
+expected_dmgbuild_log="$stage/expected-dmgbuild.log"
+printf '%s\n' \
+  -m dmgbuild \
+  -s "$release_root_dir/build/darwin/dmg/settings.py" \
+  -D "app=$stage/dmg-root/Loqui.app" \
+  -D "assets=$release_root_dir/build/darwin/dmg" \
+  Loqui "$stage/Loqui.dmg" \
+  >"$expected_dmgbuild_log"
+diff -u "$expected_dmgbuild_log" "$dmgbuild_log"
+assert_not_contains "$dmg_hdiutil_log" 'create -srcfolder'
+assert_contains "$dmg_hdiutil_log" "attach -readonly -nobrowse -mountpoint $stage/dmg-verify $stage/Loqui.dmg"
+assert_eq "$(grep -Fxc -- "detach $stage/dmg-verify" "$dmg_hdiutil_log")" 1
+assert_not_contains "$dmg_hdiutil_log" 'detach -force'
+assert_contains "$dmg_audit_log" "$stage/dmg-root/Loqui.app"
+assert_contains "$dmg_audit_log" "$stage/dmg-verify/Loqui.app"
+assert_contains "$dmg_codesign_log" "$stage/dmg-verify/Loqui.app"
+assert_contains "$dmg_codesign_log" "-d -r- $stage/dmg-verify/Loqui.app"
+assert_contains "$dmg_ds_store_log" "$stage/dmg-verify/.DS_Store"
+assert_file "$stage/evidence-work/designated-requirements-dmg.txt"
+assert_file "$stage/evidence-work/dmg-visible-root.txt"
+assert_file "$stage/evidence-work/dmg-ds-store.txt"
+assert_file "$stage/evidence-work/dmg-background-tiff.txt"
+
+run_rejected_dmg_case dmg-generator-failure 'could not create styled DMG' generator
+run_rejected_dmg_case dmg-missing-output 'dmgbuild did not create a regular DMG' missing-output
+put_file "$tmp/dmg-symlink-target" outside-dmg
+run_rejected_dmg_case dmg-symlink-output 'dmgbuild did not create a regular DMG' symlink-output
+prepare_dmg_case dmg-hdiutil-verify
+DMG_VERIFY_RC=78 expect_failure dmg-hdiutil-verify \
+  'generated DMG failed hdiutil verification' run_dmg_case
+assert_dmg_rejected_before_release
+run_rejected_dmg_case dmg-attach-failure 'could not mount generated DMG' attach
+run_rejected_dmg_case dmg-extra-visible 'generated DMG has unexpected visible root items' extra-visible
+run_rejected_dmg_case dmg-wrong-applications 'generated DMG Applications link is invalid' wrong-applications
+run_rejected_dmg_case dmg-missing-ds-store 'generated DMG is missing .DS_Store' missing-ds-store
+run_rejected_dmg_case dmg-ds-window 'generated DMG Finder metadata is invalid' ds-window
+run_rejected_dmg_case dmg-ds-chrome 'generated DMG Finder metadata is invalid' ds-chrome
+run_rejected_dmg_case dmg-ds-icon-view 'generated DMG Finder metadata is invalid' ds-icon-view
+run_rejected_dmg_case dmg-ds-iloc 'generated DMG Finder metadata is invalid' ds-iloc
+run_rejected_dmg_case dmg-missing-background 'generated DMG is missing Retina background' missing-background
+put_file "$tmp/dmg-background-target.tiff" external-background
+prepare_dmg_case dmg-background-symlink
+DMG_MUTATION=background-symlink expect_failure dmg-background-symlink \
+  'generated DMG background is not a regular non-symlink file' run_dmg_case
+[ ! -s "$dmg_tiffutil_log" ] || fail 'background symlink reached TIFF inspection'
+assert_not_contains "$dmg_audit_log" "$stage/dmg-verify/Loqui.app"
+assert_not_contains "$dmg_codesign_log" "$stage/dmg-verify/Loqui.app"
+assert_dmg_rejected_before_release
+run_rejected_dmg_case dmg-tiff-single 'Retina background must contain exactly two image directories' tiff-single
+run_rejected_dmg_case dmg-tiff-wrong 'Retina background has unexpected frame dimensions' tiff-wrong
+prepare_dmg_case dmg-mounted-app-symlink
+DMG_MUTATION=mounted-app-symlink expect_failure dmg-mounted-app-symlink \
+  'generated DMG app is not a regular non-symlink directory' run_dmg_case
+assert_not_contains "$dmg_audit_log" "$stage/dmg-verify/Loqui.app"
+assert_not_contains "$dmg_codesign_log" "$stage/dmg-verify/Loqui.app"
+assert_dmg_rejected_before_release
+run_rejected_dmg_case dmg-mounted-audit '' mounted-audit
+
+prepare_dmg_case dmg-mounted-signature
+VERIFY_CODESIGN_MOUNTED_RC=79 expect_failure dmg-mounted-signature '' run_dmg_case
+assert_dmg_rejected_before_release
+
+run_rejected_dmg_case dmg-designated-requirements-mismatch \
+  'designated requirements differ' dmg-dr
+
+prepare_dmg_case dmg-detach-transient
+DMG_DETACH_MODE=transient run_dmg_case
+assert_eq "$(cat "$dmg_detach_counter")" 2
+assert_not_contains "$dmg_hdiutil_log" 'detach -force'
+
+prepare_dmg_case dmg-detach-exhausted
+DMG_DETACH_MODE=fail expect_failure dmg-detach-exhausted \
+  'could not cleanly detach DMG verification mount' run_dmg_case
+assert_eq "$(cat "$dmg_detach_counter")" 3
+assert_contains "$dmg_hdiutil_log" "detach -force $stage/dmg-verify"
+assert_dmg_rejected_before_release
+
+prepare_dmg_case dmg-inspection-and-detach
+DMG_MUTATION=extra-visible DMG_DETACH_MODE=fail expect_failure dmg-inspection-and-detach \
+  'could not cleanly detach DMG verification mount' run_dmg_case
+assert_contains "$tmp/dmg-inspection-and-detach.out" \
+  'generated DMG has unexpected visible root items'
+assert_dmg_rejected_before_release
+
+prepare_dmg_case dmg-root-containment
+dmg_root_external="$tmp/dmg-root-external"
+mkdir "$dmg_root_external"
+put_file "$dmg_root_external/sentinel.txt" root-external-sentinel
+ln -s "$dmg_root_external" "$stage/dmg-root"
+DMG_MUTATION=none expect_failure dmg-root-containment \
+  'DMG staging root already exists' run_dmg_case
+assert_not_contains "$dmg_ditto_log" "$dmg_source_app"
+[ ! -s "$dmgbuild_log" ] || fail 'unsafe dmg-root reached the generator'
+assert_contains "$dmg_root_external/sentinel.txt" root-external-sentinel
+assert_dmg_rejected_before_release
+
+prepare_dmg_case dmg-mount-containment
+dmg_mount_external="$tmp/dmg-mount-external"
+mkdir "$dmg_mount_external"
+put_file "$dmg_mount_external/sentinel.txt" mount-external-sentinel
+ln -s "$dmg_mount_external" "$stage/dmg-verify"
+DMG_MUTATION=none expect_failure dmg-mount-containment \
+  'DMG verification mount path already exists' run_dmg_case
+assert_not_contains "$dmg_hdiutil_log" attach
+assert_contains "$dmg_mount_external/sentinel.txt" mount-external-sentinel
+assert_dmg_rejected_before_release
+
+real_tiff_fixture="$tmp/real-background.tiff"
+tiffutil -cathidpicheck "$repo_root/build/darwin/dmg/background.png" \
+  "$repo_root/build/darwin/dmg/background@2x.png" -out "$real_tiff_fixture" >/dev/null 2>&1
+verify_retina_tiff "$real_tiff_fixture" "$tmp/real-background-tiff.txt"
+
 release_root_dir="$saved_dmg_release_root"
 version="$saved_dmg_version"
+app="$saved_dmg_app"
+stage="$saved_dmg_stage"
+dmgbuild_python="$saved_dmg_python"
+
+PREFLIGHT_DMGBUILD_PATH='' expect_failure preflight-dmgbuild-missing \
+  'LOQUI_DMGBUILD_PYTHON is not set' run_preflight_fixture
+PREFLIGHT_DMGBUILD_PATH=relative/python expect_failure preflight-dmgbuild-relative \
+  'LOQUI_DMGBUILD_PYTHON must be absolute' run_preflight_fixture
+PREFLIGHT_DMGBUILD_PATH="$preflight_non_executable" expect_failure preflight-dmgbuild-executable \
+  'dmgbuild Python is not executable' run_preflight_fixture
+PREFLIGHT_DMGBUILD_PROBE_RC=19 expect_failure preflight-dmgbuild-probe \
+  'could not read installed dmgbuild version' run_preflight_fixture
+PREFLIGHT_DMGBUILD_VERSION=9.9.9 expect_failure preflight-dmgbuild-version \
+  "installed dmgbuild version is '9.9.9', expected '1.6.7'" run_preflight_fixture
+PREFLIGHT_BACKGROUND_SIZE=wrong expect_failure preflight-background-size \
+  'background.png has unexpected image properties' run_preflight_fixture
+PREFLIGHT_FIXTURE_ROOT="$wrong_digest_root" expect_failure preflight-background-digest \
+  'DMG background checksum verification failed' run_preflight_fixture
 
 physical_tmp="$tmp/physical-tmp"
 logical_tmp="$tmp/logical-tmp"

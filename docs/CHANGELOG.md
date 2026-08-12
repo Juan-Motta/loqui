@@ -4,6 +4,15 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Intuitive bilingual DMG installer — 2026-08-12
+
+- **Installing Loqui now explains itself.** The DMG opens in a compact branded Finder window with
+  English and Spanish drag-to-Applications instructions, a clear arrow, and fixed real app/folder
+  icons.
+- **The presentation is reproducible and release-safe.** A hash-locked headless builder creates the
+  Finder metadata, while the generated image is mounted and its layout, copied app signature, and
+  designated requirements are verified before signing or notarization continues.
+
 ## MIT license — 2026-08-11
 
 - **Loqui is now distributed under the MIT License.** The repository includes the standard license
