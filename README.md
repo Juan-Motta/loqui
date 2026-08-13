@@ -14,10 +14,10 @@ Loqui turns your voice into text in any macOS app. Hold the configured key, spea
 
 [**Download the latest Loqui release**](https://github.com/Juan-Motta/loqui/releases/latest)
 
-The current release is **v0.2.0**:
+The current release is **v0.3.0**:
 
-- App: [Loqui-0.2.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg)
-- Checksum: [Loqui-0.2.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg.sha256)
+- App: [Loqui-0.3.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.3.0/Loqui-0.3.0-macos-arm64.dmg)
+- Checksum: [Loqui-0.3.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.3.0/Loqui-0.3.0-macos-arm64.dmg.sha256)
 
 Updater-enabled releases also publish a signed `Loqui-<version>-macos-arm64.zip` and its `SHA256SUMS` manifest alongside the DMG.
 
