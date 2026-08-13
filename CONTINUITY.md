@@ -1,21 +1,25 @@
 # Continuity — session handoff
 
-- **Focus:** Loqui `v0.1.1` release completed and verified.
+- **Focus:** Prepare and publish Loqui `v0.2.0`.
 
-- **NEXT STEP:** At the next session, run `git status --short --branch` on `main` and start the
-  next user-requested task from a new branch; no `v0.1.1` release follow-up remains.
+- **NEXT STEP:** Complete the release-preparation gates on `release/v0.2.0`, commit/push/open the
+  PR, merge it into `main`, then dispatch exactly one protected Release workflow from the merged
+  SHA. After publication, verify the public assets and update README download links separately.
 
-- **Blockers:** none.
+- **Blockers:** none. GitHub Environment approval will be required after workflow preflight.
 
-- **Active workflow:** none. The release and README follow-up workflows are complete.
+- **Active workflow:** `new-feature`; state is in `.workflow/state.md`.
 
 - **Handoff notes:**
-  - Public Release: `https://github.com/Juan-Motta/loqui/releases/tag/v0.1.1`.
-  - Release run `31629859355` succeeded from main SHA
-    `4d86a6df1bbbf531f945a16055523249de6235d6`; signing, notarization, asset publication, and
-    temporary credential cleanup all passed.
-  - The tag targets that exact commit. The public release is non-draft/non-prerelease and contains
-    exactly the DMG plus checksum; the downloaded checksum passed and `hdiutil verify` was VALID.
-  - PRs #7 and #8 are merged. English and Spanish README download links point to `v0.1.1`.
+  - Owner approved semantic minor version `0.2.0` for the new Azure OpenAI model functionality and
+    fixes accumulated since `v0.1.1`.
+  - Canonical version and both generated macOS plist files now resolve to `0.2.0` on branch
+    `release/v0.2.0`.
+  - `v0.2.0`, its remote tag, GitHub Release, and remote release branch were absent at preparation
+    start. Existing public releases are `v0.1.0` and `v0.1.1`.
+  - Plan: `docs/plans/2026-08-13-loqui-v0.2.0-release.md`.
+  - Preparation E2E: `docs/e2e/reports/2026-08-13-loqui-v0.2.0-release.md`.
+  - Never delete or move an existing public tag/Release; ambiguous publication is investigated
+    through read-only queries.
 
-- **Updated:** 2026-08-12
+- **Updated:** 2026-08-13

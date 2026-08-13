@@ -4,6 +4,14 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Loqui v0.2.0 release — 2026-08-13
+
+- **The next public release is prepared as `v0.2.0`.** The minor version reflects the new Azure
+  OpenAI transcription models alongside the movable-window fix already merged into `main`.
+- **Stable macOS metadata is synchronized.** The canonical Wails version and both generated plist
+  values agree on `0.2.0`; the protected workflow will build, sign, notarize, verify, and publish
+  only after this preparation is merged back into `main`.
+
 ## Movable settings window — 2026-08-12
 
 - **The main Loqui window can be repositioned again.** Its existing top, sidebar, and onboarding
