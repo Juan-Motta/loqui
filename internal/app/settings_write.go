@@ -348,6 +348,18 @@ func (s *SettingsService) SetAppLanguage(language string) WriteResult {
 	return s.ok("")
 }
 
+// SetAutoUpdateChecks controls non-blocking background release checks. Manual checks remain
+// available when disabled. Bound as Settings.SetAutoUpdateChecks().
+func (s *SettingsService) SetAutoUpdateChecks(enabled bool) WriteResult {
+	if err := s.store().UpdateSettings(func(cfg *store.Settings) error {
+		cfg.AutoUpdateChecks = enabled
+		return nil
+	}); err != nil {
+		return s.failed("no se pudo guardar la preferencia de actualizaciones: %v", err)
+	}
+	return s.ok("")
+}
+
 // SetOnboarded records that the tutorial was completed or skipped. Bound as Settings.SetOnboarded().
 //
 // It is a flag of its own and NOT derived from "does the app look configured": the defaults are

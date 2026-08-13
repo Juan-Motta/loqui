@@ -123,6 +123,25 @@ func TestSettingProviderReturnsTheRepaintedPayload(t *testing.T) {
 	}
 }
 
+func TestSetAutoUpdateChecksPersistsAndReturnsTheFreshPayload(t *testing.T) {
+	st := store.NewAt(t.TempDir())
+	svc, _ := testService(t, st)
+
+	res := svc.SetAutoUpdateChecks(false)
+	if res.Error != "" {
+		t.Fatalf("SetAutoUpdateChecks: %s", res.Error)
+	}
+	if res.Payload.AutoUpdateChecks {
+		t.Error("returned payload still enables automatic checks")
+	}
+	if got := st.LoadSettings().AutoUpdateChecks; got {
+		t.Error("persisted AutoUpdateChecks = true, want false")
+	}
+	if got := st.LoadSettings().Provider; got != store.DefaultProvider {
+		t.Errorf("unrelated Provider changed to %q", got)
+	}
+}
+
 // An engine the app cannot drive must be refused, and the stored setting left ALONE.
 //
 // Accepting it would leave the app pointing at a provider buildProvider rejects, so the next

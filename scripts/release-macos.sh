@@ -21,14 +21,21 @@ tmp_root_lexical=""
 tmp_root_physical=""
 app=""
 dmg=""
+zip=""
 submission_id=""
 submission_status=""
 submit_rc=1
 log_rc=1
+zip_submission_id=""
+zip_submission_status=""
+zip_submit_rc=1
+zip_log_rc=1
 signed_manifest=""
 hidden_dmg_candidate=""
+hidden_zip_candidate=""
 hidden_evidence_candidate=""
 hidden_dmg_candidate_owned=0
+hidden_zip_candidate_owned=0
 hidden_evidence_candidate_owned=0
 
 die() { echo "release-macos: $*" >&2; return 1; }
@@ -231,7 +238,7 @@ safe_release_candidate_path() {
   [ "$candidate_parent_physical" = "$release_output_dir_physical" ] || return 1
   candidate_name="${candidate_path##*/}"
   case "$candidate_kind:$candidate_name" in
-    dmg:.Loqui-*.candidate.??????|evidence:.evidence-*.candidate.??????) return 0 ;;
+    dmg:.Loqui-*.candidate.??????|zip:.Loqui-*.candidate.??????|evidence:.evidence-*.candidate.??????) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -424,6 +431,17 @@ cleanup_release() {
       fi
     else
       echo "release-macos: refusing unsafe DMG candidate cleanup: $hidden_dmg_candidate" >&2
+    fi
+  fi
+  if [ "$hidden_zip_candidate_owned" -eq 1 ] && [ -n "$hidden_zip_candidate" ]; then
+    if safe_release_candidate_path "$hidden_zip_candidate" zip; then
+      if rm -f "$hidden_zip_candidate"; then
+        hidden_zip_candidate_owned=0
+      else
+        echo "release-macos: failed ZIP candidate cleanup: $hidden_zip_candidate" >&2
+      fi
+    else
+      echo "release-macos: refusing unsafe ZIP candidate cleanup: $hidden_zip_candidate" >&2
     fi
   fi
   if [ "$hidden_evidence_candidate_owned" -eq 1 ] && [ -n "$hidden_evidence_candidate" ]; then
@@ -1020,6 +1038,117 @@ phase_verify_app() {
     "$stage/evidence-work/designated-requirements.txt" || return 1
 }
 
+zip_archive_from_app() {
+  zip_root="$stage/zip-root"
+  if [ -e "$zip_root" ] || [ -L "$zip_root" ]; then
+    if [ -L "$zip_root" ] || [ ! -d "$zip_root" ]; then
+      die "ZIP staging root is not a physical directory"
+      return 1
+    fi
+    if ! rm -rf "$zip_root"; then
+      die "could not reset ZIP staging root"
+      return 1
+    fi
+  fi
+  if ! mkdir "$zip_root"; then
+    die "could not create ZIP staging root"
+    return 1
+  fi
+  zip_app="$zip_root/Loqui.app"
+  if ! ditto "$app" "$zip_app"; then
+    die "could not stage app for ZIP"
+    return 1
+  fi
+  if [ ! -d "$zip_app" ] || [ -L "$zip_app" ]; then
+    die "staged ZIP app is not a physical directory"
+    return 1
+  fi
+  if ! ditto -c -k --keepParent "$zip_app" "$zip"; then
+    die "could not create update ZIP"
+    return 1
+  fi
+  if [ ! -f "$zip" ] || [ -L "$zip" ]; then
+    die "ZIP creation did not produce a regular archive"
+    return 1
+  fi
+}
+
+verify_zip_contents() {
+  zip_verify_root="$stage/zip-verify"
+  if [ -e "$zip_verify_root" ] || [ -L "$zip_verify_root" ]; then
+    if [ -L "$zip_verify_root" ] || [ ! -d "$zip_verify_root" ]; then
+      die "ZIP verification root is not a physical directory"
+      return 1
+    fi
+    if ! rm -rf "$zip_verify_root"; then
+      die "could not reset ZIP verification root"
+      return 1
+    fi
+  fi
+  if ! mkdir "$zip_verify_root"; then
+    die "could not create ZIP verification root"
+    return 1
+  fi
+  if ! ditto -x -k "$zip" "$zip_verify_root"; then
+    die "could not extract update ZIP for verification"
+    return 1
+  fi
+  if ! zip_top_level="$(find "$zip_verify_root" -mindepth 1 -maxdepth 1 -print | LC_ALL=C sort)"; then
+    die "could not inspect update ZIP contents"
+    return 1
+  fi
+  zip_top_count=0
+  zip_top_path=""
+  while IFS= read -r zip_entry; do
+    [ -n "$zip_entry" ] || continue
+    zip_top_count=$((zip_top_count + 1))
+    zip_top_path="$zip_entry"
+  done <<<"$zip_top_level"
+  [ "$zip_top_count" -eq 1 ] || {
+    die "update ZIP must contain exactly one top-level Loqui.app"
+    return 1
+  }
+  if [ "$zip_top_path" != "$zip_verify_root/Loqui.app" ]; then
+    die "update ZIP contains an unexpected top-level entry"
+    return 1
+  fi
+  if [ ! -d "$zip_top_path" ] || [ -L "$zip_top_path" ]; then
+    die "update ZIP Loqui.app is not a physical directory"
+    return 1
+  fi
+  if ! codesign --verify --deep --strict "$zip_top_path"; then
+    die "extracted update app failed code-signature verification"
+    return 1
+  fi
+}
+
+phase_create_zip() {
+  if ! zip_name="$("$release_root_dir/scripts/release-version.sh" --root "$release_root_dir" --zip-name)"; then
+    die "could not derive update ZIP name"
+    return 1
+  fi
+  zip="$stage/$zip_name"
+  zip_archive_from_app || return 1
+  verify_zip_contents || return 1
+}
+
+phase_staple_app() {
+  if ! xcrun stapler staple "$app"; then
+    return 1
+  fi
+  if ! xcrun stapler validate "$app"; then
+    return 1
+  fi
+  zip_archive_from_app || return 1
+}
+
+phase_verify_zip() {
+  verify_zip_contents || return 1
+  if ! xcrun stapler validate "$app"; then
+    return 1
+  fi
+}
+
 phase_create_dmg() {
   dmg_root="$stage/dmg-root"
   if [ -e "$dmg_root" ] || [ -L "$dmg_root" ]; then
@@ -1328,6 +1457,89 @@ phase_check_log() {
   fi
 }
 
+phase_submit_zip() {
+  if xcrun notarytool submit "$zip" "${notary_auth_args[@]}" --wait --timeout 30m \
+    --output-format json >"$stage/zip-notary-submit.json"; then
+    zip_submit_rc=0
+  else
+    zip_submit_rc=$?
+  fi
+  if ! zip_submission_id="$(jq -er '.id | select(type == "string" and length > 0)' \
+    "$stage/zip-notary-submit.json" 2>/dev/null)"; then
+    zip_submission_id=""
+  fi
+  if ! zip_submission_status="$(jq -er '.status | select(type == "string" and length > 0)' \
+    "$stage/zip-notary-submit.json" 2>/dev/null)"; then
+    zip_submission_status=""
+  fi
+  if [ -z "$zip_submission_id" ]; then
+    if ! failure_dir="$(preserve_notary_failure missing-zip-id \
+      "$stage/zip-notary-submit.json" "")"; then
+      return 1
+    fi
+    die "missing ZIP submission id; raw response preserved at $failure_dir"
+    return 1
+  fi
+}
+
+phase_fetch_zip_log() {
+  zip_log_rc=1
+  zip_log_attempt=1
+  while [ "$zip_log_attempt" -le 3 ]; do
+    if xcrun notarytool log "$zip_submission_id" "$stage/zip-notary-log.json" \
+      "${notary_auth_args[@]}"; then
+      zip_log_rc=0
+    else
+      zip_log_rc=$?
+    fi
+    if [ "$zip_log_rc" -eq 0 ]; then
+      break
+    fi
+    zip_log_attempt=$((zip_log_attempt + 1))
+    if [ "$zip_log_attempt" -le 3 ]; then
+      if ! sleep "${LOQUI_NOTARY_LOG_RETRY_DELAY:-5}"; then
+        die "ZIP notary log retry delay failed"
+        return 1
+      fi
+    fi
+  done
+  if [ "$zip_log_rc" -ne 0 ]; then
+    if ! failure_dir="$(preserve_notary_failure "$zip_submission_id" \
+      "$stage/zip-notary-submit.json" "$stage/zip-notary-log.json")"; then
+      return 1
+    fi
+    die "ZIP notary log retrieval failed for $zip_submission_id; evidence preserved at $failure_dir"
+    return 1
+  fi
+}
+
+phase_check_zip_log() {
+  if [ "$zip_submit_rc" -ne 0 ] || [ "$zip_submission_status" != Accepted ]; then
+    if ! failure_dir="$(preserve_notary_failure "$zip_submission_id" \
+      "$stage/zip-notary-submit.json" "$stage/zip-notary-log.json")"; then
+      return 1
+    fi
+    die "ZIP notary submission $zip_submission_id ended '$zip_submission_status' (rc=$zip_submit_rc); evidence preserved at $failure_dir"
+    return 1
+  fi
+  if ! check_ticket_log "$stage/zip-notary-log.json" "$signed_manifest"; then
+    if ! failure_dir="$(preserve_notary_failure "$zip_submission_id" \
+      "$stage/zip-notary-submit.json" "$stage/zip-notary-log.json")"; then
+      return 1
+    fi
+    die "ZIP ticket validation failed for $zip_submission_id; evidence preserved at $failure_dir"
+    return 1
+  fi
+  if ! cp "$stage/zip-notary-submit.json" "$stage/evidence-work/"; then
+    die "could not record ZIP notary submission evidence"
+    return 1
+  fi
+  if ! cp "$stage/zip-notary-log.json" "$stage/evidence-work/"; then
+    die "could not record ZIP notary log evidence"
+    return 1
+  fi
+}
+
 phase_staple() {
   if ! xcrun stapler staple "$dmg"; then return 1; fi
 }
@@ -1351,6 +1563,9 @@ atomic_publish() {
   publication_version="$4"
   publication_id="$5"
   publication_dmg_name="$6"
+  source_zip="${7:-}"
+  publication_zip_name="${8:-}"
+  publish_zip=0
   if [[ ! "$publication_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     die "invalid publication version: $publication_version"
     return 1
@@ -1365,10 +1580,24 @@ atomic_publish() {
     die "publication DMG name does not match version: $publication_dmg_name"
     return 1
   fi
+  if [ -n "$source_zip" ] || [ -n "$publication_zip_name" ]; then
+    [ -n "$source_zip" ] && [ -n "$publication_zip_name" ] \
+      || { die "ZIP publication arguments must be provided together"; return 1; }
+    publish_zip=1
+    expected_publication_zip_name="Loqui-$publication_version-macos-arm64.zip"
+    if [ "$publication_zip_name" != "$expected_publication_zip_name" ]; then
+      die "publication ZIP name does not match version: $publication_zip_name"
+      return 1
+    fi
+  fi
   prepare_release_output_dir "$destination_root" || return 1
   destination_root="$release_output_dir_physical"
   if [ ! -f "$source_dmg" ]; then
     die "missing source DMG: $source_dmg"
+    return 1
+  fi
+  if [ "$publish_zip" -eq 1 ] && [ ! -f "$source_zip" ]; then
+    die "missing source ZIP: $source_zip"
     return 1
   fi
   if [ ! -d "$source_evidence" ]; then
@@ -1376,6 +1605,10 @@ atomic_publish() {
     return 1
   fi
   final_dmg="$destination_root/$publication_dmg_name"
+  final_zip=""
+  if [ "$publish_zip" -eq 1 ]; then
+    final_zip="$destination_root/$publication_zip_name"
+  fi
   prepare_evidence_parent "$destination_root" "$publication_version" || return 1
   published_evidence="$evidence_parent/$publication_id"
   if [ -e "$published_evidence" ] || [ -L "$published_evidence" ]; then
@@ -1383,8 +1616,10 @@ atomic_publish() {
     return 1
   fi
   hidden_dmg_candidate=""
+  hidden_zip_candidate=""
   hidden_evidence_candidate=""
   hidden_dmg_candidate_owned=0
+  hidden_zip_candidate_owned=0
   hidden_evidence_candidate_owned=0
   if ! hidden_dmg_candidate="$(mktemp "$destination_root/.Loqui-$publication_version.$publication_id.candidate.XXXXXX")"; then
     hidden_dmg_candidate=""
@@ -1395,6 +1630,18 @@ atomic_publish() {
   if ! cp "$source_dmg" "$hidden_dmg_candidate"; then
     die "could not copy hidden DMG candidate"
     return 1
+  fi
+  if [ "$publish_zip" -eq 1 ]; then
+    if ! hidden_zip_candidate="$(mktemp "$destination_root/.Loqui-$publication_version.$publication_id.candidate.XXXXXX")"; then
+      hidden_zip_candidate=""
+      die "could not create hidden ZIP candidate"
+      return 1
+    fi
+    hidden_zip_candidate_owned=1
+    if ! cp "$source_zip" "$hidden_zip_candidate"; then
+      die "could not copy hidden ZIP candidate"
+      return 1
+    fi
   fi
   if ! hidden_evidence_candidate="$(mktemp -d "$destination_root/.evidence-$publication_version.$publication_id.candidate.XXXXXX")"; then
     hidden_evidence_candidate=""
@@ -1422,6 +1669,18 @@ atomic_publish() {
   fi
   hidden_dmg_candidate=""
   hidden_dmg_candidate_owned=0
+  if [ "$publish_zip" -eq 1 ]; then
+    if ! mv -f "$hidden_zip_candidate" "$final_zip"; then
+      if ! rm -f "$final_dmg" || ! rm -rf "$published_evidence"; then
+        die "could not roll back published release pair"
+        return 1
+      fi
+      die "could not publish final ZIP: $final_zip"
+      return 1
+    fi
+    hidden_zip_candidate=""
+    hidden_zip_candidate_owned=0
+  fi
   if ! printf '%s\n' "$final_dmg"; then
     return 1
   fi
@@ -1433,8 +1692,12 @@ phase_publish() {
     die "could not derive publication DMG name"
     return 1
   fi
+  if ! publication_zip_name="$("$release_root_dir/scripts/release-version.sh" --root "$release_root_dir" --zip-name)"; then
+    die "could not derive publication ZIP name"
+    return 1
+  fi
   atomic_publish "$dmg" "$stage/evidence" "$release_output_dir" \
-    "$version" "$submission_id" "$publication_dmg_name" || return 1
+    "$version" "$submission_id" "$publication_dmg_name" "$zip" "$publication_zip_name" || return 1
 }
 
 run_phase() {
@@ -1459,6 +1722,12 @@ run_release() {
   run_phase audit-unsigned phase_audit_unsigned || return 1
   run_phase sign-app phase_sign_app || return 1
   run_phase verify-app phase_verify_app || return 1
+  run_phase create-zip phase_create_zip || return 1
+  run_phase submit-zip phase_submit_zip || return 1
+  run_phase fetch-zip-log phase_fetch_zip_log || return 1
+  run_phase check-zip-log phase_check_zip_log || return 1
+  run_phase staple-app phase_staple_app || return 1
+  run_phase verify-zip phase_verify_zip || return 1
   run_phase create-dmg phase_create_dmg || return 1
   run_phase sign-dmg phase_sign_dmg || return 1
   run_phase verify-dmg phase_verify_dmg || return 1

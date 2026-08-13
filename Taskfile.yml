@@ -27,7 +27,7 @@ tasks:
       - task: "{{.GOOS}}:package"
 
   release:macos:
-    summary: Builds, signs, notarizes, staples, and verifies an arm64 Developer ID DMG
+    summary: Builds, signs, notarizes, staples, and verifies arm64 Developer ID release artifacts
     cmds:
       - task: darwin:release
 
@@ -45,6 +45,7 @@ tasks:
       - ./scripts/tests/macos-sign-test.sh
       - ./scripts/tests/release-version-test.sh
       - ./scripts/tests/github-release-test.sh
+      - ./scripts/tests/update-zip-test.sh
       - ./scripts/tests/github-release-workflow-test.sh
       - ./scripts/tests/setup-dmgbuild-test.sh
       - ./scripts/tests/dmg-layout-test.sh

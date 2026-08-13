@@ -60,6 +60,11 @@ func bundleVersion() (version string, packaged bool) {
 	return plistShortVersion(data), true
 }
 
+// RuntimeBundleVersion exposes the same version source used by About to the updater wiring. A
+// loose development binary intentionally returns packaged=false so it never attempts a production
+// self-update against an invented version.
+func RuntimeBundleVersion() (version string, packaged bool) { return bundleVersion() }
+
 // wailsVersion digs the framework version out of the build info.
 //
 // Taken from the module graph rather than written down anywhere: a hardcoded string would go stale at

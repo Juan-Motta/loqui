@@ -252,6 +252,9 @@ export function paintSystem(p: SettingsPayload): void {
   setSegValue("appearance", p.appearance);
   setSegValue("mode", p.mode);
 
+  const autoUpdates = $<HTMLInputElement>("autoUpdateChecks");
+  if (autoUpdates) autoUpdates.checked = p.autoUpdateChecks;
+
   const appLang = $<HTMLSelectElement>("appLanguage");
   if (appLang) {
     appLang.innerHTML =
@@ -299,6 +302,7 @@ export function paintSystem(p: SettingsPayload): void {
   Events.Emit("ui:system", {
     appearance: p.appearance,
     mode: p.mode,
+    autoUpdateChecks: p.autoUpdateChecks,
     trigger: p.trigger.label,
     supportsHold: p.trigger.supportsHold,
     devices: (p.inputDevices ?? []).length,
@@ -330,6 +334,13 @@ Events.On("debug:set-appearance", (e: { data: unknown }) => {
 
 export function wireSystem(): void {
   const status = $<HTMLElement>("ajustesStatus");
+
+  $<HTMLInputElement>("autoUpdateChecks")?.addEventListener("change", (e) => {
+    const enabled = (e.target as HTMLInputElement).checked;
+    void run(status, t("✓ comprobación automática guardada"), () =>
+      Settings.SetAutoUpdateChecks(enabled),
+    );
+  });
 
   for (const radio of document.querySelectorAll<HTMLInputElement>(
     'input[name="appearance"]',

@@ -1183,6 +1183,19 @@
                 </div>
               </div>
 
+              <div class="sec-title" data-i18n>ACTUALIZACIONES</div>
+              <div class="group">
+                <div class="srow">
+                  <div>
+                    <div class="srow-label" data-i18n>Buscar actualizaciones automáticamente</div>
+                    <div class="srow-desc" data-i18n>Comprueba nuevas versiones en segundo plano, pero nunca las instala sin tu confirmación.</div>
+                  </div>
+                  <div class="srow-ctl">
+                    <input id="autoUpdateChecks" type="checkbox" aria-label="Buscar actualizaciones automáticamente" data-i18n-attr="aria-label" />
+                  </div>
+                </div>
+              </div>
+
               <div class="sec-title" data-i18n>ACTIVACIÓN Y ENTRADA</div>
               <div class="group">
                 <div class="srow">
@@ -1331,7 +1344,7 @@
 
           <div class="sec-title" data-i18n>PRIVACIDAD</div>
           <div class="group">
-            <p class="about-note" data-i18n>El historial y las claves API se guardan solo en tu equipo, en la carpeta de datos de arriba. Las claves se guardan SIN CIFRAR, legibles por tu usuario: es una build personal y se eligió la simplicidad sobre el llavero del sistema. Nada se envía a ningún servidor salvo al proveedor de transcripción que elijas, y los motores locales no usan internet.</p>
+            <p class="about-note" data-i18n>Tu historial de transcripciones y tus claves API se guardan únicamente en tu Mac. Loqui no publica estos datos ni almacena copias fuera de tu equipo. Si eliges un proveedor de transcripción en la nube, el audio necesario para transcribir se envía directamente a ese proveedor; los motores locales procesan todo en tu Mac.</p>
           </div>
 
           <div class="sec-title" data-i18n>APOYA EL PROYECTO</div>
@@ -1343,6 +1356,21 @@
               </div>
               <div class="srow-ctl">
                 <button class="btn" id="aboutDonate" data-i18n>Invítame un café</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="sec-title" data-i18n>ACTUALIZACIONES</div>
+          <div class="group">
+            <div class="srow">
+              <div>
+                <div class="srow-label" id="aboutUpdateStatus" data-i18n>Comprobar si hay actualizaciones</div>
+                <div class="srow-desc" id="aboutUpdateDetail"></div>
+              </div>
+              <div class="srow-ctl">
+                <button class="btn" id="aboutCheckUpdates" data-i18n>Buscar actualizaciones</button>
+                <button class="btn primary" id="aboutInstallUpdate" data-i18n hidden>Instalar actualización</button>
+                <button class="btn primary" id="aboutRestartUpdate" data-i18n hidden>Reiniciar y aplicar</button>
               </div>
             </div>
           </div>

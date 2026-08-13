@@ -165,6 +165,11 @@ preflight() {
   else
     die "cannot derive release DMG name"
   fi
+  if zip_name="$("$version_script" --root "$root" --zip-name)"; then
+    :
+  else
+    die "cannot derive release ZIP name"
+  fi
   tag="v$version"
   if [ -n "$expected_version" ] && [ "$version" != "$expected_version" ]; then
     die "version expectation mismatch"
@@ -180,6 +185,7 @@ preflight() {
   write_output version "$version"
   write_output tag "$tag"
   write_output dmg_name "$dmg_name"
+  write_output zip_name "$zip_name"
   write_summary "### Loqui release preflight"
   write_summary "- Version: $version"
   write_summary "- Tag: $tag"
@@ -191,6 +197,7 @@ parse_release_args() {
   release_version=""
   release_tag=""
   expected_dmg_name=""
+  expected_zip_name=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --sha)
@@ -211,6 +218,11 @@ parse_release_args() {
       --expect-dmg-name)
         [ "$#" -ge 2 ] || die "missing value for --expect-dmg-name"
         expected_dmg_name="$2"
+        shift 2
+        ;;
+      --expect-zip-name)
+        [ "$#" -ge 2 ] || die "missing value for --expect-zip-name"
+        expected_zip_name="$2"
         shift 2
         ;;
       *) die "unknown release option: $1" ;;
@@ -236,13 +248,24 @@ parse_release_args() {
   fi
   [ "$expected_dmg_name" = "$canonical_dmg_name" ] \
     || die "DMG name expectation mismatch"
+  if canonical_zip_name="$("$version_script" --root "$root" --zip-name)"; then
+    :
+  else
+    die "cannot derive canonical ZIP name"
+  fi
+  if [ -n "$expected_zip_name" ] && [ "$expected_zip_name" != "$canonical_zip_name" ]; then
+    die "ZIP name expectation mismatch"
+  fi
 }
 
 resolve_release_assets() {
   dmg_path="$root/bin/release/$canonical_dmg_name"
+  zip_path="$root/bin/release/$canonical_zip_name"
   checksum_path="$dmg_path.sha256"
+  checksum_manifest_path="$root/bin/release/SHA256SUMS"
   evidence_root="$root/bin/release/evidence/$release_version"
   [ -f "$dmg_path" ] && [ ! -L "$dmg_path" ] || die "missing release DMG: $dmg_path"
+  [ -f "$zip_path" ] && [ ! -L "$zip_path" ] || die "missing release ZIP: $zip_path"
   [ -d "$evidence_root" ] && [ ! -L "$evidence_root" ] \
     || die "missing release evidence: $evidence_root"
 
@@ -282,17 +305,31 @@ prepare_assets() {
   fi
   checksum="$(awk 'NR == 1 {print $1}' "$checksum_path")"
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || die "invalid SHA-256 output"
+  if ! (cd "$(dirname "$zip_path")" && \
+    shasum -a 256 "$canonical_zip_name" >"$checksum_manifest_path"); then
+    die "could not create ZIP checksum manifest"
+  fi
+  if ! (cd "$(dirname "$zip_path")" && \
+    shasum -a 256 -c "$checksum_manifest_path"); then
+    die "ZIP checksum verification failed"
+  fi
+  zip_checksum="$(awk 'NR == 1 {print $1}' "$checksum_manifest_path")"
+  [[ "$zip_checksum" =~ ^[0-9a-f]{64}$ ]] || die "invalid ZIP SHA-256 output"
 
   write_output dmg_path "$dmg_path"
   write_output checksum_path "$checksum_path"
+  write_output zip_path "$zip_path"
+  write_output checksum_manifest_path "$checksum_manifest_path"
   write_output evidence_path "$evidence_path"
   write_output checksum "$checksum"
+  write_output zip_checksum "$zip_checksum"
   write_output submission_id "$submission_id"
   write_summary "### Loqui release assets"
   write_summary "- Version: $release_version"
   write_summary "- Commit: $release_sha"
   write_summary "- Tag: $release_tag"
   write_summary "- SHA-256: $checksum"
+  write_summary "- ZIP SHA-256: $zip_checksum"
   write_summary "- Notarization submission: $submission_id"
   write_summary "- Evidence artifact: loqui-release-evidence-$release_tag"
 }
@@ -301,12 +338,20 @@ verify_prepared_assets() {
   resolve_release_assets
   [ -f "$checksum_path" ] && [ ! -L "$checksum_path" ] \
     || die "missing release checksum: $checksum_path"
+  [ -f "$checksum_manifest_path" ] && [ ! -L "$checksum_manifest_path" ] \
+    || die "missing ZIP checksum manifest: $checksum_manifest_path"
   if ! (cd "$(dirname "$dmg_path")" && \
     shasum -a 256 -c "$canonical_dmg_name.sha256"); then
     die "DMG checksum verification failed"
   fi
   checksum="$(awk 'NR == 1 {print $1}' "$checksum_path")"
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || die "invalid SHA-256 output"
+  if ! (cd "$(dirname "$zip_path")" && \
+    shasum -a 256 -c "$checksum_manifest_path"); then
+    die "ZIP checksum verification failed"
+  fi
+  zip_checksum="$(awk 'NR == 1 {print $1}' "$checksum_manifest_path")"
+  [[ "$zip_checksum" =~ ^[0-9a-f]{64}$ ]] || die "invalid ZIP SHA-256 output"
 }
 
 record_publication_failure() {
@@ -381,7 +426,7 @@ publish_release() {
   preflight_quiet=0
   verify_prepared_assets
 
-  if gh release create "$release_tag" "$dmg_path" "$checksum_path" \
+  if gh release create "$release_tag" "$dmg_path" "$checksum_path" "$zip_path" "$checksum_manifest_path" \
     --repo "$GITHUB_REPOSITORY" --target "$release_sha" \
     --title "Loqui $release_version" --generate-notes --latest; then
     :
@@ -403,10 +448,11 @@ publish_release() {
     published_failure "cannot verify published GitHub Release"
   fi
   if ! jq -e --arg tag "$release_tag" --arg sha "$release_sha" \
-    --arg dmg "$canonical_dmg_name" --arg checksum_name "$canonical_dmg_name.sha256" '
+    --arg dmg "$canonical_dmg_name" --arg checksum_name "$canonical_dmg_name.sha256" \
+    --arg zip "$canonical_zip_name" --arg manifest "SHA256SUMS" '
       .isDraft == false and .isPrerelease == false and
       .tagName == $tag and .targetCommitish == $sha and
-      ([.assets[].name] | sort) == ([$dmg, $checksum_name] | sort)
+      ([.assets[].name] | sort) == ([$dmg, $checksum_name, $zip, $manifest] | sort)
     ' <<<"$release_json" >/dev/null; then
     published_failure "published GitHub Release metadata is invalid"
   fi
@@ -415,6 +461,7 @@ publish_release() {
   write_summary "- Version: $release_version"
   write_summary "- Commit: $release_sha"
   write_summary "- SHA-256: $checksum"
+  write_summary "- ZIP SHA-256: $zip_checksum"
   write_summary "- URL: $release_url"
 }
 

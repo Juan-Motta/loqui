@@ -68,6 +68,10 @@ type windows struct {
 // exist, can reach them once they do.
 var wins windows
 
+// updateService is registered before the Wails app exists, then receives the framework backend
+// immediately after application.New creates app.Updater.
+var updateService *app.UpdateService
+
 func main() {
 	// The store is opened HERE, before the application, because the settings service is
 	// registered as a construction option and needs it. The dictation engine then shares
@@ -93,6 +97,15 @@ func main() {
 	var settingsSvc *app.SettingsService
 
 	var wailsApp *application.App
+	updateService = app.NewUpdateService(nil,
+		func() bool { return st.LoadSettings().AutoUpdateChecks },
+		func(name string, data any) {
+			if a := wailsApp; a != nil {
+				a.Event.Emit(name, data)
+			}
+		},
+		logLine,
+	)
 	wailsApp = application.New(application.Options{
 		Name:        "Loqui",
 		Description: "Dictado por voz que inserta el texto donde está el cursor",
@@ -106,6 +119,7 @@ func main() {
 		// was no way to configure the app from the interface at all — settings.json had to
 		// be hand-edited and keys passed through env vars.
 		Services: []application.Service{
+			application.NewService(updateService),
 			// The hooks connect the RUNNING engine and listener. Passed at construction rather than
 			// through setters because Wails binds every exported method of a service to the webview.
 			application.NewService(newSettingsService(st, &settingsSvc, app.LiveHooks{
@@ -209,6 +223,14 @@ func main() {
 		},
 	})
 
+	if version, packaged := app.RuntimeBundleVersion(); packaged && version != "" {
+		if err := app.ConfigureWailsUpdater(wailsApp.Updater, version); err != nil {
+			log.Printf("updates: could not configure updater: %v", err)
+		} else {
+			app.ConfigureUpdateBackend(updateService, app.NewWailsUpdateBackend(wailsApp.Updater, version))
+		}
+	}
+
 	wins.settings = newSettingsWindow(wailsApp)
 	wins.overlay = newOverlayWindow(wailsApp)
 	tray := newTray(wailsApp)
@@ -218,6 +240,8 @@ func main() {
 		log.Fatal("cannot start the dictation engine: ", err)
 	}
 	defer stopDictation()
+	app.StartUpdateChecks(updateService, 30*time.Second, 24*time.Hour)
+	defer app.StopUpdateChecks(updateService)
 
 	// Dev affordance: show the pill a moment after launch, so the non-activating
 	// show path can be checked without a human clicking the tray — including the
@@ -411,6 +435,15 @@ func buildTrayMenu(app *application.App, locale i18n.Locale) *application.Menu {
 			w.Focus()
 		}
 	})
+	menu.Add(i18n.T(locale, "Buscar actualizaciones…", nil)).OnClick(func(*application.Context) {
+		if updateService != nil {
+			go updateService.Check()
+		}
+		if w := wins.settings; w != nil {
+			w.Show()
+			w.Focus()
+		}
+	})
 	menu.AddSeparator()
 	menu.Add(i18n.T(locale, "Salir", nil)).OnClick(func(*application.Context) {
 		app.Quit()
@@ -481,7 +514,7 @@ func trayLocale() i18n.Locale {
 // bluntest fix and the only one this Wails version offers — SystemTray has no per-item SetLabel.
 //
 // DECLARED LIMIT: the rebuild replaces the menu wholesale, so any state it held is reset. It holds
-// none today (three stateless actions), and this comment is here for whoever adds a checkbox to it.
+// none today (four stateless actions), and this comment is here for whoever adds a checkbox to it.
 func relabelTray(locale i18n.Locale) {
 	if trayRef == nil || trayApp == nil {
 		logLine("TRAY", "relabel skipped: no tray yet")
@@ -511,8 +544,9 @@ func relabelTray(locale i18n.Locale) {
 	// LOGGED because a native menu is the one surface no page report can reach: NSMenuItem titles are
 	// not in any DOM, so without this line "the tray followed the language" is unverifiable from
 	// outside. The labels are UI copy, never user data.
-	logLine("TRAY", fmt.Sprintf("relabelled locale=%s items=%s|%s|%s", locale,
+	logLine("TRAY", fmt.Sprintf("relabelled locale=%s items=%s|%s|%s|%s", locale,
 		i18n.T(locale, "Dictar (prueba)", nil),
 		i18n.T(locale, "Ajustes…", nil),
+		i18n.T(locale, "Buscar actualizaciones…", nil),
 		i18n.T(locale, "Salir", nil)))
 }
