@@ -18,7 +18,7 @@ info:
   description: "Dictado por voz que inserta el texto donde está el cursor"
   copyright: "© 2026 Juan Motta"
   comments: "Port a Go + Wails de Loqui (Electron)"
-  version: "0.2.0"
+  version: "0.3.0"
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

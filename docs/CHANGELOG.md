@@ -4,6 +4,14 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Loqui v0.3.0 release — 2026-08-13
+
+- **Automatic updates are prepared for public release as `v0.3.0`.** The minor version reflects
+  the new opt-out background checks and explicit check, install, and restart controls.
+- **Release metadata now agrees on `0.3.0`.** The protected workflow will publish the signed and
+  notarized updater ZIP beside the normal DMG and their checksums after this preparation reaches
+  `main`.
+
 ## Automatic macOS updates — 2026-08-13
 
 - **Loqui can now keep itself current with permission.** It checks GitHub for a newer signed
