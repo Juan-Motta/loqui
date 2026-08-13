@@ -1,25 +1,19 @@
 # Continuity — session handoff
 
-- **Focus:** Prepare and publish Loqui `v0.2.0`.
+- **Focus:** Loqui `v0.2.0` is published and the repository is ready for the next case.
 
-- **NEXT STEP:** Complete the release-preparation gates on `release/v0.2.0`, commit/push/open the
-  PR, merge it into `main`, then dispatch exactly one protected Release workflow from the merged
-  SHA. After publication, verify the public assets and update README download links separately.
+- **NEXT STEP:** When the owner describes the next case, sync `main`, create its branch, and select
+  the appropriate workflow before making changes.
 
-- **Blockers:** none. GitHub Environment approval will be required after workflow preflight.
+- **Blockers:** none.
 
-- **Active workflow:** `new-feature`; state is in `.workflow/state.md`.
+- **Active workflow:** none.
 
 - **Handoff notes:**
-  - Owner approved semantic minor version `0.2.0` for the new Azure OpenAI model functionality and
-    fixes accumulated since `v0.1.1`.
-  - Canonical version and both generated macOS plist files now resolve to `0.2.0` on branch
-    `release/v0.2.0`.
-  - `v0.2.0`, its remote tag, GitHub Release, and remote release branch were absent at preparation
-    start. Existing public releases are `v0.1.0` and `v0.1.1`.
-  - Plan: `docs/plans/2026-08-13-loqui-v0.2.0-release.md`.
-  - Preparation E2E: `docs/e2e/reports/2026-08-13-loqui-v0.2.0-release.md`.
-  - Never delete or move an existing public tag/Release; ambiguous publication is investigated
-    through read-only queries.
+  - Public release: `https://github.com/Juan-Motta/loqui/releases/tag/v0.2.0`.
+  - The DMG and checksum assets were downloaded and matched; the DMG passed `hdiutil verify`,
+    stapler validation, and Gatekeeper as a notarized Developer ID build.
+  - Release preparation PR #13 and README download-links PR #14 are merged.
+  - `main` is synchronized with `origin/main`; the merged release branches were removed.
 
 - **Updated:** 2026-08-13
