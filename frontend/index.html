@@ -71,7 +71,7 @@
            worked there; this is the same "identical CSS, different host" as .engine-select. 54 leaves
            ~20px of air. */
         padding: 54px 10px 8px; gap: 2px;
-        -webkit-app-region: drag; /* the whole sidebar drags the window */
+        --wails-draggable: drag; /* the whole sidebar drags the window */
         border-right: 0.5px solid var(--sep);
       }
       :root[data-platform="other"] #sidebar { padding-top: 12px; }
@@ -80,13 +80,13 @@
         display: flex; align-items: center; gap: 9px;
         padding: 6px 8px; border-radius: 7px;
         color: var(--text); font-size: 13px; font-weight: 500;
-        cursor: default; -webkit-app-region: no-drag; user-select: none;
+        cursor: default; --wails-draggable: no-drag; user-select: none;
       }
       .nav-item svg { width: 17px; height: 17px; color: var(--text-2); flex: none; }
       .nav-item:hover { background: var(--sidebar-hover); }
       .nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
       .nav-item.active svg { color: var(--accent); }
-      .sidebar-foot { margin-top: auto; -webkit-app-region: no-drag; }
+      .sidebar-foot { margin-top: auto; --wails-draggable: no-drag; }
       /* Support link: warm accent so it reads as an invitation, never a nag. */
       .coffee-btn:hover { color: #d97706; }
       .link-btn {
@@ -199,7 +199,7 @@
          is a flex item, and without it the browser shrinks it to absorb overflow
          from a long list — dragging the title up by however much it lost, so the
          heading sat higher in Historial than in Ajustes. */
-      .view-drag { flex: none; height: 22px; -webkit-app-region: drag; margin: -22px -30px 0; }
+      .view-drag { flex: none; height: 22px; --wails-draggable: drag; margin: -22px -30px 0; }
       h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin: 4px 0 2px; }
       /* ---- Home dashboard ---- */
       .hero { display: flex; align-items: center; gap: 14px; margin: 4px 0 24px; }
@@ -231,7 +231,7 @@
       .home-section-head { display: flex; align-items: center; justify-content: space-between; margin: 28px 0 8px; }
       .home-section-head h2 { margin: 0; text-transform: none; font-size: 15px; color: var(--text); letter-spacing: -0.01em; }
       .link-more { background: none; border: none; color: var(--accent); font: inherit; font-size: 12.5px; font-weight: 500;
-        cursor: default; -webkit-app-region: no-drag; padding: 2px 6px; border-radius: 6px; }
+        cursor: default; --wails-draggable: no-drag; padding: 2px 6px; border-radius: 6px; }
       .link-more:hover { background: var(--sidebar-hover); }
 
       /* centered hero */
@@ -811,7 +811,7 @@
         display: flex; flex-direction: column;
       }
       #onboarding[hidden] { display: none; }
-      .wiz-drag { height: 40px; -webkit-app-region: drag; flex: none; }
+      .wiz-drag { height: 40px; --wails-draggable: drag; flex: none; }
       .wiz-body { flex: 1; display: flex; flex-direction: column; align-items: center;
         justify-content: center; text-align: center; padding: 20px 48px; overflow-y: auto; }
       .wiz-body .step { display: none; width: 100%; max-width: 460px; }

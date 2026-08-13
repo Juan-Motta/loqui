@@ -4,6 +4,15 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Movable settings window — 2026-08-12
+
+- **The main Loqui window can be repositioned again.** Its existing top, sidebar, and onboarding
+  drag zones now use Wails' native CSS contract instead of Electron's ignored property, while
+  navigation and footer controls remain clickable.
+- **The native journey is covered.** A signed development build moved by the exact requested
+  pointer offset without changing size, and a subsequent History click changed views without
+  moving the window.
+
 ## Azure GPT Live Transcribe — 2026-08-12
 
 - **Azure OpenAI now supports both realtime transcription models explicitly.** Settings keeps the
