@@ -35,6 +35,31 @@ func TestLoadSettingsReturnsDefaultsWhenAbsent(t *testing.T) {
 	if got.Provider != want.Provider || got.Mode != want.Mode || got.TriggerKey != want.TriggerKey {
 		t.Errorf("got %+v, want the defaults %+v", got, want)
 	}
+	if !got.AutoUpdateChecks {
+		t.Error("AutoUpdateChecks default = false, want true")
+	}
+}
+
+func TestLoadSettingsKeepsAutomaticChecksEnabledForAnOlderFile(t *testing.T) {
+	s := testStore(t)
+	if err := os.WriteFile(s.SettingsPath(), []byte(`{"provider":"whisper"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSettings().AutoUpdateChecks; !got {
+		t.Error("an older settings file without autoUpdateChecks disabled the new default")
+	}
+}
+
+func TestAutoUpdateChecksRoundTripsFalse(t *testing.T) {
+	s := testStore(t)
+	settings := DefaultSettings()
+	settings.AutoUpdateChecks = false
+	if err := s.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSettings().AutoUpdateChecks; got {
+		t.Error("AutoUpdateChecks = true after saving false")
+	}
 }
 
 // Refusing to start because a JSON file was hand-edited would leave the user unable to

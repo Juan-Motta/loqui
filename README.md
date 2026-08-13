@@ -19,6 +19,8 @@ The current release is **v0.2.0**:
 - App: [Loqui-0.2.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg)
 - Checksum: [Loqui-0.2.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg.sha256)
 
+Updater-enabled releases also publish a signed `Loqui-<version>-macos-arm64.zip` and its `SHA256SUMS` manifest alongside the DMG.
+
 Loqui requires an Apple Silicon Mac. The app declares macOS 14 as its minimum runtime version, while public releases are currently tested on macOS 26. Apple Speech is available only on macOS 26 or newer.
 
 ## Features
@@ -52,6 +54,12 @@ Loqui requires an Apple Silicon Mac. The app declares macOS 14 as its minimum ru
 6. Place the cursor in any text field, hold the configured dictation key, speak, and release the key.
 
 Whisper's approximately **465 MB** model must be downloaded once from **Settings → Connections**; the download is resumable. Apple Speech may automatically download the selected language model on first use. Neither model is bundled in the DMG.
+
+## Automatic updates
+
+Loqui can check for new signed releases from GitHub without interrupting dictation. Checks are enabled by default and run at most once every 24 hours while the app is open. A check never installs anything on its own: when an update is available, Loqui shows the version and waits for your confirmation before downloading and installing it.
+
+You can trigger a check from **About → Updates** or the tray menu, install a confirmed update there, and restart Loqui when macOS is ready. To opt out of scheduled checks, turn off **Settings → System → Automatic update checks**; manual checks remain available. Updates use a notarized ZIP release containing the signed `Loqui.app`, while the DMG remains available for a fresh installation.
 
 ## macOS permissions
 
@@ -207,7 +215,7 @@ Run the complete local gate immediately before the release entry point:
 LOQUI_NOTARY_PROFILE=loqui-notary ./scripts/task.sh release:macos
 ```
 
-Success publishes `bin/release/Loqui-<version>-macos-arm64.dmg` only after Developer ID signing, notarization, stapling, Gatekeeper assessment, and atomic publication all pass.
+Success publishes `bin/release/Loqui-<version>-macos-arm64.dmg` and the signed updater bundle `Loqui-<version>-macos-arm64.zip` only after Developer ID signing, notarization, stapling, Gatekeeper assessment, and atomic publication all pass.
 
 **GitHub release automation**
 
@@ -244,7 +252,7 @@ For each release, change the quoted stable version in `build/config.yml` through
 
 After that PR merges, open **Actions → Release → Run workflow**, select `main`, inspect the secret-free preflight, and approve the waiting Environment deployment. The repository-wide concurrency group serializes releases: do not park an approval indefinitely or dispatch multiple replacement runs, because GitHub can cancel an older pending run.
 
-On success, verify that the tag targets the recorded commit and that the public Release contains exactly the DMG, its `.sha256`, and generated notes. Success evidence and any available sanitized notarization-failure evidence are kept as 14-day Actions artifacts, never as public Release assets.
+On success, verify that the tag targets the recorded commit and that the public Release contains exactly the DMG, its `.sha256`, the updater ZIP, `SHA256SUMS`, and generated notes. Success evidence and any available sanitized notarization-failure evidence are kept as 14-day Actions artifacts, never as public Release assets.
 
 If publication reports ambiguous residual state, inspect before changing anything:
 

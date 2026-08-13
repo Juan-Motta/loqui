@@ -4,6 +4,18 @@ Notable changes to this project, newest first — one short entry (or small bloc
 shipped change. Written at ship time (the `finish-branch` skill records an entry before the
 ship commit). See `shared/rules/docs-layout.md`.
 
+## Automatic macOS updates — 2026-08-13
+
+- **Loqui can now keep itself current with permission.** It checks GitHub for a newer signed
+  release on a 24-hour cadence, never installs silently, and exposes manual check/install/restart
+  actions from About and the tray menu.
+- **The preference is explicit and safe.** Scheduled checks are enabled by default and can be
+  disabled in System settings without removing manual checks; update errors stay generic in the UI
+  while provider details remain in local logs.
+- **Releases now carry an updater artifact.** The protected macOS workflow notarizes a ZIP containing
+  exactly the signed `Loqui.app`, publishes it beside the DMG and checksums, and validates its
+  contents before publication.
+
 ## Loqui v0.2.0 release — 2026-08-13
 
 - **The next public release is prepared as `v0.2.0`.** The minor version reflects the new Azure

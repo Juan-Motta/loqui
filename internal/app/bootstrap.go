@@ -99,6 +99,7 @@ type SettingsPayload struct {
 	TriggerKey            string `json:"triggerKey"`
 	Appearance            string `json:"appearance"`
 	AppLanguage           string `json:"appLanguage"`
+	AutoUpdateChecks      bool   `json:"autoUpdateChecks"`
 	// Locale is the language actually IN EFFECT, which is not the same as AppLanguage: the default
 	// is empty, meaning "follow the system", and only Go can read the system's answer (NSLocale
 	// through cgo — an app launched from Finder inherits no LANG). The page needs the resolved value
@@ -371,6 +372,7 @@ func (b *Bootstrap) Payload() SettingsPayload {
 		TriggerKey:            cfg.TriggerKey,
 		Appearance:            cfg.Appearance,
 		AppLanguage:           cfg.AppLanguage,
+		AutoUpdateChecks:      cfg.AutoUpdateChecks,
 		Locale:                string(b.locale(cfg)),
 		Onboarded:             cfg.Onboarded,
 		LanguageBySlot:        languages(cfg),

@@ -90,7 +90,7 @@ if [ "${1:-}" = release ] && [ "${2:-}" = view ]; then
   if [ "${FAKE_RELEASE_WRONG_ASSETS:-0}" = 1 ]; then
     assets='[{"name":"unexpected.zip"}]'
   else
-    assets='[{"name":"Loqui-0.1.0-macos-arm64.dmg"},{"name":"Loqui-0.1.0-macos-arm64.dmg.sha256"}]'
+    assets='[{"name":"Loqui-0.1.0-macos-arm64.dmg"},{"name":"Loqui-0.1.0-macos-arm64.dmg.sha256"},{"name":"Loqui-0.1.0-macos-arm64.zip"},{"name":"SHA256SUMS"}]'
   fi
   printf '{"url":"https://github.com/Juan-Motta/loqui/releases/tag/v0.1.0","isDraft":false,"isPrerelease":false,"tagName":"v0.1.0","targetCommitish":"%s","assets":%s}\n' \
     "$GITHUB_SHA" "$assets"
@@ -145,6 +145,7 @@ assert_contains "$GITHUB_OUTPUT" "sha=$sha"
 assert_contains "$GITHUB_OUTPUT" 'version=0.1.0'
 assert_contains "$GITHUB_OUTPUT" 'tag=v0.1.0'
 assert_contains "$GITHUB_OUTPUT" 'dmg_name=Loqui-0.1.0-macos-arm64.dmg'
+assert_contains "$GITHUB_OUTPUT" 'zip_name=Loqui-0.1.0-macos-arm64.zip'
 assert_contains "$GITHUB_STEP_SUMMARY" '0.1.0'
 assert_contains "$GITHUB_STEP_SUMMARY" "$sha"
 
@@ -190,11 +191,13 @@ run_expect_fail_msg 'tag expectation mismatch' "$script" preflight --expect-tag 
 fixture_root_physical="$(cd "$fixture_root" && pwd -P)"
 release_root="$fixture_root_physical/bin/release"
 dmg_name=Loqui-0.1.0-macos-arm64.dmg
+zip_name=Loqui-0.1.0-macos-arm64.zip
 
 reset_assets() {
   rm -rf "$release_root"
   mkdir -p "$release_root/evidence/0.1.0/submission-123"
   put_file "$release_root/$dmg_name" signed-notarized-fixture 644
+  put_file "$release_root/$zip_name" signed-notarized-app-zip-fixture 644
   put_file "$release_root/evidence/0.1.0/submission-123/notary-log.json" \
     '{"status":"Accepted"}' 644
 }
@@ -205,7 +208,11 @@ reset_fakes
   --expect-dmg-name "$dmg_name"
 assert_file "$release_root/$dmg_name.sha256"
 (cd "$release_root" && shasum -a 256 -c "$dmg_name.sha256")
+assert_file "$release_root/SHA256SUMS"
+(cd "$release_root" && shasum -a 256 -c SHA256SUMS)
 assert_contains "$GITHUB_OUTPUT" "dmg_path=$release_root/$dmg_name"
+assert_contains "$GITHUB_OUTPUT" "zip_path=$release_root/$zip_name"
+assert_contains "$GITHUB_OUTPUT" "checksum_manifest_path=$release_root/SHA256SUMS"
 assert_contains "$GITHUB_OUTPUT" "evidence_path=$release_root/evidence/0.1.0/submission-123"
 assert_contains "$GITHUB_OUTPUT" 'submission_id=submission-123'
 
@@ -214,9 +221,19 @@ reset_fakes
 run_expect_fail_msg 'DMG name expectation mismatch' "$script" prepare \
   --sha "$sha" --version 0.1.0 --tag v0.1.0 --expect-dmg-name Loqui-9.9.9-macos-arm64.dmg
 reset_assets
+reset_fakes
+run_expect_fail_msg 'ZIP name expectation mismatch' "$script" prepare \
+  --sha "$sha" --version 0.1.0 --tag v0.1.0 --expect-dmg-name "$dmg_name" \
+  --expect-zip-name Loqui-9.9.9-macos-arm64.zip
+reset_assets
 rm "$release_root/$dmg_name"
 reset_fakes
 run_expect_fail_msg 'missing release DMG' "$script" prepare \
+  --sha "$sha" --version 0.1.0 --tag v0.1.0 --expect-dmg-name "$dmg_name"
+reset_assets
+rm "$release_root/$zip_name"
+reset_fakes
+run_expect_fail_msg 'missing release ZIP' "$script" prepare \
   --sha "$sha" --version 0.1.0 --tag v0.1.0 --expect-dmg-name "$dmg_name"
 reset_assets
 rm -rf "$release_root/evidence/0.1.0/submission-123"

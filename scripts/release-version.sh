@@ -5,7 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 output_mode=version
 
 usage() {
-  echo "release-version: usage: $0 [--root REPO_ROOT] [--dmg-name]" >&2
+  echo "release-version: usage: $0 [--root REPO_ROOT] [--dmg-name|--zip-name]" >&2
   exit 2
 }
 
@@ -18,6 +18,10 @@ while [ "$#" -gt 0 ]; do
       ;;
     --dmg-name)
       output_mode=dmg-name
+      shift
+      ;;
+    --zip-name)
+      output_mode=zip-name
       shift
       ;;
     *) usage ;;
@@ -53,6 +57,8 @@ fi
 
 if [ "$output_mode" = dmg-name ]; then
   printf 'Loqui-%s-macos-arm64.dmg\n' "$version"
+elif [ "$output_mode" = zip-name ]; then
+  printf 'Loqui-%s-macos-arm64.zip\n' "$version"
 else
   printf '%s\n' "$version"
 fi

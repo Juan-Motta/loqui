@@ -200,6 +200,9 @@ guarded_cleanup_release() {
   if [ "$hidden_dmg_candidate_owned" -eq 1 ]; then
     assert_test_tmp_path "$hidden_dmg_candidate"
   fi
+  if [ "$hidden_zip_candidate_owned" -eq 1 ]; then
+    assert_test_tmp_path "$hidden_zip_candidate"
+  fi
   if [ "$hidden_evidence_candidate_owned" -eq 1 ]; then
     assert_test_tmp_path "$hidden_evidence_candidate"
   fi
@@ -882,6 +885,12 @@ run_dmg_release_fixture() (
   phase_audit_unsigned() { :; }
   phase_sign_app() { :; }
   phase_verify_app() { :; }
+  phase_create_zip() { :; }
+  phase_submit_zip() { :; }
+  phase_fetch_zip_log() { :; }
+  phase_check_zip_log() { :; }
+  phase_staple_app() { :; }
+  phase_verify_zip() { :; }
   phase_sign_dmg() { :; }
   phase_verify_dmg() { :; }
   phase_submit() { :; }
@@ -917,7 +926,9 @@ run_dmg_case() {
 assert_dmg_rejected_before_release() {
   assert_contains "$dmg_phase_log" create-dmg
   assert_not_contains "$dmg_phase_log" sign-dmg
-  assert_not_contains "$dmg_phase_log" submit
+  if grep -Fx submit "$dmg_phase_log" >/dev/null; then
+    fail "$dmg_phase_log contains the DMG submit phase"
+  fi
   assert_not_contains "$dmg_phase_log" publish
 }
 
@@ -1459,6 +1470,8 @@ mkdir -p "$publish_root/evidence/0.1.0/older-id" "$publish_evidence" "$publish_b
 put_file "$publish_root/Loqui-0.1.0-macos-arm64.dmg" 'old accepted DMG'
 put_file "$publish_root/evidence/0.1.0/older-id/report.txt" 'older evidence'
 put_file "$publish_source_dmg" 'new candidate DMG'
+publish_source_zip="$tmp/publish-source.zip"
+put_file "$publish_source_zip" 'new candidate ZIP'
 put_file "$publish_evidence/report.txt" 'new evidence'
 printf '%s\n' \
   '#!/bin/bash' \
@@ -1473,6 +1486,16 @@ saved_release_output_dir="$release_output_dir"
 release_root_dir="$(cd "$publish_repo" && pwd -P)"
 publish_root="$release_root_dir/bin/release"
 release_output_dir="$publish_root"
+
+guarded_atomic_publish "$publish_source_dmg" "$publish_evidence" "$publish_root" \
+  0.1.0 pair-id Loqui-0.1.0-macos-arm64.dmg "$publish_source_zip" \
+  Loqui-0.1.0-macos-arm64.zip >/dev/null
+assert_contains "$publish_root/Loqui-0.1.0-macos-arm64.dmg" 'new candidate DMG'
+assert_contains "$publish_root/Loqui-0.1.0-macos-arm64.zip" 'new candidate ZIP'
+assert_file "$publish_root/evidence/0.1.0/pair-id/report.txt"
+put_file "$publish_root/Loqui-0.1.0-macos-arm64.dmg" 'old accepted DMG'
+rm -f "$publish_root/Loqui-0.1.0-macos-arm64.zip"
+rm -rf "$publish_root/evidence/0.1.0/pair-id"
 
 wrong_name_repo="$tmp/wrong-name-publish-repo"
 mkdir "$wrong_name_repo"
@@ -1682,13 +1705,15 @@ release_output_dir="$tmp/phase-publish-output"
 release_root_dir="$repo_root"
 phase_publish_version="$("$repo_root/scripts/release-version.sh" --root "$repo_root")"
 phase_publish_dmg_name="$("$repo_root/scripts/release-version.sh" --root "$repo_root" --dmg-name)"
+phase_publish_zip_name="$("$repo_root/scripts/release-version.sh" --root "$repo_root" --zip-name)"
 version="$phase_publish_version"
 submission_id=phase-publish-id
+zip="$tmp/phase-publish.zip"
 phase_publish
 phase_publish_expected="$tmp/phase-publish-expected"
 printf '<%s>\n' \
   "$dmg" "$stage/evidence" "$release_output_dir" "$phase_publish_version" phase-publish-id \
-  "$phase_publish_dmg_name" >"$phase_publish_expected"
+  "$phase_publish_dmg_name" "$zip" "$phase_publish_zip_name" >"$phase_publish_expected"
 diff -u "$phase_publish_expected" "$phase_publish_args"
 eval "$original_atomic_publish"
 
@@ -1696,14 +1721,16 @@ phase_log="$tmp/phases"
 export LOQUI_PHASE_LOG="$phase_log"
 for function_name in \
   phase_preflight phase_build phase_build_helpers phase_bundle phase_audit_unsigned \
-  phase_sign_app phase_verify_app phase_create_dmg phase_sign_dmg phase_verify_dmg \
+  phase_sign_app phase_verify_app phase_create_zip phase_submit_zip phase_fetch_zip_log \
+  phase_check_zip_log phase_staple_app phase_verify_zip phase_create_dmg phase_sign_dmg phase_verify_dmg \
   phase_submit phase_fetch_log phase_check_log phase_staple phase_verify_staple \
   phase_gatekeeper phase_publish; do
   eval "$function_name() { :; }"
 done
 run_release
 expected_phases="$tmp/expected-phases"
-printf '%s\n' preflight build build-helpers bundle audit-unsigned sign-app verify-app create-dmg \
+printf '%s\n' preflight build build-helpers bundle audit-unsigned sign-app verify-app create-zip submit-zip \
+  fetch-zip-log check-zip-log staple-app verify-zip create-dmg \
   sign-dmg verify-dmg submit fetch-log check-log staple verify-staple gatekeeper publish \
   >"$expected_phases"
 diff -u "$expected_phases" "$phase_log"

@@ -176,7 +176,7 @@ tasks:
       - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
 
   release:
-    summary: Builds, signs, notarizes, staples, and verifies an arm64 Developer ID DMG
+    summary: Builds, signs, notarizes, staples, and verifies arm64 Developer ID release artifacts
     cmds:
       - |
         set -e

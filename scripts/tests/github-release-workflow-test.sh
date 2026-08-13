@@ -205,7 +205,9 @@ assert_not_contains "$preflight_job" 'APP_STORE_CONNECT_'
 assert_not_contains "$preflight_job" 'MACOS_CERTIFICATE_'
 assert_not_contains "$workflow" 'LOQUI_RELEASE_TEST_MODE'
 assert_contains "$release_job" 'EXPECTED_DMG_NAME: ${{ needs.preflight.outputs.dmg_name }}'
+assert_contains "$release_job" 'EXPECTED_ZIP_NAME: ${{ needs.preflight.outputs.zip_name }}'
 assert_eq "$(grep -F -c -- '--expect-dmg-name "$EXPECTED_DMG_NAME"' "$release_job")" 2
+assert_eq "$(grep -F -c -- '--expect-zip-name "$EXPECTED_ZIP_NAME"' "$release_job")" 2
 
 for secret_name in \
   MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD \
@@ -238,7 +240,7 @@ setup_capture_line="$(line_number 'dmgbuild_python="$(./scripts/setup-dmgbuild.s
 setup_export_line="$(line_number 'echo "LOQUI_DMGBUILD_PYTHON=$dmgbuild_python" >> "$GITHUB_ENV"')"
 integration_command_line="$(line_number 'run: ./scripts/tests/dmg-integration-test.sh')"
 credentials_line="$(line_number 'name: Import protected Apple credentials')"
-release_line="$(line_number 'name: Build, sign, and notarize DMG')"
+release_line="$(line_number 'name: Build, sign, and notarize release artifacts')"
 failure_upload_line="$(line_number 'name: Upload sanitized notary failure evidence')"
 prepare_line="$(line_number 'name: Prepare release assets')"
 upload_line="$(line_number 'name: Upload sanitized release evidence')"

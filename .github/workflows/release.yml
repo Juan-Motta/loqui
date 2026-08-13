@@ -19,6 +19,7 @@ jobs:
       version: ${{ steps.release-metadata.outputs.version }}
       tag: ${{ steps.release-metadata.outputs.tag }}
       dmg_name: ${{ steps.release-metadata.outputs.dmg_name }}
+      zip_name: ${{ steps.release-metadata.outputs.zip_name }}
     steps:
       - name: Check out dispatch commit
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -195,7 +196,7 @@ jobs:
             --keychain "$keychain_path"
           rm -f -- "$certificate_path" "$api_key_path"
 
-      - name: Build, sign, and notarize DMG
+      - name: Build, sign, and notarize release artifacts
         env:
           LOQUI_NOTARY_PROFILE: loqui-ci-notary
           LOQUI_NOTARY_KEYCHAIN: ${{ runner.temp }}/loqui-ci.keychain-db
@@ -218,12 +219,14 @@ jobs:
           EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
           EXPECTED_TAG: ${{ needs.preflight.outputs.tag }}
           EXPECTED_DMG_NAME: ${{ needs.preflight.outputs.dmg_name }}
+          EXPECTED_ZIP_NAME: ${{ needs.preflight.outputs.zip_name }}
         run: |
           ./scripts/github-release.sh prepare \
             --sha "$EXPECTED_SHA" \
             --version "$EXPECTED_VERSION" \
             --tag "$EXPECTED_TAG" \
-            --expect-dmg-name "$EXPECTED_DMG_NAME"
+            --expect-dmg-name "$EXPECTED_DMG_NAME" \
+            --expect-zip-name "$EXPECTED_ZIP_NAME"
 
       - name: Upload sanitized release evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -240,12 +243,14 @@ jobs:
           EXPECTED_VERSION: ${{ needs.preflight.outputs.version }}
           EXPECTED_TAG: ${{ needs.preflight.outputs.tag }}
           EXPECTED_DMG_NAME: ${{ needs.preflight.outputs.dmg_name }}
+          EXPECTED_ZIP_NAME: ${{ needs.preflight.outputs.zip_name }}
         run: |
           ./scripts/github-release.sh publish \
             --sha "$EXPECTED_SHA" \
             --version "$EXPECTED_VERSION" \
             --tag "$EXPECTED_TAG" \
-            --expect-dmg-name "$EXPECTED_DMG_NAME"
+            --expect-dmg-name "$EXPECTED_DMG_NAME" \
+            --expect-zip-name "$EXPECTED_ZIP_NAME"
 
       - name: Clean temporary Apple credentials
         if: ${{ always() }}

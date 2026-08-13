@@ -19,6 +19,8 @@ La versión actual es **v0.2.0**:
 - Aplicación: [Loqui-0.2.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg)
 - Suma de verificación: [Loqui-0.2.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg.sha256)
 
+Los releases compatibles con el actualizador también publican un `Loqui-<version>-macos-arm64.zip` firmado y su manifiesto `SHA256SUMS` junto al DMG.
+
 Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como versión mínima de ejecución, mientras que la versión pública actual se ha probado en macOS 26. Apple Speech solo está disponible en macOS 26 o posterior.
 
 ## Funcionalidades
@@ -52,6 +54,12 @@ Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como v
 6. Coloca el cursor en cualquier campo de texto, mantén presionada la tecla de dictado configurada, habla y suelta la tecla.
 
 El modelo de Whisper, de aproximadamente **465 MB**, debe descargarse una vez desde **Ajustes → Conexiones**; la descarga se puede reanudar. Apple Speech puede descargar automáticamente el modelo de idioma seleccionado la primera vez que se usa. Ninguno de los dos modelos está incluido en el DMG.
+
+## Actualizaciones automáticas
+
+Loqui puede comprobar si hay nuevas versiones firmadas en GitHub sin interrumpir el dictado. Las comprobaciones están activadas por defecto y se ejecutan como máximo una vez cada 24 horas mientras la aplicación está abierta. Comprobar no instala nada por sí solo: cuando hay una actualización, Loqui muestra la versión y espera tu confirmación antes de descargarla e instalarla.
+
+Puedes comprobar manualmente desde **Acerca de → Actualizaciones** o desde el menú de la bandeja, instalar una actualización confirmada allí y reiniciar Loqui cuando macOS esté listo. Para desactivar las comprobaciones programadas, desactiva **Ajustes → Sistema → Comprobaciones automáticas de actualizaciones**; las comprobaciones manuales siguen disponibles. Las actualizaciones usan un ZIP notarizado que contiene el `Loqui.app` firmado, mientras que el DMG sigue disponible para instalaciones nuevas.
 
 ## Permisos de macOS
 
@@ -208,7 +216,7 @@ Ejecuta toda la verificación local inmediatamente antes del punto de entrada de
 LOQUI_NOTARY_PROFILE=loqui-notary ./scripts/task.sh release:macos
 ```
 
-Un resultado exitoso publica `bin/release/Loqui-<version>-macos-arm64.dmg` únicamente después de completar la firma con Developer ID, la notarización, el stapling, la evaluación de Gatekeeper y la publicación atómica.
+Un resultado exitoso publica `bin/release/Loqui-<version>-macos-arm64.dmg` y el paquete firmado del actualizador `Loqui-<version>-macos-arm64.zip` únicamente después de completar la firma con Developer ID, la notarización, el stapling, la evaluación de Gatekeeper y la publicación atómica.
 
 **Automatización de releases en GitHub**
 
@@ -245,7 +253,7 @@ Para cada release, cambia mediante un PR normal la versión estable entre comill
 
 Después de integrar ese PR, abre **Actions → Release → Run workflow**, selecciona `main`, revisa el preflight sin secretos y aprueba el despliegue pendiente del Environment. El grupo de concurrencia de todo el repositorio serializa los releases: no dejes una aprobación pendiente indefinidamente ni inicies varias ejecuciones de reemplazo, porque GitHub puede cancelar una ejecución pendiente más antigua.
 
-Si finaliza correctamente, verifica que el tag apunte al commit registrado y que el Release público contenga exactamente el DMG, su `.sha256` y las notas generadas. La evidencia de éxito y cualquier evidencia saneada disponible de fallos de notarización se conservan como artifacts de Actions durante 14 días, nunca como assets públicos del Release.
+Si finaliza correctamente, verifica que el tag apunte al commit registrado y que el Release público contenga exactamente el DMG, su `.sha256`, el ZIP del actualizador, `SHA256SUMS` y las notas generadas. La evidencia de éxito y cualquier evidencia saneada disponible de fallos de notarización se conservan como artifacts de Actions durante 14 días, nunca como assets públicos del Release.
 
 Si la publicación informa un estado residual ambiguo, inspecciónalo antes de modificar nada:
 

@@ -79,6 +79,9 @@ type Settings struct {
 	Appearance string `json:"appearance"`
 	// AppLanguage is the interface locale, empty to follow the OS.
 	AppLanguage string `json:"appLanguage"`
+	// AutoUpdateChecks controls non-blocking background release checks. Manual checks remain
+	// available when this is false.
+	AutoUpdateChecks bool `json:"autoUpdateChecks"`
 	// Onboarded is whether the tutorial has been completed or skipped. Its own flag
 	// because the default engine works out of the box, so "not configured" cannot stand
 	// in for "hasn't seen the tutorial".
@@ -135,9 +138,10 @@ func DefaultSettings() Settings {
 			"openai":       {"auto"},
 			"elevenlabs":   {"auto"},
 		},
-		Mode:       "hold",
-		TriggerKey: "fn",
-		Appearance: "system",
+		Mode:             "hold",
+		TriggerKey:       "fn",
+		Appearance:       "system",
+		AutoUpdateChecks: true,
 		// Matching the Electron defaults so a settings.json written by either build reads the same.
 		AzureService:          "speech",
 		AzureOpenAiDeployment: "gpt-realtime-whisper",

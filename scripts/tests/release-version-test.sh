@@ -20,6 +20,7 @@ valid="$tmp/valid"
 write_config "$valid" $'version: \'3\'\ninfo:\n  productName: "Loqui"\n  version: "1.2.3"\nwindows:\n  version: "9.9.9"'
 assert_eq "$("$script" --root "$valid")" "1.2.3"
 assert_eq "$("$script" --root "$valid" --dmg-name)" "Loqui-1.2.3-macos-arm64.dmg"
+assert_eq "$("$script" --root "$valid" --zip-name)" "Loqui-1.2.3-macos-arm64.zip"
 
 invalid_cases=(missing duplicate empty unquoted single-quoted prerelease prefixed trailing leading-zero)
 for case_name in "${invalid_cases[@]}"; do
