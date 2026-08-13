@@ -14,10 +14,10 @@ Loqui convierte tu voz en texto dentro de cualquier aplicación de macOS. Manté
 
 [**Descargar la versión más reciente de Loqui**](https://github.com/Juan-Motta/loqui/releases/latest)
 
-La versión actual es **v0.2.0**:
+La versión actual es **v0.3.0**:
 
-- Aplicación: [Loqui-0.2.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg)
-- Suma de verificación: [Loqui-0.2.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg.sha256)
+- Aplicación: [Loqui-0.3.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.3.0/Loqui-0.3.0-macos-arm64.dmg)
+- Suma de verificación: [Loqui-0.3.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.3.0/Loqui-0.3.0-macos-arm64.dmg.sha256)
 
 Los releases compatibles con el actualizador también publican un `Loqui-<version>-macos-arm64.zip` firmado y su manifiesto `SHA256SUMS` junto al DMG.
 
