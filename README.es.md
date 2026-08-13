@@ -14,10 +14,10 @@ Loqui convierte tu voz en texto dentro de cualquier aplicación de macOS. Manté
 
 [**Descargar la versión más reciente de Loqui**](https://github.com/Juan-Motta/loqui/releases/latest)
 
-La versión actual es **v0.1.1**:
+La versión actual es **v0.2.0**:
 
-- Aplicación: [Loqui-0.1.1-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg)
-- Suma de verificación: [Loqui-0.1.1-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.1.1/Loqui-0.1.1-macos-arm64.dmg.sha256)
+- Aplicación: [Loqui-0.2.0-macos-arm64.dmg](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg)
+- Suma de verificación: [Loqui-0.2.0-macos-arm64.dmg.sha256](https://github.com/Juan-Motta/loqui/releases/download/v0.2.0/Loqui-0.2.0-macos-arm64.dmg.sha256)
 
 Loqui requiere una Mac con Apple Silicon. La aplicación declara macOS 14 como versión mínima de ejecución, mientras que la versión pública actual se ha probado en macOS 26. Apple Speech solo está disponible en macOS 26 o posterior.
 
